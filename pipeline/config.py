@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+
+def _repo_root() -> Path:
+    """Repo root for source checkouts; folder next to the exe when frozen."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+REPO_ROOT = _repo_root()
 
 
 class FFmpegNotFoundError(RuntimeError):
@@ -60,9 +69,17 @@ class Settings(BaseModel):
         self.scenes_dir.mkdir(parents=True, exist_ok=True)
 
 
+def default_env_file() -> Path:
+    """`.env` next to the install, or `YOUTUBE_PIPELINE_ENV` when set."""
+    override = os.getenv("YOUTUBE_PIPELINE_ENV", "").strip()
+    if override:
+        return Path(override)
+    return REPO_ROOT / ".env"
+
+
 def load_settings(env_file: Path | None = None) -> Settings:
     """Load dotenv, then map known env vars onto Settings."""
-    load_dotenv(env_file or REPO_ROOT / ".env")
+    load_dotenv(env_file or default_env_file())
     ffmpeg_bin = os.getenv("FFMPEG_PATH") or os.getenv("FFMPEG_BIN") or "ffmpeg"
     ffprobe_default = "ffprobe"
     if ffmpeg_bin not in {"ffmpeg", ""}:

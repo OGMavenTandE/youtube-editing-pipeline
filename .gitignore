@@ -1,4 +1,7 @@
 .env
+desktop/client_secret.json
+**/drive_token.json
+**/drive_token.dpapi
 .venv/
 venv/
 env/

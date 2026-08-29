@@ -1,0 +1,35 @@
+name: Windows app
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build youtube-pipeline.exe
+        run: pyinstaller --noconfirm desktop/youtube-pipeline.spec
+
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-pipeline-windows
+          path: dist/youtube-pipeline
+          if-no-files-found: error
