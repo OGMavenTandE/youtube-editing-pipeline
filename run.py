@@ -14,6 +14,7 @@ from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
 from pipeline.silence_remover import remove_silence
+from pipeline.studio import write_studio_package
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="run.py",
         description=(
             "Local YouTube editing pipeline: silence trim, Gemini edit script, "
-            "then MoviePy composite."
+            "MoviePy composite, then a YouTube Studio paste folder."
         ),
     )
     parser.add_argument(
@@ -75,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip Playwright slide generation (compositor will not have slide PNGs).",
     )
+    parser.add_argument(
+        "--skip-studio",
+        action="store_true",
+        help="Skip the YouTube Studio paste folder (video, titles, description, tags, thumbnail).",
+    )
     return parser
 
 
@@ -105,9 +111,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     if args.skip_silence:
         duration = probe_duration(input_path, settings)
         trim = SilenceTrimResult.passthrough(input_path, duration)
-        print(f"[1/4] Silence trim skipped ({duration:.2f}s).")
+        print(f"[1/5] Silence trim skipped ({duration:.2f}s).")
     else:
-        print("[1/4] Trimming silence / dead air...")
+        print("[1/5] Trimming silence / dead air...")
         trim = remove_silence(
             input_path,
             settings,
@@ -126,12 +132,12 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
 
     if args.edit_script:
         script = load_edit_script(Path(args.edit_script))
-        print(f"[2/4] Loaded edit script from {args.edit_script}.")
+        print(f"[2/5] Loaded edit script from {args.edit_script}.")
     elif args.skip_gemini:
         script = EditScript.empty()
-        print("[2/4] Gemini skipped (empty edit script).")
+        print("[2/5] Gemini skipped (empty edit script).")
     else:
-        print(f"[2/4] Asking {settings.gemini_model} for a transcript, then a scene plan...")
+        print(f"[2/5] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
         transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
         script = analyze_video(
@@ -159,9 +165,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         print(f"      pacing note: {warning}")
 
     if args.skip_slides:
-        print("[3/4] Slides skipped.")
+        print("[3/5] Slides skipped.")
     else:
-        print("[3/4] Rendering 1920x1080 slides...")
+        print("[3/5] Rendering 1920x1080 slides...")
         assets = render_slides(script, settings)
         print(f"      slides={len(assets)}  dir={settings.slides_dir}")
 
@@ -175,7 +181,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         key = scene.layout.value
         layout_counts[key] = layout_counts.get(key, 0) + 1
     layout_note = " ".join(f"{name}={count}" for name, count in layout_counts.items())
-    print(f"[4/4] Compositing {settings.output_width}x{settings.output_height} ({layout_note or 'FULL_FRAME'})...")
+    print(f"[4/5] Compositing {settings.output_width}x{settings.output_height} ({layout_note or 'FULL_FRAME'})...")
     from pipeline.compositor import render_video
 
     final_path = render_video(
@@ -187,12 +193,27 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     )
     print(f"Done. Video: {final_path}")
     print(f"      Edit script: {script_path}")
-    print(f"      YouTube metadata: {meta_path}")
+    print(f"      Pipeline metadata: {meta_path}")
     if settings.slides_dir.is_dir() and any(settings.slides_dir.glob("*.png")):
         print(f"      Slides: {settings.slides_dir}")
     transcript_note = settings.output_dir / f"{input_path.stem}_transcript.json"
     if transcript_note.is_file():
         print(f"      Transcript: {transcript_note}")
+
+    if getattr(args, "skip_studio", False):
+        print("[5/5] Studio package skipped.")
+        return final_path
+
+    print("[5/5] Writing YouTube Studio folder...")
+    package = write_studio_package(
+        video_path=final_path,
+        webcam_path=trim.output_path,
+        metadata=script.metadata,
+        dest_dir=settings.output_dir / f"{input_path.stem}_studio",
+        settings=settings,
+        fallback_title=input_path.stem.replace("_", " ").replace("-", " ").strip(),
+    )
+    print(f"      Studio folder: {package.directory}")
     return final_path
 
 

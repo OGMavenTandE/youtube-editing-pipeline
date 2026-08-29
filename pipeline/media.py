@@ -161,6 +161,41 @@ def concat_keep_ranges(
     return dest
 
 
+def extract_frame(
+    video_path: Path,
+    dest: Path,
+    settings: Settings,
+    *,
+    at_seconds: float,
+) -> Path:
+    """Grab one video frame. Used for the Studio thumbnail webcam still."""
+    ffmpeg_bin = require_ffmpeg(settings)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    stamp = max(0.0, at_seconds)
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-ss",
+        f"{stamp:.3f}",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        str(dest),
+    ]
+    try:
+        _run(cmd, f"extract frame {video_path} @ {stamp:.2f}s")
+    except MediaError:
+        if stamp > 0:
+            return extract_frame(video_path, dest, settings, at_seconds=0.0)
+        raise
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise MediaError(f"Frame extract produced an empty file: {dest}")
+    return dest
+
+
 def write_json(path: Path, payload: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
