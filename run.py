@@ -81,6 +81,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the YouTube Studio paste folder (video, titles, description, tags, thumbnail).",
     )
+    parser.add_argument(
+        "--title-index",
+        type=int,
+        default=0,
+        choices=range(5),
+        metavar="N",
+        help="Which of the five titles to paste and put on the thumbnail (0-4, default 0).",
+    )
     return parser
 
 
@@ -212,8 +220,10 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         dest_dir=settings.output_dir / f"{input_path.stem}_studio",
         settings=settings,
         fallback_title=input_path.stem.replace("_", " ").replace("-", " ").strip(),
+        title_index=getattr(args, "title_index", 0),
     )
     print(f"      Studio folder: {package.directory}")
+    print(f"      Paste title [{package.title_index}]: {package.paste_title}")
     return final_path
 
 
