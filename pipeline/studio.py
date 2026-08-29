@@ -13,13 +13,14 @@ from pydantic import BaseModel, Field
 
 from pipeline.broll.slides import PlaywrightNotFoundError, _chromium_help
 from pipeline.config import Settings
+from pipeline.captions import write_caption_files
 from pipeline.gemini_director import (
     GENERIC_FILLER_TAGS,
     normalize_youtube_metadata,
-    sanitize_chapters,
+    parse_transcript,
 )
-from pipeline.media import extract_frame, probe_duration
-from pipeline.models import ChapterMarker, YouTubeMetadata
+from pipeline.media import extract_frame, probe_duration, write_json
+from pipeline.models import ChapterMarker, TimedTranscript, YouTubeMetadata
 
 TITLE_CHAR_LIMIT = 100
 DESCRIPTION_CHAR_LIMIT = 5000
@@ -51,6 +52,9 @@ class StudioPackage(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     chapters: list[ChapterMarker] = Field(default_factory=list)
+    captions_srt_path: Path | None = None
+    captions_vtt_path: Path | None = None
+    thumbnail_paths: list[Path] = Field(default_factory=list)
 
 
 def format_chapter_timestamp(seconds: float) -> str:
@@ -214,10 +218,69 @@ def _frame_data_uri(path: Path) -> str:
     return f"data:{mime};base64,{payload}"
 
 
-def pick_frame_time(duration: float) -> float:
+THUMB_RATIOS = (0.10, 0.25, 0.50)
+THUMB_NAMES = ("thumbnail_01.jpg", "thumbnail_02.jpg", "thumbnail_03.jpg")
+
+
+def pick_frame_time(duration: float, ratio: float = 0.25) -> float:
     if duration <= 0:
         return 0.0
-    return min(max(duration * 0.25, 0.1), max(0.0, duration - 0.05))
+    stamp = duration * max(0.0, min(1.0, ratio))
+    return min(max(stamp, 0.1), max(0.0, duration - 0.05))
+
+
+def parse_chapter_block(text: str) -> list[ChapterMarker]:
+    """Read a Studio chapter list (`0:00 Intro` or `1:02:03 Title`)."""
+    chapters: list[ChapterMarker] = []
+    line_re = re.compile(
+        r"^\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\s+(.+?)\s*$"
+    )
+    for raw in (text or "").splitlines():
+        match = line_re.match(raw)
+        if not match:
+            continue
+        hours = int(match.group(1) or 0)
+        minutes = int(match.group(2))
+        seconds = int(match.group(3))
+        title = match.group(4).strip()
+        if not title:
+            continue
+        start = hours * 3600 + minutes * 60 + seconds
+        chapters.append(ChapterMarker(start=float(start), title=title))
+    return chapters
+
+
+def resolve_title_index(
+    cli_value: int | None,
+    metadata: YouTubeMetadata,
+    *,
+    persisted: int | None = None,
+) -> int:
+    """CLI flag wins, then persisted JSON, then metadata, then 0."""
+    if cli_value is not None:
+        return max(0, min(int(cli_value), 4))
+    if persisted is not None:
+        return max(0, min(int(persisted), 4))
+    return max(0, min(int(metadata.title_index or 0), 4))
+
+
+def persist_title_index(metadata_path: Path, metadata: YouTubeMetadata, title_index: int) -> Path:
+    updated = metadata.model_copy(update={"title_index": max(0, min(int(title_index), 4))})
+    write_json(metadata_path, updated.model_dump())
+    return metadata_path
+
+
+def load_transcript_for_studio(
+    *,
+    transcript: TimedTranscript | None = None,
+    transcript_path: Path | None = None,
+    duration: float = 0.0,
+) -> TimedTranscript | None:
+    if transcript is not None and (transcript.text or transcript.cues):
+        return transcript
+    if transcript_path is None or not Path(transcript_path).is_file():
+        return None
+    return parse_transcript(Path(transcript_path).read_text(encoding="utf-8"), duration=duration)
 
 
 def render_studio_thumbnail(
@@ -227,18 +290,22 @@ def render_studio_thumbnail(
     settings: Settings,
     *,
     duration: float | None = None,
+    at_seconds: float | None = None,
+    at_ratio: float = 0.25,
 ) -> Path:
     """1280x720 Playwright card: selected title plus a webcam frame."""
     dest = dest.with_suffix(".jpg")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if duration is None:
         duration = probe_duration(webcam_path, settings)
-    frame_path = settings.work_dir / f"{webcam_path.stem}_thumb_frame.jpg"
+    if at_seconds is None:
+        at_seconds = pick_frame_time(duration, float(at_ratio))
+    frame_path = settings.work_dir / f"{webcam_path.stem}_thumb_{int(at_seconds * 1000)}.jpg"
     extract_frame(
         webcam_path,
         frame_path,
         settings,
-        at_seconds=pick_frame_time(duration),
+        at_seconds=float(at_seconds),
     )
     html_doc = build_thumbnail_html(title, _frame_data_uri(frame_path))
 
@@ -278,6 +345,41 @@ def render_studio_thumbnail(
 
     _enforce_thumb_budget(dest)
     return dest
+
+
+def render_studio_thumbnails(
+    title: str,
+    webcam_path: Path,
+    dest_dir: Path,
+    settings: Settings,
+    *,
+    duration: float | None = None,
+) -> list[Path]:
+    """At least three candidates (~10/25/50%). thumbnail.jpg is the 25% card."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if duration is None:
+        duration = probe_duration(webcam_path, settings)
+    paths: list[Path] = []
+    for name, ratio in zip(THUMB_NAMES, THUMB_RATIOS):
+        paths.append(
+            render_studio_thumbnail(
+                title,
+                webcam_path,
+                dest_dir / name,
+                settings,
+                duration=duration,
+                at_ratio=ratio,
+            )
+        )
+    default = dest_dir / "thumbnail.jpg"
+    mid = paths[1] if len(paths) > 1 else paths[0]
+    if default.exists():
+        default.unlink()
+    try:
+        os.link(mid, default)
+    except OSError:
+        shutil.copy2(mid, default)
+    return [default, *paths]
 
 
 def _enforce_thumb_budget(path: Path) -> None:
@@ -324,6 +426,9 @@ def write_studio_package(
     fallback_title: str = "",
     duration: float | None = None,
     title_index: int = 0,
+    transcript: TimedTranscript | None = None,
+    transcript_path: Path | None = None,
+    metadata_path: Path | None = None,
 ) -> StudioPackage:
     """Write the drag-into-Studio folder next to the pipeline JSON."""
     video_path = video_path.resolve()
@@ -354,13 +459,30 @@ def write_studio_package(
     description_path.write_text(description + "\n", encoding="utf-8")
     tags_path.write_text(format_tags_file(tags), encoding="utf-8")
 
-    thumbnail_path = render_studio_thumbnail(
+    thumb_paths = render_studio_thumbnails(
         paste_title,
         webcam_path,
-        dest_dir / "thumbnail.jpg",
+        dest_dir,
         settings,
         duration=probe_duration(webcam_path, settings),
     )
+    thumbnail_path = thumb_paths[0]
+
+    timed = load_transcript_for_studio(
+        transcript=transcript,
+        transcript_path=transcript_path,
+        duration=duration,
+    )
+    srt_path: Path | None = None
+    vtt_path: Path | None = None
+    if timed is not None:
+        srt_path, vtt_path = write_caption_files(timed, dest_dir)
+
+    chosen = max(0, min(int(title_index), max(0, len(titles) - 1)))
+    metadata = metadata.model_copy(update={"title_index": chosen, "chapters": chapters})
+    if metadata_path is not None:
+        persist_title_index(metadata_path, metadata, chosen)
+
     return StudioPackage(
         directory=dest_dir,
         video_path=packaged_video,
@@ -370,8 +492,11 @@ def write_studio_package(
         thumbnail_path=thumbnail_path,
         titles=titles,
         paste_title=paste_title,
-        title_index=max(0, min(int(title_index), max(0, len(titles) - 1))),
+        title_index=chosen,
         description=description,
         tags=tags,
         chapters=chapters,
+        captions_srt_path=srt_path,
+        captions_vtt_path=vtt_path,
+        thumbnail_paths=thumb_paths,
     )

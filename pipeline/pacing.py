@@ -142,7 +142,13 @@ def _cover_timeline(
         end = min(max(scene.end, start), duration)
         if start > cursor + 0.05:
             filled.extend(
-                _synthesize_scenes(cursor, start, settings, start_index=len(filled))
+                _synthesize_scenes(
+                    cursor,
+                    start,
+                    settings,
+                    start_index=len(filled),
+                    inherit=_nearest_real_graphic(ordered, filled, cursor),
+                )
             )
         scene.start = min(start, cursor) if filled and start < cursor else start
         scene.end = end
@@ -150,35 +156,82 @@ def _cover_timeline(
             filled.append(scene)
             cursor = max(cursor, scene.end)
     if cursor < duration - 0.05:
-        filled.extend(_synthesize_scenes(cursor, duration, settings, start_index=len(filled)))
+        filled.extend(
+            _synthesize_scenes(
+                cursor,
+                duration,
+                settings,
+                start_index=len(filled),
+                inherit=_nearest_real_graphic(ordered, filled, cursor),
+            )
+        )
     if filled:
         filled[-1].end = duration
     return filled
 
 
+def graphic_is_real(graphic: GraphicCard) -> bool:
+    """True when a card has copy or a rendered/matched asset. Empty fills do not."""
+    return bool(
+        graphic.title.strip()
+        or graphic.bullets
+        or graphic.asset_path.strip()
+        or graphic.slide_id.strip()
+        or graphic.lower_third_title.strip()
+    )
+
+
+def _nearest_real_graphic(
+    planned: list[Scene], filled: list[Scene], cursor: float
+) -> GraphicCard | None:
+    for scene in reversed(filled):
+        if graphic_is_real(scene.graphic):
+            return scene.graphic
+    previous = [scene for scene in planned if scene.end <= cursor + 0.05]
+    for scene in reversed(previous):
+        if graphic_is_real(scene.graphic):
+            return scene.graphic
+    upcoming = [scene for scene in planned if scene.start >= cursor - 0.05]
+    for scene in upcoming:
+        if graphic_is_real(scene.graphic):
+            return scene.graphic
+    return None
+
+
+def _fill_graphic(inherit: GraphicCard | None) -> GraphicCard:
+    if inherit is not None and graphic_is_real(inherit):
+        return inherit.model_copy(deep=True)
+    return GraphicCard()
+
+
 def _synthesize_scenes(
-    start: float, end: float, settings: Settings, *, start_index: int
+    start: float,
+    end: float,
+    settings: Settings,
+    *,
+    start_index: int,
+    inherit: GraphicCard | None = None,
 ) -> list[Scene]:
+    """Fill a gap. Stay FULL_FRAME. Never invent empty PIP/SPLIT cards."""
+    del start_index
     scenes: list[Scene] = []
     cursor = start
-    index = start_index
+    graphic = _fill_graphic(inherit)
     while cursor < end - 0.01:
         hold = min(target_hold_at(cursor, settings), end - cursor)
         if end - (cursor + hold) < settings.layout_hold_min:
             hold = end - cursor
         hold = max(hold, min(settings.layout_hold_min, end - cursor))
-        layout = _layout_for_index(index, previous=scenes[-1].layout if scenes else None)
         scenes.append(
             Scene(
                 start=cursor,
                 end=cursor + hold,
-                layout=layout,
+                layout=LayoutKind.FULL_FRAME,
                 reason="pacing-fill",
-                graphic=GraphicCard(),
+                graphic=graphic.model_copy(deep=True),
             )
         )
         cursor += hold
-        index += 1
     return scenes
 
 
@@ -195,7 +248,12 @@ def _split_long_holds(scenes: list[Scene], settings: Settings) -> list[Scene]:
             hold = min(target_hold_at(cursor, settings), scene.end - cursor)
             if scene.end - (cursor + hold) < settings.layout_hold_min:
                 hold = scene.end - cursor
-            layout = scene.layout if part == 0 else _next_layout(split[-1].layout if split else scene.layout)
+            if part == 0:
+                layout = scene.layout
+            elif graphic_is_real(scene.graphic):
+                layout = _next_layout(split[-1].layout if split else scene.layout)
+            else:
+                layout = LayoutKind.FULL_FRAME
             child = scene.model_copy(deep=True)
             child.start = cursor
             child.end = cursor + hold
@@ -214,8 +272,9 @@ def _avoid_triple_layouts(scenes: list[Scene]) -> list[Scene]:
         if scenes[index].layout == scenes[index - 1].layout:
             streak += 1
             if streak >= 3:
-                scenes[index].layout = _next_layout(scenes[index].layout)
-                streak = 1
+                if graphic_is_real(scenes[index].graphic):
+                    scenes[index].layout = _next_layout(scenes[index].layout)
+                    streak = 1
         else:
             streak = 1
     return scenes

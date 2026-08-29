@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 
 from pipeline.config import Settings
 from pipeline.media import write_json
-from pipeline.models import ChapterMarker, EditScript, YouTubeMetadata
+from pipeline.models import ChapterMarker, EditScript, TimedTranscript, TranscriptCue, YouTubeMetadata
 from pipeline.gemini_director import GENERIC_FILLER_TAGS, sanitize_chapters
 from pipeline.studio import (
     DESCRIPTION_CHAR_LIMIT,
@@ -19,6 +19,7 @@ from pipeline.studio import (
     format_titles_file,
     parse_titles_file,
     select_title,
+    parse_chapter_block,
     write_studio_package,
 )
 from run import build_parser, run_pipeline
@@ -215,6 +216,8 @@ def test_filler_tags_kept_when_they_are_the_only_tags() -> None:
 def test_help_lists_skip_studio() -> None:
     help_text = build_parser().format_help()
     assert "--skip-studio" in help_text
+    assert "--skip-composite" in help_text
+    assert "--broll-dir" in help_text
     assert "--title-index" in help_text
     assert "--repack-studio" in help_text
     assert "Studio" in help_text
@@ -285,8 +288,9 @@ def test_write_studio_package_title_index_drives_paste_and_thumbnail(monkeypatch
     _write_source_video(video, seconds=2)
     seen: dict[str, str] = {}
 
-    def fake_render(title, webcam_path, dest, settings, duration=None):
+    def fake_render(title, webcam_path, dest, settings, duration=None, **kwargs):
         seen["title"] = title
+        dest = dest.with_suffix(".jpg")
         dest.write_bytes(b"fake-thumb")
         return dest
 
@@ -364,6 +368,7 @@ def test_pipeline_skip_gemini_writes_studio_folder() -> None:
         auto_editor=False,
         skip_slides=True,
         skip_studio=False,
+        skip_composite=False,
         title_index=0,
     )
     run_pipeline(args, settings)
@@ -396,11 +401,180 @@ def test_skip_studio_leaves_no_folder() -> None:
         auto_editor=False,
         skip_slides=True,
         skip_studio=True,
+        skip_composite=False,
         title_index=0,
     )
     run_pipeline(args, settings)
     assert not (work / "skip_talk_studio").exists()
     assert (work / "skip_talk_final.mp4").is_file()
+
+
+def test_studio_writes_srt_from_transcript(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-studio-srt")
+    work.mkdir(parents=True, exist_ok=True)
+    video = work / "cap_final.mp4"
+    _write_source_video(video, seconds=2)
+    monkeypatch.setattr("pipeline.studio.render_studio_thumbnail", _fake_one_thumb)
+    settings = Settings(work_dir=work, output_dir=work, slides_dir=work / "slides")
+    meta = YouTubeMetadata(
+        titles=["One", "Two", "Three", "Four", "Five"],
+        description="Body.",
+        chapters=[
+            ChapterMarker(start=0, title="Open"),
+            ChapterMarker(start=40, title="Work"),
+            ChapterMarker(start=80, title="Close"),
+        ],
+        tags=["talk"],
+    )
+    transcript = TimedTranscript(
+        duration=4,
+        full_text="Hello later",
+        cues=[
+            TranscriptCue(start=0.0, end=1.5, text="Hello"),
+            TranscriptCue(start=1.5, end=3.0, text="later"),
+        ],
+    )
+    package = write_studio_package(
+        video_path=video,
+        webcam_path=video,
+        metadata=meta,
+        dest_dir=work / "cap_studio",
+        settings=settings,
+        fallback_title="cap",
+        duration=180.0,
+        title_index=0,
+        transcript=transcript,
+    )
+    assert package.captions_srt_path is not None
+    srt = package.captions_srt_path.read_text(encoding="utf-8")
+    assert "Hello" in srt
+    assert "later" in srt
+    assert "-->" in srt
+    vtt = package.captions_vtt_path.read_text(encoding="utf-8")
+    assert vtt.startswith("WEBVTT")
+    assert "Hello" in vtt
+
+
+def test_parse_chapter_block_reads_clock() -> None:
+    chapters = parse_chapter_block("0:00 Intro\n1:05 Setup\n1:02:03 Close\n")
+    assert [item.start for item in chapters] == [0.0, 65.0, 3723.0]
+    assert chapters[0].title == "Intro"
+
+
+def test_title_index_persists_to_metadata_json(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-studio-title-persist")
+    work.mkdir(parents=True, exist_ok=True)
+    video = work / "keep_final.mp4"
+    _write_source_video(video, seconds=2)
+    monkeypatch.setattr("pipeline.studio.render_studio_thumbnail", _fake_one_thumb)
+    settings = Settings(work_dir=work, output_dir=work, slides_dir=work / "slides")
+    meta_path = work / "keep_youtube_metadata.json"
+    meta = YouTubeMetadata(
+        titles=["One", "Two", "Three", "Four", "Five"],
+        description="Body.",
+        tags=["talk"],
+        title_index=0,
+    )
+    write_json(meta_path, meta.model_dump())
+    write_studio_package(
+        video_path=video,
+        webcam_path=video,
+        metadata=meta,
+        dest_dir=work / "keep_studio",
+        settings=settings,
+        fallback_title="keep",
+        duration=180.0,
+        title_index=3,
+        metadata_path=meta_path,
+    )
+    stored = YouTubeMetadata.model_validate_json(meta_path.read_text(encoding="utf-8"))
+    assert stored.title_index == 3
+
+
+def test_skip_composite_writes_plan_and_skips_moviepy(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-skip-composite")
+    work.mkdir(parents=True, exist_ok=True)
+    source = work / "plan_talk.mp4"
+    _write_source_video(source, seconds=2)
+    script_path = work / "plan_talk_edit_script.json"
+    write_json(script_path, EditScript.empty().model_dump())
+    settings = Settings(
+        work_dir=work,
+        output_dir=work,
+        slides_dir=work / "slides",
+        scenes_dir=work / "scenes",
+    )
+    monkeypatch.setattr(
+        "pipeline.compositor.render_video",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("composite ran")),
+    )
+    args = Namespace(
+        input=str(source),
+        output=str(work / "plan_talk_final.mp4"),
+        skip_silence=True,
+        skip_gemini=True,
+        edit_script=str(script_path),
+        transcript=None,
+        broll_dir=None,
+        auto_editor=False,
+        skip_slides=True,
+        skip_studio=False,
+        skip_composite=True,
+        title_index=None,
+    )
+    result = run_pipeline(args, settings)
+    assert result == (work / "plan_talk_edit_script.json").resolve()
+    assert (work / "plan_talk_edit_script.json").is_file()
+    assert not (work / "plan_talk_final.mp4").exists()
+    assert not (work / "plan_talk_studio").exists()
+
+
+def test_edit_script_composites_trimmed_file(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-edit-script-trim")
+    work.mkdir(parents=True, exist_ok=True)
+    source = work / "raw_cut.mp4"
+    trimmed = work / "raw_cut_trimmed.mp4"
+    _write_source_video(source, seconds=4)
+    _write_source_video(trimmed, seconds=2)
+    script_path = work / "raw_cut_edit_script.json"
+    write_json(script_path, EditScript.empty().model_dump())
+    settings = Settings(
+        work_dir=work,
+        output_dir=work,
+        slides_dir=work / "slides",
+        scenes_dir=work / "scenes",
+    )
+    seen: dict[str, Path] = {}
+
+    def fake_render(video_path, script, output_path, settings_obj, **kwargs):
+        del script, settings_obj, kwargs
+        seen["video"] = Path(video_path)
+        Path(output_path).write_bytes(b"final")
+        return Path(output_path)
+
+    monkeypatch.setattr("pipeline.compositor.render_video", fake_render)
+    args = Namespace(
+        input=str(source),
+        output=str(work / "raw_cut_final.mp4"),
+        skip_silence=True,
+        skip_gemini=True,
+        edit_script=str(script_path),
+        transcript=None,
+        broll_dir=None,
+        auto_editor=False,
+        skip_slides=True,
+        skip_studio=True,
+        skip_composite=False,
+        title_index=None,
+    )
+    run_pipeline(args, settings)
+    assert seen["video"] == trimmed.resolve()
+
+
+def _fake_one_thumb(title, webcam_path, dest, settings, duration=None, **kwargs):
+    dest = dest.with_suffix(".jpg")
+    dest.write_bytes(b"fake-thumb")
+    return dest
 
 
 def _write_source_video(path: Path, *, seconds: int) -> None:

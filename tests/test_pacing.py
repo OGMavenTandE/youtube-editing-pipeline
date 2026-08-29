@@ -1,7 +1,7 @@
 from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.models import EditScript, GraphicCard, Scene
-from pipeline.pacing import enforce_pacing, evaluate_pacing, expected_scene_range
+from pipeline.pacing import enforce_pacing, evaluate_pacing, expected_scene_range, graphic_is_real
 
 
 def test_twenty_minute_band_is_about_50_to_80() -> None:
@@ -50,6 +50,40 @@ def test_lazy_three_scene_script_is_split() -> None:
         else:
             streak = 1
     assert max_streak < 3
+
+
+def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
+    settings = Settings()
+    duration = 90.0
+    script = enforce_pacing(
+        EditScript(
+            scenes=[
+                Scene(
+                    start=20,
+                    end=40,
+                    layout=LayoutKind.PIP_BOTTOM_RIGHT,
+                    graphic=GraphicCard(title="Real card", bullets=["One"], slide_id="real"),
+                )
+            ]
+        ),
+        duration,
+        settings,
+    )
+    fills = [scene for scene in script.scenes if scene.reason == "pacing-fill"]
+    assert fills
+    for scene in fills:
+        assert scene.layout is LayoutKind.FULL_FRAME
+    for scene in script.scenes:
+        if scene.layout is not LayoutKind.FULL_FRAME:
+            assert graphic_is_real(scene.graphic)
+            assert scene.graphic.title
+
+
+def test_empty_script_fills_stay_full_frame() -> None:
+    script = enforce_pacing(EditScript.empty(), 60.0, Settings())
+    assert script.scenes
+    assert all(scene.layout is LayoutKind.FULL_FRAME for scene in script.scenes)
+    assert all(not graphic_is_real(scene.graphic) for scene in script.scenes)
 
 
 def test_short_clip_stays_one_or_two_scenes() -> None:

@@ -6,7 +6,7 @@ Local pipeline for landscape talking-head webcam footage: trim dead air, let Gem
 python run.py --input raw_video.mp4
 ```
 
-Input is always a landscape webcam recording of you. B-roll today means generated 1920x1080 slides. The B-roll provider interface is built so a later video-clip provider can slot in without changing the timeline.
+Input is always a landscape webcam recording of you. B-roll is generated 1920x1080 slides, plus optional local video files from `--broll-dir`. Filename/keyword match only. No stock-footage APIs.
 
 ## Setup
 
@@ -26,7 +26,7 @@ Put your Google AI Studio key in `.env`:
 GEMINI_API_KEY=your_key_here
 ```
 
-Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`).
+Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`), `TARGET_LUFS` (default `-14`).
 
 ## FFmpeg
 
@@ -62,19 +62,31 @@ python run.py --input raw_video.mp4 --output output/final.mp4
 python run.py --input raw_video.mp4 --skip-silence
 python run.py --input raw_video.mp4 --skip-gemini
 python run.py --input raw_video.mp4 --auto-editor
+python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.json --skip-composite
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
-python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.json
+python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-composite
+python run.py --input raw_video.mp4 --broll-dir broll/
 python run.py --input raw_video.mp4 --skip-slides
 python run.py --input raw_video.mp4 --skip-studio
 python run.py --input raw_video.mp4 --title-index 2
 python run.py --repack-studio output/raw_video_studio --title-index 2
 ```
 
-`--input` is required for a full run. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, `--skip-slides`, and `--skip-studio` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass. `--title-index` (0-4, default 0) picks which of the five titles is the paste title and the thumbnail line.
+`--input` is required for a full run. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, `--skip-slides`, `--skip-studio`, and `--skip-composite` are for testing individual stages.
 
-After the MP4 lands, the pipeline writes `output/<stem>_studio/`: a copy or hardlink of the video, `titles.txt` (chosen title on line 1, the other four below, plus `selected: N`), `description.txt` (SEO body plus one YouTube-legal chapter list), `tags.txt`, and a 1280x720 `thumbnail.jpg`. Drag that folder into YouTube Studio. There is no YouTube API upload. `*_youtube_metadata.json` stays the machine file.
+`--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass. A later `--skip-composite` run with that transcript re-plans scenes and writes the edit script, then stops before MoviePy. The plan path is printed as `Plan: output/<stem>_edit_script.json`.
 
-`--repack-studio` rewrites an existing Studio folder without silence trim, Gemini, slides, or MoviePy. Pass the `output/<stem>_studio` folder, the stem, or the original input that already has a studio folder plus `output/<stem>_youtube_metadata.json` and the final MP4. The thumbnail still needs the trimmed talking-head file (`work/<stem>_trimmed.mp4`) or the original webcam via `--input`. If that frame source is missing, the command fails instead of drawing a black frame. The existing MP4 is hardlinked or copied as before.
+`--edit-script` composites the trimmed talking-head when `work/<stem>_trimmed.mp4` exists. `--skip-silence` only passthroughs the raw `--input` when there is no trimmed file and no cut map.
+
+`--broll-dir` matches local video filenames against scene graphic titles and `BrollCue.query`. A hit becomes the PIP/SPLIT/FULL_FRAME graphic layer. No match keeps the generated slide.
+
+`--title-index` (0-4) picks which of the five titles is the paste title and the thumbnail line. If omitted, the pipeline reuses `title_index` from `*_youtube_metadata.json` so a desk pick survives a full rerun.
+
+`--auto-editor` is an optional tighter silence pass. The cut map written afterward describes the file that was actually rendered (probed duration), not the pydub preview map.
+
+After the MP4 lands, the pipeline writes `output/<stem>_studio/`: a copy or hardlink of the video, `titles.txt` (chosen title on line 1, the other four below, plus `selected: N`), `description.txt` (SEO body plus one YouTube-legal chapter list), `tags.txt`, `captions.srt` / `captions.vtt` when a transcript exists, and thumbnail candidates. `thumbnail.jpg` is the 25% webcam card. `thumbnail_01.jpg` / `thumbnail_02.jpg` / `thumbnail_03.jpg` are the 10% / 25% / 50% frames. Drag that folder into YouTube Studio. There is no YouTube API upload. `*_youtube_metadata.json` stays the machine file and stores `title_index`.
+
+`--repack-studio` rewrites an existing Studio folder without silence trim, Gemini, slides, or MoviePy. Pass the `output/<stem>_studio` folder, the stem, or the original input that already has a studio folder plus `output/<stem>_youtube_metadata.json` and the final MP4. Captions and extra thumbs are rewritten when the transcript and webcam file are present. The thumbnail still needs the trimmed talking-head file (`work/<stem>_trimmed.mp4`) or the original webcam via `--input`. If that frame source is missing, the command fails instead of drawing a black frame. The existing MP4 is hardlinked or copied as before.
 
 ## Studio review UI
 
@@ -84,7 +96,7 @@ Task 7 is desk review, not the editor. It does not run the pipeline, edit scenes
 streamlit run ui.py
 ```
 
-`python -m pipeline.ui` also works. Open the local URL, pick an `output/*_studio` folder, choose one of the five titles, and rewrite the folder. Same writer as the CLI: `write_studio_package()`. Localhost only. No auth and no deploy.
+`python -m pipeline.ui` also works. Open the local URL, pick an `output/*_studio` folder, choose one of the five titles, read or edit the description and chapters, pick a thumbnail candidate, and rewrite the folder. Same writer as the CLI: `write_studio_package()`. Localhost only. No auth and no deploy.
 
 ## Layouts and pacing
 
@@ -93,27 +105,36 @@ A scene is a short beat, not the whole 20-minute file. The director plus a local
 Heavy change (one per scene):
 
 - `FULL_FRAME`: you fill the 1920x1080 frame.
-- `PIP_BOTTOM_RIGHT`: a slide fills the frame; you sit in a rounded lower-right bubble at about 25% width.
+- `PIP_BOTTOM_RIGHT`: a slide (or matched local B-roll) fills the frame; you sit in a rounded lower-right bubble at about 25% width.
 - `SPLIT_TOP`: you occupy the top two-thirds; a graphic occupies the bottom third.
 
-Hold times: 8-15s in the first minute (target ~12s), then 15-25s (target ~20s). Same layout cannot run three times in a row. Order is content-driven, not a fixed A-B-C loop.
+Hold times: 8-15s in the first minute (target ~12s), then 15-25s (target ~20s). Same layout cannot run three times in a row when the scene has a real graphic. Order is content-driven, not a fixed A-B-C loop.
+
+Pacing fills that close timeline gaps stay `FULL_FRAME`. They inherit the nearest real graphic when one exists. They do not invent empty PIP/SPLIT cards.
 
 Light change (inside a hold, every ~5-7s): punch-in zoom (~1.15x), a short text takeaway, or a cut at the scene edge. These are not layout swaps.
 
 If Gemini returns too few scenes, `pipeline/pacing.py` splits long holds and fills the timeline so the band still holds.
 
+If `talking_head_cuts` is non-empty on the edit script, those keep-ranges are applied on the trimmed timeline before composite and scene timestamps are remapped. An empty list is ignored.
+
+## Composite and loudness
+
+Each scene encodes to `work/scenes/<stem>/`. If that file already exists and its fingerprint matches, the encode is skipped (resume). ffmpeg concatenates the scene files and applies a single-pass `loudnorm` toward YouTube's about -14 LUFS (`TARGET_LUFS`). Final mux is H.264/AAC. If ffmpeg concat fails, the compositor falls back to an in-memory MoviePy concat and says so.
+
 ## Architecture
 
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
-1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map. `--auto-editor` is an optional tighter pass.
-2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Second pass is text-only: scenes (layout, reason, graphic card) plus YouTube metadata. Cuts longer than about 8 minutes are planned in 5-minute windows, then stitched. Micro-resets stay local in `pacing.py`. Talking-head filler cuts stay empty.
-3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`. Video B-roll can share the same `BrollAsset` later.
-4. `pipeline/compositor.py` — MoviePy 2 builds each scene on a 1920x1080 canvas, then concatenates. `FULL_FRAME` is cover-cropped webcam. `PIP_BOTTOM_RIGHT` is the slide plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the split PNG over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
-5. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt` (chosen title on line 1, the other four below, clipped to 100 characters), `description.txt` (SEO body with Gemini's chapter tail stripped, then one `0:00` block from the structured list), `tags.txt` (generic filler tags omitted when real tags exist). Thumbnail is a Playwright 1280x720 card (the `--title-index` title plus a webcam frame), not Imagen and not a raw frame grab. JSON metadata stays the pipeline source of truth. No YouTube Data API upload.
-6. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder and a title, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
+1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map that matches the file handed to the director. `--auto-editor` is an optional tighter pass; its cut map uses the rendered duration.
+2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Scene windows are text-only and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Micro-resets stay local in `pacing.py`.
+3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`.
+4. `pipeline/broll/local.py` — optional `--broll-dir` matcher. Local video files become `BrollAsset` clips for PIP, SPLIT, or FULL_FRAME when the filename matches a query.
+5. `pipeline/compositor.py` — MoviePy 2 encodes each scene on a 1920x1080 canvas to `work/scenes/`, then ffmpeg concat + loudnorm. `FULL_FRAME` is cover-cropped webcam (or a matched B-roll cutaway). `PIP_BOTTOM_RIGHT` is the slide or B-roll plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the graphic over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
+6. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt`, `description.txt`, `tags.txt`, `captions.srt` / `captions.vtt`, and thumbnail candidates. JSON metadata stays the pipeline source of truth, including `title_index`. No YouTube Data API upload.
+7. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder, a title, description, chapters, and a thumbnail candidate, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
 
-`pipeline/config.py` loads dotenv and typed settings, including canvas size and PiP scale. `pipeline/layouts.py` is the layout enum.
+`pipeline/config.py` loads dotenv and typed settings, including canvas size, PiP scale, and `target_lufs`. `pipeline/layouts.py` is the layout enum.
 
 ## Notes
 

@@ -7,15 +7,17 @@ import argparse
 import sys
 from pathlib import Path
 
+from pipeline.broll.local import apply_local_broll
 from pipeline.broll.slides import PlaywrightNotFoundError, render_slides
 from pipeline.config import FFmpegNotFoundError, Settings, load_settings, require_ffmpeg
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
-from pipeline.repack import repack_studio
+from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
-from pipeline.studio import write_studio_package
+from pipeline.studio import resolve_title_index, write_studio_package
+from pipeline.timeline import apply_talking_head_cuts, resolve_working_cut
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,9 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--skip-composite",
+        action="store_true",
+        help=(
+            "Plan only: reuse/trim, run or load the director, write the edit "
+            "script, then stop before MoviePy. Prints the plan path."
+        ),
+    )
+    parser.add_argument(
         "--broll-dir",
         default=None,
-        help="Directory of local B-roll files matched against cue queries.",
+        help="Directory of local B-roll videos matched against cue/graphic queries.",
     )
     parser.add_argument(
         "--auto-editor",
@@ -85,10 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--title-index",
         type=int,
-        default=0,
+        default=None,
         choices=range(5),
         metavar="N",
-        help="Which of the five titles to paste and put on the thumbnail (0-4, default 0).",
+        help=(
+            "Which of the five titles to paste and put on the thumbnail (0-4). "
+            "If omitted, reuse the persisted pick from *_youtube_metadata.json."
+        ),
     )
     parser.add_argument(
         "--repack-studio",
@@ -116,6 +129,17 @@ def resolve_input(raw: str, settings: Settings) -> Path:
     )
 
 
+def _persisted_title_index(stem: str, settings: Settings, script: EditScript) -> int | None:
+    meta_path = settings.output_dir / f"{stem}_youtube_metadata.json"
+    if meta_path.is_file():
+        try:
+            _, stored = load_run_metadata(stem, settings)
+        except (FileNotFoundError, ValueError):
+            stored = script.metadata
+        return int(stored.title_index)
+    return int(script.metadata.title_index) if script.metadata.title_index else None
+
+
 def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     settings.ensure_dirs()
     require_ffmpeg(settings)
@@ -126,8 +150,22 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         if args.output
         else (settings.output_dir / f"{input_path.stem}_final.mp4").resolve()
     )
+    skip_composite = bool(getattr(args, "skip_composite", False))
+    prefer_trim = bool(args.edit_script) or bool(args.skip_silence)
+    reused = resolve_working_cut(
+        input_path,
+        settings,
+        skip_silence=bool(args.skip_silence),
+        prefer_existing_trim=prefer_trim,
+    )
 
-    if args.skip_silence:
+    if reused is not None:
+        trim = reused
+        print(
+            f"[1/5] Reusing trimmed talking-head {trim.output_path.name} "
+            f"({trim.cut_map.trimmed_duration:.2f}s, backend={trim.backend})."
+        )
+    elif args.skip_silence:
         duration = probe_duration(input_path, settings)
         trim = SilenceTrimResult.passthrough(input_path, duration)
         print(f"[1/5] Silence trim skipped ({duration:.2f}s).")
@@ -149,6 +187,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
             trim.cut_map.model_dump(),
         )
 
+    transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
     if args.edit_script:
         script = load_edit_script(Path(args.edit_script))
         print(f"[2/5] Loaded edit script from {args.edit_script}.")
@@ -158,7 +197,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     else:
         print(f"[2/5] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
-        transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
+        if transcript_path is None and transcript_out.is_file():
+            transcript_path = transcript_out
+            print(f"      reusing saved transcript {transcript_out.name}")
         script = analyze_video(
             trim.output_path,
             settings,
@@ -183,7 +224,17 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     for warning in report.warnings:
         print(f"      pacing note: {warning}")
 
-    if args.skip_slides:
+    working_path = trim.output_path
+    if script.talking_head_cuts:
+        print("      applying talking_head_cuts on the trimmed timeline...")
+        working_path, script = apply_talking_head_cuts(working_path, script, settings)
+        print(f"      director-cut video: {working_path}")
+
+    broll_dir = Path(args.broll_dir) if args.broll_dir else None
+    if broll_dir is not None:
+        apply_local_broll(script, broll_dir)
+
+    if args.skip_slides or skip_composite:
         print("[3/5] Slides skipped.")
     else:
         print("[3/5] Rendering 1920x1080 slides...")
@@ -193,7 +244,22 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     write_json(script_path, script.model_dump())
     meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
+    title_index = resolve_title_index(
+        getattr(args, "title_index", None),
+        script.metadata,
+        persisted=_persisted_title_index(input_path.stem, settings, script),
+    )
+    script.metadata.title_index = title_index
     write_json(meta_path, script.metadata.model_dump())
+
+    if skip_composite:
+        print("[4/5] Composite skipped.")
+        print(f"Plan: {script_path}")
+        print(f"      Pipeline metadata: {meta_path}")
+        if transcript_out.is_file():
+            print(f"      Transcript: {transcript_out}")
+        print("[5/5] Studio package skipped (no composite).")
+        return script_path
 
     layout_counts = {}
     for scene in script.scenes:
@@ -204,20 +270,19 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     from pipeline.compositor import render_video
 
     final_path = render_video(
-        trim.output_path,
+        working_path,
         script,
         output_path,
         settings,
-        broll_dir=Path(args.broll_dir) if args.broll_dir else None,
+        broll_dir=broll_dir,
     )
     print(f"Done. Video: {final_path}")
     print(f"      Edit script: {script_path}")
     print(f"      Pipeline metadata: {meta_path}")
     if settings.slides_dir.is_dir() and any(settings.slides_dir.glob("*.png")):
         print(f"      Slides: {settings.slides_dir}")
-    transcript_note = settings.output_dir / f"{input_path.stem}_transcript.json"
-    if transcript_note.is_file():
-        print(f"      Transcript: {transcript_note}")
+    if transcript_out.is_file():
+        print(f"      Transcript: {transcript_out}")
 
     if getattr(args, "skip_studio", False):
         print("[5/5] Studio package skipped.")
@@ -226,15 +291,19 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     print("[5/5] Writing YouTube Studio folder...")
     package = write_studio_package(
         video_path=final_path,
-        webcam_path=trim.output_path,
+        webcam_path=working_path,
         metadata=script.metadata,
         dest_dir=settings.output_dir / f"{input_path.stem}_studio",
         settings=settings,
         fallback_title=input_path.stem.replace("_", " ").replace("-", " ").strip(),
-        title_index=getattr(args, "title_index", 0),
+        title_index=title_index,
+        transcript_path=transcript_out if transcript_out.is_file() else None,
+        metadata_path=meta_path,
     )
     print(f"      Studio folder: {package.directory}")
     print(f"      Paste title [{package.title_index}]: {package.paste_title}")
+    if package.captions_srt_path:
+        print(f"      Captions: {package.captions_srt_path.name}")
     return final_path
 
 
@@ -242,10 +311,22 @@ def run_repack(args: argparse.Namespace, settings: Settings) -> Path:
     """Rewrite studio text + thumbnail. No silence, Gemini, slides, or MoviePy."""
     settings.ensure_dirs()
     require_ffmpeg(settings)
+    from pipeline.repack import resolve_studio_run
+
+    run = resolve_studio_run(
+        args.repack_studio,
+        settings,
+        input_hint=args.input,
+    )
+    title_index = resolve_title_index(
+        getattr(args, "title_index", None),
+        run.metadata,
+        persisted=run.metadata.title_index,
+    )
     package = repack_studio(
         args.repack_studio,
         settings,
-        title_index=getattr(args, "title_index", 0),
+        title_index=title_index,
         input_hint=args.input,
     )
     print(f"Studio folder: {package.directory}")
@@ -257,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.repack_studio and getattr(args, "skip_studio", False):
         parser.error("--repack-studio cannot be combined with --skip-studio")
+    if args.repack_studio and getattr(args, "skip_composite", False):
+        parser.error("--repack-studio cannot be combined with --skip-composite")
     if not args.repack_studio and not args.input:
         parser.error("--input is required unless --repack-studio is set")
     settings = load_settings()

@@ -11,7 +11,14 @@ from pathlib import Path
 from pipeline.config import Settings, load_settings
 from pipeline.models import YouTubeMetadata
 from pipeline.repack import list_studio_dirs, resolve_studio_run
-from pipeline.studio import clip_title, parse_titles_file, write_studio_package
+from pipeline.studio import (
+    clip_title,
+    format_chapter_block,
+    parse_chapter_block,
+    parse_titles_file,
+    strip_chapter_tail,
+    write_studio_package,
+)
 
 
 def _label_for(path: Path) -> str:
@@ -23,7 +30,7 @@ def _titles_for_run(run_metadata: YouTubeMetadata, studio_dir: Path, stem: str) 
     if not titles:
         titles = [stem.replace("_", " ") or "Untitled"]
     titles_path = studio_dir / "titles.txt"
-    selected = 0
+    selected = int(run_metadata.title_index or 0)
     if titles_path.is_file():
         file_titles, file_selected = parse_titles_file(titles_path.read_text(encoding="utf-8"))
         if file_titles:
@@ -39,6 +46,18 @@ def _titles_for_run(run_metadata: YouTubeMetadata, studio_dir: Path, stem: str) 
     return titles, selected
 
 
+def _thumbnail_choices(studio_dir: Path) -> list[Path]:
+    names = ["thumbnail.jpg", "thumbnail_01.jpg", "thumbnail_02.jpg", "thumbnail_03.jpg"]
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for name in names:
+        path = studio_dir / name
+        if path.is_file() and path.resolve() not in seen:
+            seen.add(path.resolve())
+            found.append(path)
+    return found
+
+
 def render_review_page(settings: Settings | None = None) -> None:
     import streamlit as st
 
@@ -46,7 +65,7 @@ def render_review_page(settings: Settings | None = None) -> None:
     st.set_page_config(page_title="Studio review", layout="wide")
     st.title("Studio review")
     st.caption(
-        "Pick a finished run and which of the five Gemini titles to paste. "
+        "Pick a finished run, title, description, and chapters. "
         "This rewrites the Studio folder only. It is not the editor."
     )
 
@@ -75,9 +94,13 @@ def render_review_page(settings: Settings | None = None) -> None:
 
     media_left, media_right = st.columns(2)
     with media_left:
-        thumb = run.studio_dir / "thumbnail.jpg"
-        if thumb.is_file():
-            st.image(thumb.read_bytes(), caption="Current thumbnail")
+        thumbs = _thumbnail_choices(run.studio_dir)
+        if thumbs:
+            labels_thumbs = [path.name for path in thumbs]
+            picked = st.radio("Thumbnail candidate", labels_thumbs, index=0)
+            shown = run.studio_dir / picked
+            if shown.is_file():
+                st.image(shown.read_bytes(), caption=picked)
         else:
             st.warning("No thumbnail.jpg in this folder yet.")
     with media_right:
@@ -86,16 +109,34 @@ def render_review_page(settings: Settings | None = None) -> None:
         else:
             st.warning("Packaged MP4 is missing.")
 
+    body = strip_chapter_tail(run.metadata.description or "")
+    studio_desc = run.studio_dir / "description.txt"
+    if not body and studio_desc.is_file():
+        body = strip_chapter_tail(studio_desc.read_text(encoding="utf-8"))
+    description = st.text_area("Description", value=body, height=220)
+    chapter_text = format_chapter_block(run.metadata.chapters)
+    chapters_raw = st.text_area("Chapters", value=chapter_text, height=160)
+
     if st.button("Rewrite studio folder", type="primary"):
+        edited = run.metadata.model_copy(
+            update={
+                "description": description,
+                "chapters": parse_chapter_block(chapters_raw) or run.metadata.chapters,
+                "title_index": title_index,
+            }
+        )
+        transcript_path = settings.output_dir / f"{run.stem}_transcript.json"
         try:
             package = write_studio_package(
                 video_path=run.video_path,
                 webcam_path=run.webcam_path,
-                metadata=run.metadata,
+                metadata=edited,
                 dest_dir=run.studio_dir,
                 settings=settings,
                 fallback_title=run.stem.replace("_", " ").replace("-", " ").strip(),
                 title_index=title_index,
+                transcript_path=transcript_path if transcript_path.is_file() else None,
+                metadata_path=run.metadata_path,
             )
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             st.error(str(exc))

@@ -2,7 +2,16 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from pipeline.compositor import cover_scale, pip_rect, render_video, split_webcam_rect
+from pipeline.compositor import (
+    cover_scale,
+    pip_rect,
+    render_video,
+    scene_cache_valid,
+    scene_encode_path,
+    scene_fingerprint,
+    split_webcam_rect,
+    write_scene_sidecar,
+)
 from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.media import probe_duration
@@ -48,6 +57,7 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
         work_dir=work,
         output_dir=work,
         slides_dir=work,
+        scenes_dir=work / "scenes",
     )
     script = EditScript(
         scenes=[
@@ -79,6 +89,25 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
     assert 2.8 <= duration <= 3.2
     info = _probe_size(output)
     assert info == (1920, 1080)
+
+
+def test_scene_cache_skips_when_fingerprint_matches() -> None:
+    work = Path("/tmp/yt-pipe-scene-resume")
+    work.mkdir(parents=True, exist_ok=True)
+    settings = Settings(work_dir=work, output_dir=work, slides_dir=work, scenes_dir=work)
+    scene = Scene(
+        start=0,
+        end=2,
+        layout=LayoutKind.FULL_FRAME,
+        graphic=GraphicCard(title="Talk"),
+    )
+    fingerprint = scene_fingerprint(scene, settings)
+    dest = scene_encode_path(work, 0, fingerprint)
+    dest.write_bytes(b"not-empty-scene")
+    write_scene_sidecar(dest, scene, fingerprint)
+    assert scene_cache_valid(dest, scene, settings, fingerprint=fingerprint)
+    changed = scene.model_copy(update={"end": 3.0})
+    assert not scene_cache_valid(dest, changed, settings)
 
 
 def _write_source_video(path: Path) -> None:

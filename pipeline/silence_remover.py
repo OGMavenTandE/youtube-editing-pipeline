@@ -42,7 +42,7 @@ def remove_silence(
 
     if use_auto_editor and shutil.which("auto-editor"):
         try:
-            return _render_auto_editor(input_path, dest, settings, cut_map)
+            return _render_auto_editor(input_path, dest, settings, original_duration)
         except (MediaError, OSError, subprocess.CalledProcessError):
             pass
 
@@ -156,11 +156,29 @@ def _render_ffmpeg(
     return SilenceTrimResult(output_path=dest, cut_map=cut_map, backend="pydub-ffmpeg")
 
 
+def cut_map_for_rendered_output(
+    original_duration: float, rendered_duration: float
+) -> SilenceCutMap:
+    """Cut map that describes the file handed to the director/compositor.
+
+    auto-editor's keep list is not the pydub map. Downstream timestamps are
+    on this rendered file, so trimmed_duration must match it.
+    """
+    rendered = max(0.0, float(rendered_duration))
+    original = max(0.0, float(original_duration))
+    return SilenceCutMap(
+        kept_ranges=[TimeRange(start=0.0, end=rendered)] if rendered > 0 else [],
+        removed_ranges=[],
+        original_duration=original,
+        trimmed_duration=rendered,
+    )
+
+
 def _render_auto_editor(
     input_path: Path,
     dest: Path,
     settings: Settings,
-    cut_map: SilenceCutMap,
+    original_duration: float,
 ) -> SilenceTrimResult:
     render = [
         "auto-editor",
@@ -176,6 +194,8 @@ def _render_auto_editor(
     rendered = subprocess.run(render, capture_output=True, text=True)
     if rendered.returncode != 0 or not dest.exists():
         raise MediaError(rendered.stderr or "auto-editor render failed")
+    actual = probe_duration(dest, settings)
+    cut_map = cut_map_for_rendered_output(original_duration, actual)
     return SilenceTrimResult(output_path=dest, cut_map=cut_map, backend="auto-editor")
 
 
