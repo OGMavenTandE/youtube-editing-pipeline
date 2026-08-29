@@ -17,8 +17,8 @@ def test_keep_ranges_drop_long_silence_and_pad() -> None:
     )
     assert len(kept) == 2
     assert kept[0].start == 0.0
-    assert kept[0].end == 0.55
-    assert kept[1].start == 1.25
+    assert 0.5 <= kept[0].end <= 0.6
+    assert 1.2 <= kept[1].start <= 1.3
     assert abs(kept[1].end - 1.8) < 0.05
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,7 +37,7 @@ def remove_silence(
     if prefer_auto_editor and shutil.which("auto-editor"):
         try:
             return _trim_with_auto_editor(input_path, dest, settings, original_duration)
-        except (MediaError, OSError, json.JSONDecodeError, subprocess.CalledProcessError):
+        except (MediaError, OSError, subprocess.CalledProcessError):
             pass
 
     return _trim_with_pydub(input_path, dest, settings, original_duration)
@@ -160,28 +159,22 @@ def _trim_with_auto_editor(
     settings: Settings,
     original_duration: float,
 ) -> SilenceTrimResult:
-    """Use auto-editor for the cut, then rebuild a keep-map from its JSON export."""
-    export_json = settings.work_dir / f"{input_path.stem}_autoeditor.json"
-    cmd = [
-        "auto-editor",
-        str(input_path),
-        "--edit",
-        "audio",
-        "--margin",
-        f"{settings.silence_padding}s",
-        "--export",
-        "json",
-        "--output",
-        str(export_json),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not export_json.exists():
-        raise MediaError(result.stderr or "auto-editor JSON export failed")
-
-    payload = json.loads(export_json.read_text(encoding="utf-8"))
-    kept = _kept_from_auto_editor(payload, settings.silence_min_duration)
+    """Render with auto-editor; build the cut map with the same pydub detector."""
+    wav_path = settings.work_dir / f"{input_path.stem}_detect.wav"
+    extract_audio(input_path, wav_path, settings)
+    try:
+        audio = AudioSegment.from_file(wav_path)
+    finally:
+        if wav_path.exists():
+            wav_path.unlink()
+    kept = compute_keep_ranges(
+        audio,
+        min_silence_ms=int(settings.silence_min_duration * 1000),
+        padding_ms=int(settings.silence_padding * 1000),
+        threshold_db=settings.silence_threshold_db,
+    )
     if not kept:
-        raise MediaError("auto-editor reported no keep ranges")
+        raise MediaError("Silence detection found no speech before auto-editor render.")
 
     render = [
         "auto-editor",
@@ -192,45 +185,18 @@ def _trim_with_auto_editor(
         f"{settings.silence_padding}s",
         "--output",
         str(dest),
+        "--no-open",
     ]
     rendered = subprocess.run(render, capture_output=True, text=True)
     if rendered.returncode != 0 or not dest.exists():
         raise MediaError(rendered.stderr or "auto-editor render failed")
 
-    # Drop keep spans that correspond to short silences we should have kept
-    # only if auto-editor already did that via --margin. We still drop
-    # removed gaps shorter than the configured minimum by folding them back.
     kept = _fold_short_gaps(kept, settings.silence_min_duration, original_duration)
     return SilenceTrimResult(
         output_path=dest,
         cut_map=_build_cut_map(kept, original_duration),
         backend="auto-editor",
     )
-
-
-def _kept_from_auto_editor(payload: object, min_silence: float) -> list[TimeRange]:
-    chunks = []
-    if isinstance(payload, dict):
-        chunks = payload.get("chunks") or payload.get("timeline") or []
-    elif isinstance(payload, list):
-        chunks = payload
-    kept: list[TimeRange] = []
-    for chunk in chunks:
-        if not isinstance(chunk, dict):
-            continue
-        start = float(chunk.get("start", 0))
-        end = float(chunk.get("end", 0))
-        speed = float(chunk.get("speed", 1))
-        if end <= start:
-            continue
-        if speed == 1 or speed == 1.0:
-            kept.append(TimeRange(start=start, end=end))
-        elif (end - start) < min_silence:
-            kept.append(TimeRange(start=start, end=end))
-    return [
-        TimeRange(start=s, end=e)
-        for s, e in _merge_ms([(int(k.start * 1000), int(k.end * 1000)) for k in kept])
-    ]
 
 
 def _fold_short_gaps(
