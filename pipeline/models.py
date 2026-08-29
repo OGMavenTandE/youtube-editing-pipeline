@@ -89,6 +89,14 @@ class GraphicCard(BaseModel):
         default="",
         description="Stable id so adjacent scenes can share one generated slide.",
     )
+    asset_path: str = Field(
+        default="",
+        description="Rendered 1920x1080 slide PNG. Filled by the slide provider.",
+    )
+    lower_third_path: str = Field(
+        default="",
+        description="Rendered lower-third PNG. Filled by the slide provider.",
+    )
 
     @model_validator(mode="before")
     @classmethod
