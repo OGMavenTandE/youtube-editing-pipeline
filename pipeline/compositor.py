@@ -8,7 +8,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pipeline.config import Settings, require_ffmpeg
 from pipeline.media import probe_duration
-from pipeline.models import BRollCue, EditScript, LowerThird, OverlayCallout, TalkingHeadCut
+from pipeline.models import (
+    BRollCue,
+    EditScript,
+    LowerThird,
+    MicroEvent,
+    OverlayCallout,
+    TalkingHeadCut,
+)
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -49,12 +56,17 @@ def render_video(
         size = (int(a_roll.w), int(a_roll.h))
         timeline_duration = float(a_roll.duration or duration)
 
-        for card in script.lower_thirds:
+        for event in script.collected_punch_ins():
+            punch = _punch_in_clip(a_roll, event, timeline_duration)
+            if punch is not None:
+                layers.append(punch)
+
+        for card in script.collected_lower_thirds():
             overlay = _lower_third_clip(card, size, timeline_duration)
             if overlay is not None:
                 layers.append(overlay)
 
-        for callout in script.overlays:
+        for callout in script.collected_text_overlays():
             overlay = _callout_clip(callout, size, timeline_duration)
             if overlay is not None:
                 layers.append(overlay)
@@ -105,6 +117,22 @@ def _apply_talking_head_cuts(
     if len(pieces) == 1:
         return pieces[0]
     return concatenate_videoclips(pieces, method="compose")
+
+
+def _punch_in_clip(
+    clip: VideoFileClip, event: MicroEvent, duration: float
+) -> VideoFileClip | None:
+    window = _clamp_window(event.start, event.end, duration)
+    if window is None:
+        return None
+    start, end = window
+    width, height = int(clip.w), int(clip.h)
+    scale = max(1.05, float(event.scale or 1.15))
+    piece = clip.subclipped(start, end).resized(scale)
+    x1 = max(0, int((piece.w - width) / 2))
+    y1 = max(0, int((piece.h - height) / 2))
+    piece = piece.cropped(x1=x1, y1=y1, width=width, height=height)
+    return piece.with_start(start).with_duration(end - start).without_audio()
 
 
 def _clamp_window(start: float, end: float, duration: float) -> tuple[float, float] | None:

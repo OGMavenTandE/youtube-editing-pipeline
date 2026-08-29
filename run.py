@@ -11,6 +11,7 @@ from pipeline.config import FFmpegNotFoundError, Settings, load_settings, requir
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
+from pipeline.pacing import enforce_pacing, evaluate_pacing
 from pipeline.silence_remover import remove_silence
 
 
@@ -50,7 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--transcript",
         default=None,
-        help="Optional text transcript to send alongside the audio.",
+        help=(
+            "Reuse a saved *_transcript.json or a plain-text transcript. "
+            "Skips the Gemini audio transcription pass."
+        ),
     )
     parser.add_argument(
         "--broll-dir",
@@ -58,9 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory of local B-roll files matched against cue queries.",
     )
     parser.add_argument(
-        "--no-auto-editor",
+        "--auto-editor",
         action="store_true",
-        help="Force the pydub + ffmpeg silence backend even if auto-editor is installed.",
+        help=(
+            "Optional tighter silence pass via auto-editor. Default is pydub + "
+            "ffmpeg (pauses > 0.7s only)."
+        ),
     )
     return parser
 
@@ -98,7 +105,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         trim = remove_silence(
             input_path,
             settings,
-            prefer_auto_editor=not args.no_auto_editor,
+            use_auto_editor=args.auto_editor,
         )
         print(
             f"      backend={trim.backend}  "
@@ -118,20 +125,32 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         script = EditScript.empty()
         print("[2/3] Gemini skipped (empty edit script).")
     else:
-        print(f"[2/3] Asking {settings.gemini_model} for an edit script...")
-        transcript = None
-        if args.transcript:
-            transcript = Path(args.transcript).read_text(encoding="utf-8")
+        print(f"[2/3] Asking {settings.gemini_model} for a transcript, then a scene plan...")
+        transcript_path = Path(args.transcript).expanduser() if args.transcript else None
+        transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
         script = analyze_video(
             trim.output_path,
             settings,
-            transcript=transcript,
             duration=trim.cut_map.trimmed_duration,
+            transcript_path=transcript_path,
+            transcript_out=transcript_out,
         )
         print(
-            f"      lower-thirds={len(script.lower_thirds)}  "
-            f"b-roll={len(script.broll)}  overlays={len(script.overlays)}"
+            f"      scenes={len(script.scenes)}  "
+            f"titles={len(script.metadata.titles)}  "
+            f"chapters={len(script.metadata.chapters)}  "
+            f"transcript={transcript_out.name}"
         )
+
+    script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
+    report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
+    print(
+        f"      pacing scenes={report.scene_count} "
+        f"(band {report.expected_min_scenes}-{report.expected_max_scenes} "
+        f"for {report.duration:.0f}s)  micro-resets={report.micro_event_count}"
+    )
+    for warning in report.warnings:
+        print(f"      pacing note: {warning}")
 
     script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     write_json(script_path, script.model_dump())
@@ -151,6 +170,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     print(f"Done. Video: {final_path}")
     print(f"      Edit script: {script_path}")
     print(f"      YouTube metadata: {meta_path}")
+    transcript_note = settings.output_dir / f"{input_path.stem}_transcript.json"
+    if transcript_note.is_file():
+        print(f"      Transcript: {transcript_note}")
     return final_path
 
 

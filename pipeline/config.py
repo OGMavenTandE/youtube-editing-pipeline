@@ -24,14 +24,37 @@ class Settings(BaseModel):
     silence_min_duration: float = Field(default=0.7, ge=0.0)
     silence_padding: float = Field(default=0.15, ge=0.0)
     silence_threshold_db: float = Field(default=-40.0)
+    output_width: int = Field(default=1920, ge=16)
+    output_height: int = Field(default=1080, ge=16)
+    pip_scale: float = Field(default=0.25, gt=0.0, le=0.6)
+    split_top_ratio: float = Field(default=2.0 / 3.0, gt=0.3, lt=0.9)
+    pacing_hook_window: float = Field(default=60.0, ge=0.0)
+    layout_hold_min: float = Field(default=8.0, ge=1.0)
+    layout_hold_hook_max: float = Field(default=15.0, ge=1.0)
+    layout_hold_hook_target: float = Field(default=12.0, ge=1.0)
+    layout_hold_body_min: float = Field(default=15.0, ge=1.0)
+    layout_hold_body_target: float = Field(default=20.0, ge=1.0)
+    layout_hold_body_max: float = Field(default=25.0, ge=1.0)
+    layout_hold_hard_ceiling: float = Field(default=40.0, ge=1.0)
+    micro_reset_target: float = Field(default=6.0, ge=1.0)
+    micro_reset_min: float = Field(default=5.0, ge=1.0)
+    micro_reset_max: float = Field(default=7.0, ge=1.0)
+    punch_in_scale: float = Field(default=1.15, ge=1.0, le=1.4)
+    punch_in_duration: float = Field(default=1.6, ge=0.3)
+    text_hold: float = Field(default=2.4, ge=0.4)
+    max_same_layout_streak: int = Field(default=3, ge=2)
+    director_chunk_seconds: float = Field(default=300.0, ge=60.0)
+    director_chunk_threshold: float = Field(default=480.0, ge=60.0)
     input_dir: Path = REPO_ROOT / "input"
     output_dir: Path = REPO_ROOT / "output"
     work_dir: Path = REPO_ROOT / "work"
+    slides_dir: Path = REPO_ROOT / "work" / "slides"
 
     def ensure_dirs(self) -> None:
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.slides_dir.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings(env_file: Path | None = None) -> Settings:
@@ -52,9 +75,29 @@ def load_settings(env_file: Path | None = None) -> Settings:
         silence_min_duration=float(os.getenv("SILENCE_MIN_DURATION", "0.7")),
         silence_padding=float(os.getenv("SILENCE_PADDING", "0.15")),
         silence_threshold_db=float(os.getenv("SILENCE_THRESHOLD_DB", "-40")),
+        output_width=int(os.getenv("OUTPUT_WIDTH", "1920")),
+        output_height=int(os.getenv("OUTPUT_HEIGHT", "1080")),
+        pip_scale=float(os.getenv("PIP_SCALE", "0.25")),
+        split_top_ratio=float(os.getenv("SPLIT_TOP_RATIO", str(2.0 / 3.0))),
+        pacing_hook_window=float(os.getenv("PACING_HOOK_WINDOW", "60")),
+        layout_hold_min=float(os.getenv("LAYOUT_HOLD_MIN", "8")),
+        layout_hold_hook_max=float(os.getenv("LAYOUT_HOLD_HOOK_MAX", "15")),
+        layout_hold_hook_target=float(os.getenv("LAYOUT_HOLD_HOOK_TARGET", "12")),
+        layout_hold_body_min=float(os.getenv("LAYOUT_HOLD_BODY_MIN", "15")),
+        layout_hold_body_target=float(os.getenv("LAYOUT_HOLD_BODY_TARGET", "20")),
+        layout_hold_body_max=float(os.getenv("LAYOUT_HOLD_BODY_MAX", "25")),
+        layout_hold_hard_ceiling=float(os.getenv("LAYOUT_HOLD_HARD_CEILING", "40")),
+        micro_reset_target=float(os.getenv("MICRO_RESET_TARGET", "6")),
+        punch_in_scale=float(os.getenv("PUNCH_IN_SCALE", "1.15")),
+        punch_in_duration=float(os.getenv("PUNCH_IN_DURATION", "1.6")),
+        text_hold=float(os.getenv("TEXT_HOLD", "2.4")),
+        max_same_layout_streak=int(os.getenv("MAX_SAME_LAYOUT_STREAK", "3")),
+        director_chunk_seconds=float(os.getenv("DIRECTOR_CHUNK_SECONDS", "300")),
+        director_chunk_threshold=float(os.getenv("DIRECTOR_CHUNK_THRESHOLD", "480")),
         input_dir=Path(os.getenv("INPUT_DIR", str(REPO_ROOT / "input"))),
         output_dir=Path(os.getenv("OUTPUT_DIR", str(REPO_ROOT / "output"))),
         work_dir=Path(os.getenv("WORK_DIR", str(REPO_ROOT / "work"))),
+        slides_dir=Path(os.getenv("SLIDES_DIR", str(REPO_ROOT / "work" / "slides"))),
     )
 
 
