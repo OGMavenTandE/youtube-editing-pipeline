@@ -15,6 +15,7 @@ from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.media import extract_audio, probe_duration
 from pipeline.models import (
+    ChapterMarker,
     DirectorPlan,
     EditScript,
     GraphicCard,
@@ -32,7 +33,7 @@ INLINE_AUDIO_LIMIT_BYTES = 20 * 1024 * 1024
 
 _ALLOWED_LAYOUTS = {item.value for item in LayoutKind}
 
-_GENERIC_TAGS = (
+GENERIC_TAGS = (
     "talking head",
     "tutorial",
     "walkthrough",
@@ -44,6 +45,7 @@ _GENERIC_TAGS = (
     "tips",
     "youtube",
 )
+GENERIC_FILLER_TAGS = frozenset(tag.casefold() for tag in GENERIC_TAGS)
 
 
 class GeminiConfigError(RuntimeError):
@@ -255,6 +257,50 @@ def stitch_director_plans(
     return DirectorPlan(scenes=scenes, metadata=metadata)
 
 
+def sanitize_chapters(
+    chapters: list[ChapterMarker],
+    duration: float,
+) -> list[ChapterMarker]:
+    """Studio-legal chapter list used by normalize_youtube_metadata.
+
+    First mark is 0. Gaps are at least 10 seconds. Pad to 3 when the cut
+    is at least 30 seconds. This is the only chapter sanitizer.
+    """
+    duration = max(0.0, float(duration))
+    cleaned = sorted(
+        [
+            ChapterMarker(start=max(0.0, float(chapter.start)), title=chapter.title.strip())
+            for chapter in chapters
+            if chapter.title.strip()
+        ],
+        key=lambda item: item.start,
+    )
+    if not cleaned or cleaned[0].start > 0.05:
+        intro = cleaned[0].title if cleaned else "Intro"
+        cleaned = [ChapterMarker(start=0.0, title=intro), *cleaned]
+    cleaned[0] = ChapterMarker(start=0.0, title=cleaned[0].title)
+
+    merged = [cleaned[0]]
+    for chapter in cleaned[1:]:
+        if chapter.start - merged[-1].start < 10:
+            continue
+        if duration > 0 and chapter.start >= duration:
+            continue
+        merged.append(chapter)
+
+    if len(merged) < 3 and duration >= 30:
+        labels = [chapter.title for chapter in merged]
+        while len(labels) < 3:
+            labels.append(f"Part {len(labels) + 1}")
+        third = duration / 3.0
+        merged = [
+            ChapterMarker(start=0.0, title=labels[0]),
+            ChapterMarker(start=max(10.0, third), title=labels[1]),
+            ChapterMarker(start=max(20.0, min(duration - 0.01, third * 2)), title=labels[2]),
+        ]
+    return merged
+
+
 def normalize_youtube_metadata(
     metadata: YouTubeMetadata,
     duration: float,
@@ -285,8 +331,6 @@ def normalize_youtube_metadata(
     if not description:
         description = f"{unique[0]}\n\nChapters below."
 
-    from pipeline.studio import sanitize_chapters
-
     chapters = sanitize_chapters(metadata.chapters, duration)
 
     tags = [tag.strip() for tag in metadata.tags if tag.strip()]
@@ -300,7 +344,7 @@ def normalize_youtube_metadata(
         unique_tags.append(tag)
 
     extras = [word.lower() for word in fallback_title.replace("-", " ").split() if len(word) > 2]
-    extras.extend(_GENERIC_TAGS)
+    extras.extend(GENERIC_TAGS)
     for extra in extras:
         if len(unique_tags) >= 10:
             break

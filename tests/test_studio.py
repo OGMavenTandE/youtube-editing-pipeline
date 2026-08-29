@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 from pipeline.config import Settings
 from pipeline.media import write_json
 from pipeline.models import ChapterMarker, EditScript, YouTubeMetadata
+from pipeline.gemini_director import GENERIC_FILLER_TAGS, sanitize_chapters
 from pipeline.studio import (
     DESCRIPTION_CHAR_LIMIT,
     TITLE_CHAR_LIMIT,
@@ -16,7 +17,7 @@ from pipeline.studio import (
     format_chapter_timestamp,
     format_tags_file,
     format_titles_file,
-    sanitize_chapters,
+    select_title,
     write_studio_package,
 )
 from run import build_parser, run_pipeline
@@ -97,8 +98,16 @@ def test_description_is_body_then_chapters() -> None:
     assert "How to edit" not in text
 
 
-def test_description_strips_gemini_chapter_list() -> None:
-    body = "Hook first.\n\nMore copy.\n\nChapters:\n0:00 Intro\n1:20 Middle\n3:00 End"
+def test_description_strips_gemini_chapter_tail_only() -> None:
+    body = (
+        "Hook first.\n\n"
+        "1:20 is when we cut, keep that sentence.\n\n"
+        "More copy.\n\n"
+        "Chapters:\n"
+        "0:00 Intro\n"
+        "1:20 Middle\n"
+        "3:00 End"
+    )
     text = assemble_description(
         body,
         [
@@ -108,10 +117,13 @@ def test_description_strips_gemini_chapter_list() -> None:
         ],
     )
     assert "Hook first." in text
+    assert "1:20 is when we cut, keep that sentence." in text
     assert "More copy." in text
     assert "1:20 Middle" not in text
+    assert "0:00 Intro" not in text
     assert "0:00 Open" in text
     assert "1:30 Work" in text
+    assert text.count("0:00") == 1
 
 
 def test_description_stays_under_5000() -> None:
@@ -148,19 +160,53 @@ def test_build_studio_texts_does_not_put_all_titles_in_description() -> None:
         ],
         tags=["edit", "talking head"],
     )
-    titles, description, tags, chapters = build_studio_texts(meta, 120.0)
+    titles, description, tags, chapters, paste_title = build_studio_texts(meta, 120.0)
     assert titles[0] == "Default hook title"
+    assert paste_title == "Default hook title"
     assert "Angle two" not in description
     assert "Angle five" not in description
     assert "SEO body only." in description
-    assert tags == ["edit", "talking head"]
-    assert format_tags_file(tags) == "edit, talking head\n"
+    assert tags == ["edit"]
+    assert "talking head" not in tags
+    assert format_tags_file(["edit", "talking head"]) == "edit\n"
     assert chapters[0].start == 0.0
+
+
+def test_title_index_selects_paste_title() -> None:
+    meta = YouTubeMetadata(
+        titles=["One", "Two", "Three", "Four", "Five"],
+        description="Body only.",
+        chapters=[
+            ChapterMarker(start=0, title="Intro"),
+            ChapterMarker(start=40, title="Body"),
+            ChapterMarker(start=80, title="Out"),
+        ],
+        tags=["edit"],
+    )
+    titles, description, _tags, _chapters, paste_title = build_studio_texts(
+        meta, 120.0, title_index=2
+    )
+    assert titles == ["One", "Two", "Three", "Four", "Five"]
+    assert paste_title == "Three"
+    assert select_title(titles, 4) == "Five"
+    assert "Body only." in description
+
+
+def test_filler_tags_kept_when_they_are_the_only_tags() -> None:
+    meta = YouTubeMetadata(
+        titles=["One", "Two", "Three", "Four", "Five"],
+        tags=["youtube", "tutorial"],
+    )
+    _titles, _description, tags, _chapters, _paste = build_studio_texts(meta, 120.0)
+    assert "youtube" in tags
+    assert "tutorial" in tags
+    assert all(tag.casefold() in GENERIC_FILLER_TAGS for tag in tags)
 
 
 def test_help_lists_skip_studio() -> None:
     help_text = build_parser().format_help()
     assert "--skip-studio" in help_text
+    assert "--title-index" in help_text
     assert "Studio" in help_text
 
 
@@ -187,6 +233,7 @@ def test_write_studio_package_folder(tmp_path: Path | None = None) -> None:
         settings=settings,
         fallback_title="talk",
         duration=180.0,
+        title_index=1,
     )
     assert package.directory.is_dir()
     assert package.video_path.is_file()
@@ -199,7 +246,11 @@ def test_write_studio_package_folder(tmp_path: Path | None = None) -> None:
     assert "0:00 Late" in description
     assert "0:05 Too soon" not in description
     assert "0:00 Bad gemini chapter" not in description
-    assert package.tags_path.read_text(encoding="utf-8").strip() == "youtube, edit"
+    assert package.paste_title == "B"
+    assert package.title_index == 1
+    pasted_tags = package.tags_path.read_text(encoding="utf-8")
+    assert "edit" in pasted_tags
+    assert "youtube" not in pasted_tags
     thumb = Image.open(package.thumbnail_path)
     assert thumb.size == (1280, 720)
     assert package.thumbnail_path.stat().st_size < 2 * 1024 * 1024
@@ -239,6 +290,7 @@ def test_pipeline_skip_gemini_writes_studio_folder() -> None:
         auto_editor=False,
         skip_slides=True,
         skip_studio=False,
+        title_index=0,
     )
     run_pipeline(args, settings)
     studio = work / "raw_talk_studio"
@@ -246,7 +298,9 @@ def test_pipeline_skip_gemini_writes_studio_folder() -> None:
     assert (studio / "raw_talk_final.mp4").is_file()
     assert (studio / "titles.txt").read_text(encoding="utf-8").splitlines()[0] == "One"
     assert "Paste this body." in (studio / "description.txt").read_text(encoding="utf-8")
-    assert (studio / "tags.txt").read_text(encoding="utf-8").strip() == "talk"
+    pasted_tags = (studio / "tags.txt").read_text(encoding="utf-8")
+    assert "talk" in pasted_tags
+    assert "youtube" not in pasted_tags
     assert (studio / "thumbnail.jpg").is_file()
     assert (work / "raw_talk_youtube_metadata.json").is_file()
 
@@ -268,6 +322,7 @@ def test_skip_studio_leaves_no_folder() -> None:
         auto_editor=False,
         skip_slides=True,
         skip_studio=True,
+        title_index=0,
     )
     run_pipeline(args, settings)
     assert not (work / "skip_talk_studio").exists()

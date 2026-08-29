@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field
 
 from pipeline.broll.slides import PlaywrightNotFoundError, _chromium_help
 from pipeline.config import Settings
+from pipeline.gemini_director import (
+    GENERIC_FILLER_TAGS,
+    normalize_youtube_metadata,
+    sanitize_chapters,
+)
 from pipeline.media import extract_frame, probe_duration
 from pipeline.models import ChapterMarker, YouTubeMetadata
 
@@ -21,9 +26,6 @@ DESCRIPTION_CHAR_LIMIT = 5000
 THUMB_WIDTH = 1280
 THUMB_HEIGHT = 720
 THUMB_MAX_BYTES = 2 * 1024 * 1024
-MIN_CHAPTER_SECONDS = 10.0
-MIN_CHAPTER_COUNT = 3
-MIN_PAD_DURATION = 30.0
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "broll" / "templates" / "thumbnail.html"
 
@@ -44,6 +46,8 @@ class StudioPackage(BaseModel):
     tags_path: Path
     thumbnail_path: Path
     titles: list[str] = Field(default_factory=list)
+    paste_title: str = ""
+    title_index: int = 0
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     chapters: list[ChapterMarker] = Field(default_factory=list)
@@ -59,61 +63,6 @@ def format_chapter_timestamp(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def sanitize_chapters(
-    chapters: list[ChapterMarker],
-    duration: float,
-) -> list[ChapterMarker]:
-    """Make a chapter list Studio will actually turn into chapters.
-
-    First mark is 0:00. Gaps are at least 10 seconds. At least three chapters
-    when the cut is long enough. Sub-10s marks are dropped.
-    """
-    duration = max(0.0, float(duration))
-    cleaned = [
-        ChapterMarker(start=max(0.0, float(chapter.start)), title=chapter.title.strip())
-        for chapter in chapters
-        if chapter.title.strip()
-    ]
-    cleaned.sort(key=lambda item: item.start)
-    if not cleaned:
-        cleaned = [ChapterMarker(start=0.0, title="Intro")]
-    else:
-        cleaned[0] = ChapterMarker(start=0.0, title=cleaned[0].title)
-
-    merged = [cleaned[0]]
-    for chapter in cleaned[1:]:
-        if chapter.start - merged[-1].start < MIN_CHAPTER_SECONDS:
-            continue
-        if duration > 0 and chapter.start >= duration:
-            continue
-        if duration > 0 and duration - chapter.start < MIN_CHAPTER_SECONDS:
-            continue
-        merged.append(chapter)
-
-    if len(merged) < MIN_CHAPTER_COUNT and duration >= MIN_PAD_DURATION:
-        labels = [chapter.title for chapter in merged]
-        while len(labels) < MIN_CHAPTER_COUNT:
-            labels.append(f"Part {len(labels) + 1}")
-        third = duration / 3.0
-        starts = [
-            0.0,
-            max(MIN_CHAPTER_SECONDS, third),
-            max(20.0, min(duration - MIN_CHAPTER_SECONDS, third * 2)),
-        ]
-        if starts[1] - starts[0] < MIN_CHAPTER_SECONDS:
-            starts[1] = MIN_CHAPTER_SECONDS
-        if starts[2] - starts[1] < MIN_CHAPTER_SECONDS:
-            starts[2] = starts[1] + MIN_CHAPTER_SECONDS
-        if duration - starts[2] < MIN_CHAPTER_SECONDS:
-            starts[2] = duration - MIN_CHAPTER_SECONDS
-        merged = [
-            ChapterMarker(start=starts[0], title=labels[0]),
-            ChapterMarker(start=starts[1], title=labels[1]),
-            ChapterMarker(start=starts[2], title=labels[2]),
-        ]
-    return merged
-
-
 def format_chapter_block(chapters: list[ChapterMarker]) -> str:
     lines = []
     for chapter in chapters:
@@ -122,16 +71,27 @@ def format_chapter_block(chapters: list[ChapterMarker]) -> str:
     return "\n".join(lines)
 
 
-def strip_existing_chapters(text: str) -> str:
-    """Drop Gemini's inline timestamp list so we can append a legal block."""
-    kept: list[str] = []
-    for line in text.splitlines():
-        if _CHAPTER_LINE.match(line) or _CHAPTER_HEADER.match(line):
-            continue
-        kept.append(line)
-    body = "\n".join(kept)
-    body = re.sub(r"\n{3,}", "\n\n", body).strip()
-    return body
+def strip_chapter_tail(text: str) -> str:
+    """Drop a trailing Gemini chapter list so we can write one canonical block."""
+    lines = list((text or "").splitlines())
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return ""
+
+    saw_chapters = False
+    while lines and _CHAPTER_LINE.match(lines[-1]):
+        lines.pop()
+        saw_chapters = True
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and _CHAPTER_HEADER.match(lines[-1]):
+        lines.pop()
+        while lines and not lines[-1].strip():
+            lines.pop()
+    elif not saw_chapters:
+        return text.strip()
+    return "\n".join(lines).strip()
 
 
 def clip_title(title: str, limit: int = TITLE_CHAR_LIMIT) -> str:
@@ -141,35 +101,26 @@ def clip_title(title: str, limit: int = TITLE_CHAR_LIMIT) -> str:
     return cleaned[:limit].rstrip()
 
 
-def ensure_titles(titles: list[str], fallback: str) -> list[str]:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for title in titles:
-        cleaned = " ".join(title.split())
-        if not cleaned:
-            continue
-        key = cleaned.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(cleaned)
-    base = " ".join(fallback.split()) or "Untitled"
-    while len(unique) < 5:
-        suffix = f" ({len(unique) + 1})" if unique else ""
-        candidate = f"{base}{suffix}".strip() or f"Untitled ({len(unique) + 1})"
-        if candidate.casefold() in seen:
-            candidate = f"{base} ({len(unique) + 1})"
-        unique.append(candidate)
-        seen.add(candidate.casefold())
-    return unique[:5]
+def select_title(titles: list[str], title_index: int = 0) -> str:
+    if not titles:
+        return ""
+    index = max(0, min(int(title_index), len(titles) - 1))
+    return titles[index]
 
 
 def format_titles_file(titles: list[str]) -> str:
     return "\n".join(clip_title(title) for title in titles) + "\n"
 
 
-def format_tags_file(tags: list[str]) -> str:
+def paste_tags(tags: list[str]) -> list[str]:
+    """Keep real tags in tags.txt. Drop generic normalize fillers when others exist."""
     cleaned = [tag.strip() for tag in tags if tag.strip()]
+    real = [tag for tag in cleaned if tag.casefold() not in GENERIC_FILLER_TAGS]
+    return real if real else cleaned
+
+
+def format_tags_file(tags: list[str]) -> str:
+    cleaned = paste_tags(tags)
     return ", ".join(cleaned) + ("\n" if cleaned else "")
 
 
@@ -180,8 +131,8 @@ def assemble_description(
     fallback: str = "",
     max_chars: int = DESCRIPTION_CHAR_LIMIT,
 ) -> str:
-    """SEO body, then a YouTube-legal chapter block. Stays under 5000 chars."""
-    text = strip_existing_chapters(body or "")
+    """SEO body, then one YouTube-legal chapter block. Stays under 5000 chars."""
+    text = strip_chapter_tail(body or "")
     if not text:
         text = " ".join((fallback or "").split())
     chapter_block = format_chapter_block(chapters)
@@ -201,16 +152,24 @@ def build_studio_texts(
     duration: float,
     *,
     fallback_title: str = "",
-) -> tuple[list[str], str, list[str], list[ChapterMarker]]:
-    titles = ensure_titles(metadata.titles, fallback_title)
-    chapters = sanitize_chapters(metadata.chapters, duration)
-    description = assemble_description(
-        metadata.description,
-        chapters,
-        fallback=titles[0],
+    title_index: int = 0,
+) -> tuple[list[str], str, list[str], list[ChapterMarker], str]:
+    """Format existing metadata. Reuses normalize_youtube_metadata; no Gemini call."""
+    normalized = normalize_youtube_metadata(
+        metadata,
+        duration,
+        fallback_title=fallback_title,
     )
-    tags = [tag.strip() for tag in metadata.tags if tag.strip()]
-    return titles, description, tags, chapters
+    titles = list(normalized.titles)
+    paste_title = select_title(titles, title_index)
+    chapters = list(normalized.chapters)
+    description = assemble_description(
+        normalized.description,
+        chapters,
+        fallback=paste_title,
+    )
+    tags = paste_tags(normalized.tags)
+    return titles, description, tags, chapters, paste_title
 
 
 def build_thumbnail_html(title: str, frame_src: str) -> str:
@@ -241,7 +200,7 @@ def render_studio_thumbnail(
     *,
     duration: float | None = None,
 ) -> Path:
-    """1280x720 Playwright card: title option 1 plus a webcam frame."""
+    """1280x720 Playwright card: selected title plus a webcam frame."""
     dest = dest.with_suffix(".jpg")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if duration is None:
@@ -336,6 +295,7 @@ def write_studio_package(
     settings: Settings,
     fallback_title: str = "",
     duration: float | None = None,
+    title_index: int = 0,
 ) -> StudioPackage:
     """Write the drag-into-Studio folder next to the pipeline JSON."""
     video_path = video_path.resolve()
@@ -351,10 +311,11 @@ def write_studio_package(
 
     if duration is None:
         duration = probe_duration(video_path, settings)
-    titles, description, tags, chapters = build_studio_texts(
+    titles, description, tags, chapters, paste_title = build_studio_texts(
         metadata,
         duration,
         fallback_title=fallback_title or video_path.stem.replace("_", " "),
+        title_index=title_index,
     )
 
     packaged_video = place_video(video_path, dest_dir / video_path.name)
@@ -366,7 +327,7 @@ def write_studio_package(
     tags_path.write_text(format_tags_file(tags), encoding="utf-8")
 
     thumbnail_path = render_studio_thumbnail(
-        titles[0],
+        paste_title,
         webcam_path,
         dest_dir / "thumbnail.jpg",
         settings,
@@ -380,6 +341,8 @@ def write_studio_package(
         tags_path=tags_path,
         thumbnail_path=thumbnail_path,
         titles=titles,
+        paste_title=paste_title,
+        title_index=max(0, min(int(title_index), max(0, len(titles) - 1))),
         description=description,
         tags=tags,
         chapters=chapters,
