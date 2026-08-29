@@ -377,11 +377,22 @@ def open_wizard_window(
     *,
     start_step: int,
     on_finish: FinishFn,
+    settings_mode: bool = True,
 ) -> ctk.CTkToplevel:
     window = ctk.CTkToplevel(master)
-    window.title("Settings")
+    window.title("Settings" if settings_mode else "Setup")
     window.geometry("720x560")
-    view = WizardView(window, on_finish=on_finish, start_step=start_step, settings_mode=True)
+
+    def _done(config: AppConfig) -> None:
+        window.destroy()
+        on_finish(config)
+
+    view = WizardView(
+        window,
+        on_finish=_done,
+        start_step=start_step,
+        settings_mode=settings_mode,
+    )
     view.pack(fill="both", expand=True)
     window.transient(master)
     window.grab_set()

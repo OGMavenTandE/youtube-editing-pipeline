@@ -168,9 +168,14 @@ class MainView(ctk.CTkFrame):
         )
         root = self.winfo_toplevel()
 
-        def open_step(step: int) -> None:
+        def open_step(step: int, *, settings_mode: bool = True) -> None:
             chooser.destroy()
-            open_wizard_window(root, start_step=step, on_finish=self._settings_saved)
+            open_wizard_window(
+                root,
+                start_step=step,
+                on_finish=self._settings_saved,
+                settings_mode=settings_mode,
+            )
 
         ctk.CTkButton(chooser, text="Gemini key", command=lambda: open_step(2)).pack(fill="x", padx=20, pady=4)
         ctk.CTkButton(chooser, text="Google Drive sign-in", command=lambda: open_step(3)).pack(
@@ -180,9 +185,11 @@ class MainView(ctk.CTkFrame):
         ctk.CTkButton(chooser, text="Start with Windows", command=lambda: open_step(5)).pack(
             fill="x", padx=20, pady=4
         )
-        ctk.CTkButton(chooser, text="Run full setup wizard", command=lambda: open_step(0)).pack(
-            fill="x", padx=20, pady=4
-        )
+        ctk.CTkButton(
+            chooser,
+            text="Run full setup wizard",
+            command=lambda: open_step(0, settings_mode=False),
+        ).pack(fill="x", padx=20, pady=4)
 
     def _settings_saved(self, _config: AppConfig) -> None:
         self.append_log("Settings saved.")

@@ -159,6 +159,13 @@ def test_processed_store_claim_and_done(tmp_path: Path) -> None:
     assert again.get("a").outbox_folder_id == "out-1"
 
 
+def test_processed_store_releases_stale_claims(tmp_path: Path) -> None:
+    store = ProcessedIdStore(tmp_path / "processed.json")
+    store.claim("stale", name="stale.mp4")
+    assert store.release_in_progress() == 1
+    assert store.claim("stale", name="stale.mp4")
+
+
 def test_processed_store_error_allows_retry(tmp_path: Path) -> None:
     store = ProcessedIdStore(tmp_path / "processed.json")
     store.claim("b", name="b.mp4")

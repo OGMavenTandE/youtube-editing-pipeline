@@ -200,6 +200,9 @@ class PipelineWorker:
             return
         client = self._drive_client()
         store = ProcessedIdStore(processed_ids_path())
+        released = store.release_in_progress()
+        if released:
+            self.log(f"Retrying {released} unfinished job(s) from a previous run.")
         videos = client.list_inbox_videos(config.inbox_folder_id)
         if not videos:
             if log_empty:

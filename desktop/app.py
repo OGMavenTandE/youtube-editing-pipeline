@@ -127,9 +127,11 @@ class DesktopApp:
         if self._quitting:
             self.root.destroy()
             return
-        self.root.withdraw()
         if self.tray._icon is None:
             self.tray.start()
+        if self.tray._icon is None:
+            return
+        self.root.withdraw()
 
     def show(self) -> None:
         self.root.after(0, self._deiconify)

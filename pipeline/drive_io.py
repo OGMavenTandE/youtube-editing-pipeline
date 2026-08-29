@@ -232,6 +232,15 @@ class ProcessedIdStore:
         del self.records[file_id]
         self.save()
 
+    def release_in_progress(self) -> int:
+        """Drop claimed-but-unfinished ids so a restarted watcher can retry."""
+        stale = [key for key, record in self.records.items() if record.status == "claimed"]
+        for key in stale:
+            del self.records[key]
+        if stale:
+            self.save()
+        return len(stale)
+
 
 def _item_from_api(payload: dict[str, Any]) -> DriveItem:
     size_raw = payload.get("size")
