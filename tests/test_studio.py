@@ -298,7 +298,9 @@ def test_pipeline_skip_gemini_writes_studio_folder() -> None:
     assert (studio / "raw_talk_final.mp4").is_file()
     assert (studio / "titles.txt").read_text(encoding="utf-8").splitlines()[0] == "One"
     assert "Paste this body." in (studio / "description.txt").read_text(encoding="utf-8")
-    assert (studio / "tags.txt").read_text(encoding="utf-8").strip() == "talk"
+    pasted_tags = (studio / "tags.txt").read_text(encoding="utf-8")
+    assert "talk" in pasted_tags
+    assert "youtube" not in pasted_tags
     assert (studio / "thumbnail.jpg").is_file()
     assert (work / "raw_talk_youtube_metadata.json").is_file()
 

@@ -158,7 +158,7 @@ def build_studio_texts(
     normalized = normalize_youtube_metadata(
         metadata,
         duration,
-        fallback_title=fallback_title or "Untitled",
+        fallback_title=fallback_title,
     )
     titles = list(normalized.titles)
     paste_title = select_title(titles, title_index)
