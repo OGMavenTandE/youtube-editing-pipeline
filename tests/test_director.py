@@ -162,23 +162,23 @@ def test_plan_from_transcript_uses_full_cut_metadata_pass(monkeypatch) -> None:
     monkeypatch.setattr("pipeline.gemini_director._generate_json", fake_generate)
     settings = Settings(
         gemini_api_key="test",
-        director_chunk_threshold=10,
-        director_chunk_seconds=10,
+        director_chunk_threshold=60,
+        director_chunk_seconds=60,
     )
     transcript = TimedTranscript(
-        duration=40,
+        duration=180,
         full_text="Hello later closer finish",
         cues=[
             TranscriptCue(start=0, end=8, text="Hello"),
-            TranscriptCue(start=12, end=20, text="later"),
-            TranscriptCue(start=24, end=32, text="closer"),
-            TranscriptCue(start=32, end=40, text="finish"),
+            TranscriptCue(start=60, end=70, text="later"),
+            TranscriptCue(start=120, end=130, text="closer"),
+            TranscriptCue(start=160, end=180, text="finish"),
         ],
     )
     script = plan_from_transcript(
-        transcript, 40.0, settings, fallback_title="Talk", client=object()
+        transcript, 180.0, settings, fallback_title="Talk", client=object()
     )
-    assert calls.count("DirectorPlan") == 4
+    assert calls.count("DirectorPlan") == 3
     assert calls.count("_PackagingSchema") == 1
     assert calls[-1] == "_PackagingSchema"
     assert "Full-cut body." in script.metadata.description

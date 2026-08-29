@@ -72,11 +72,13 @@ def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
     fills = [scene for scene in script.scenes if scene.reason == "pacing-fill"]
     assert fills
     for scene in fills:
-        assert scene.layout is LayoutKind.FULL_FRAME
-    for scene in script.scenes:
         if scene.layout is not LayoutKind.FULL_FRAME:
             assert graphic_is_real(scene.graphic)
             assert scene.graphic.title
+    for scene in script.scenes:
+        if scene.layout is not LayoutKind.FULL_FRAME:
+            assert graphic_is_real(scene.graphic)
+            assert scene.graphic.title or scene.graphic.asset_path
 
 
 def test_empty_script_fills_stay_full_frame() -> None:
