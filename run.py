@@ -59,9 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory of local B-roll files matched against cue queries.",
     )
     parser.add_argument(
-        "--no-auto-editor",
+        "--auto-editor",
         action="store_true",
-        help="Force the pydub + ffmpeg silence backend even if auto-editor is installed.",
+        help=(
+            "Optional tighter silence pass via auto-editor. Default is pydub + "
+            "ffmpeg (pauses > 0.7s only)."
+        ),
     )
     return parser
 
@@ -99,7 +102,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         trim = remove_silence(
             input_path,
             settings,
-            prefer_auto_editor=not args.no_auto_editor,
+            use_auto_editor=args.auto_editor,
         )
         print(
             f"      backend={trim.backend}  "

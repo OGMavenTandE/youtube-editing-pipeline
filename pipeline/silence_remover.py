@@ -16,13 +16,13 @@ def remove_silence(
     settings: Settings,
     *,
     output_path: Path | None = None,
-    prefer_auto_editor: bool = True,
+    use_auto_editor: bool = False,
 ) -> SilenceTrimResult:
-    """Strip dead air longer than ``settings.silence_min_duration``.
+    """Strip pauses longer than 0.7s, leaving 0.15s pad on each keep edge.
 
-    Keep-ranges are padded by ``settings.silence_padding`` on each side so
-    speech attacks and tails are not clipped. Prefers auto-editor when it is
-    installed; otherwise uses pydub detection plus ffmpeg concat.
+    pydub energy detection plus ffmpeg concat is the source of truth so the
+    cut map matches the rendered file. auto-editor is opt-in and more
+    aggressive (it can cut gaps shorter than 0.7s).
     """
     require_ffmpeg(settings)
     input_path = input_path.resolve()
@@ -30,17 +30,41 @@ def remove_silence(
         raise FileNotFoundError(f"Input video not found: {input_path}")
 
     settings.ensure_dirs()
-    dest = output_path or settings.work_dir / f"{input_path.stem}_trimmed.mp4"
-    dest = dest.resolve()
+    dest = (output_path or settings.work_dir / f"{input_path.stem}_trimmed.mp4").resolve()
     original_duration = probe_duration(input_path, settings)
+    kept = detect_keep_ranges(input_path, settings)
+    if not kept:
+        raise MediaError(
+            "Silence detection found no speech. Lower SILENCE_THRESHOLD_DB "
+            "(e.g. -50) or use --skip-silence."
+        )
+    cut_map = _build_cut_map(kept, original_duration)
 
-    if prefer_auto_editor and shutil.which("auto-editor"):
+    if use_auto_editor and shutil.which("auto-editor"):
         try:
-            return _trim_with_auto_editor(input_path, dest, settings, original_duration)
+            return _render_auto_editor(input_path, dest, settings, cut_map)
         except (MediaError, OSError, subprocess.CalledProcessError):
             pass
 
-    return _trim_with_pydub(input_path, dest, settings, original_duration)
+    return _render_ffmpeg(input_path, dest, kept, cut_map, original_duration, settings)
+
+
+def detect_keep_ranges(input_path: Path, settings: Settings) -> list[TimeRange]:
+    """Speech islands on the original timeline. Gaps under 0.7s stay intact."""
+    wav_path = settings.work_dir / f"{input_path.stem}_detect.wav"
+    settings.work_dir.mkdir(parents=True, exist_ok=True)
+    extract_audio(input_path, wav_path, settings)
+    try:
+        audio = AudioSegment.from_file(wav_path)
+    finally:
+        if wav_path.exists():
+            wav_path.unlink()
+    return compute_keep_ranges(
+        audio,
+        min_silence_ms=int(settings.silence_min_duration * 1000),
+        padding_ms=int(settings.silence_padding * 1000),
+        threshold_db=settings.silence_threshold_db,
+    )
 
 
 def compute_keep_ranges(
@@ -50,7 +74,11 @@ def compute_keep_ranges(
     padding_ms: int,
     threshold_db: float,
 ) -> list[TimeRange]:
-    """Return padded, merged speech ranges in seconds."""
+    """Return padded, merged speech ranges in seconds.
+
+    ``min_silence_ms`` is the shortest gap that may be removed. Shorter gaps
+    are treated as speech rhythm and are not split.
+    """
     raw = pydub_silence.detect_nonsilent(
         audio,
         min_silence_len=max(min_silence_ms, 1),
@@ -92,51 +120,30 @@ def _removed_from_kept(kept: list[TimeRange], duration: float) -> list[TimeRange
 
 
 def _build_cut_map(kept: list[TimeRange], original_duration: float) -> SilenceCutMap:
-    trimmed = sum(span.duration for span in kept)
     return SilenceCutMap(
         kept_ranges=kept,
         removed_ranges=_removed_from_kept(kept, original_duration),
         original_duration=original_duration,
-        trimmed_duration=trimmed,
+        trimmed_duration=sum(span.duration for span in kept),
     )
 
 
-def _trim_with_pydub(
+def _render_ffmpeg(
     input_path: Path,
     dest: Path,
-    settings: Settings,
+    kept: list[TimeRange],
+    cut_map: SilenceCutMap,
     original_duration: float,
+    settings: Settings,
 ) -> SilenceTrimResult:
-    wav_path = settings.work_dir / f"{input_path.stem}_detect.wav"
-    extract_audio(input_path, wav_path, settings)
-    try:
-        audio = AudioSegment.from_file(wav_path)
-    finally:
-        if wav_path.exists():
-            wav_path.unlink()
-
-    min_silence_ms = int(settings.silence_min_duration * 1000)
-    padding_ms = int(settings.silence_padding * 1000)
-    kept = compute_keep_ranges(
-        audio,
-        min_silence_ms=min_silence_ms,
-        padding_ms=padding_ms,
-        threshold_db=settings.silence_threshold_db,
-    )
-    if not kept:
-        raise MediaError(
-            "Silence detection found no speech. Lower SILENCE_THRESHOLD_DB "
-            "(e.g. -50) or use --skip-silence."
-        )
-
-    # Nothing meaningful to cut: keep the original file.
-    total_keep = sum(span.duration for span in kept)
+    total_keep = cut_map.trimmed_duration
     if total_keep >= original_duration - 0.05 and len(kept) == 1:
         if dest != input_path:
+            dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(input_path.read_bytes())
         return SilenceTrimResult(
             output_path=dest if dest != input_path else input_path,
-            cut_map=_build_cut_map(kept, original_duration),
+            cut_map=cut_map,
             backend="pydub-ffmpeg",
         )
 
@@ -146,36 +153,15 @@ def _trim_with_pydub(
         dest,
         settings,
     )
-    return SilenceTrimResult(
-        output_path=dest,
-        cut_map=_build_cut_map(kept, original_duration),
-        backend="pydub-ffmpeg",
-    )
+    return SilenceTrimResult(output_path=dest, cut_map=cut_map, backend="pydub-ffmpeg")
 
 
-def _trim_with_auto_editor(
+def _render_auto_editor(
     input_path: Path,
     dest: Path,
     settings: Settings,
-    original_duration: float,
+    cut_map: SilenceCutMap,
 ) -> SilenceTrimResult:
-    """Render with auto-editor; build the cut map with the same pydub detector."""
-    wav_path = settings.work_dir / f"{input_path.stem}_detect.wav"
-    extract_audio(input_path, wav_path, settings)
-    try:
-        audio = AudioSegment.from_file(wav_path)
-    finally:
-        if wav_path.exists():
-            wav_path.unlink()
-    kept = compute_keep_ranges(
-        audio,
-        min_silence_ms=int(settings.silence_min_duration * 1000),
-        padding_ms=int(settings.silence_padding * 1000),
-        threshold_db=settings.silence_threshold_db,
-    )
-    if not kept:
-        raise MediaError("Silence detection found no speech before auto-editor render.")
-
     render = [
         "auto-editor",
         str(input_path),
@@ -190,13 +176,7 @@ def _trim_with_auto_editor(
     rendered = subprocess.run(render, capture_output=True, text=True)
     if rendered.returncode != 0 or not dest.exists():
         raise MediaError(rendered.stderr or "auto-editor render failed")
-
-    kept = _fold_short_gaps(kept, settings.silence_min_duration, original_duration)
-    return SilenceTrimResult(
-        output_path=dest,
-        cut_map=_build_cut_map(kept, original_duration),
-        backend="auto-editor",
-    )
+    return SilenceTrimResult(output_path=dest, cut_map=cut_map, backend="auto-editor")
 
 
 def _fold_short_gaps(

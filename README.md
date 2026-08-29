@@ -61,6 +61,7 @@ python run.py --input raw_video.mp4
 python run.py --input raw_video.mp4 --output output/final.mp4
 python run.py --input raw_video.mp4 --skip-silence
 python run.py --input raw_video.mp4 --skip-gemini
+python run.py --input raw_video.mp4 --auto-editor
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
 ```
 
@@ -86,7 +87,7 @@ If Gemini returns too few scenes, `pipeline/pacing.py` splits long holds and fil
 
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
-1. `pipeline/silence_remover.py` — pauses longer than 0.7s, 0.15s padding, auto-editor or pydub + ffmpeg.
+1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map. `--auto-editor` is an optional tighter pass.
 2. `pipeline/gemini_director.py` — Gemini 2.5 Flash (`google-genai`, `GEMINI_API_KEY`). Task 3 will switch this to a scene list (layout + slide copy + optional lower-third per beat) plus YouTube metadata.
 3. `pipeline/broll/` — slide provider now, video provider later. Same `BrollAsset` out.
 4. `pipeline/compositor.py` — MoviePy 2 assembles the canvas from layout + webcam + slide.
