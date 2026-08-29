@@ -262,8 +262,6 @@ def normalize_youtube_metadata(
     fallback_title: str,
 ) -> YouTubeMetadata:
     """Force chapter, title, and tag rules the model often misses."""
-    from pipeline.models import ChapterMarker
-
     titles = [title.strip() for title in metadata.titles if title.strip()]
     seen: set[str] = set()
     unique: list[str] = []
@@ -287,35 +285,9 @@ def normalize_youtube_metadata(
     if not description:
         description = f"{unique[0]}\n\nChapters below."
 
-    chapters = sorted(
-        [chapter for chapter in metadata.chapters if chapter.title.strip()],
-        key=lambda item: item.start,
-    )
-    if not chapters or chapters[0].start > 0.05:
-        intro = chapters[0].title if chapters else "Intro"
-        chapters = [ChapterMarker(start=0.0, title=intro), *chapters]
-    chapters[0].start = 0.0
+    from pipeline.studio import sanitize_chapters
 
-    merged = [chapters[0]]
-    for chapter in chapters[1:]:
-        prev = merged[-1]
-        if chapter.start - prev.start < 10:
-            continue
-        if chapter.start >= duration:
-            continue
-        merged.append(chapter)
-    chapters = merged
-
-    if len(chapters) < 3 and duration >= 30:
-        labels = [chapter.title for chapter in chapters]
-        while len(labels) < 3:
-            labels.append(f"Part {len(labels) + 1}")
-        third = duration / 3.0
-        chapters = [
-            ChapterMarker(start=0.0, title=labels[0]),
-            ChapterMarker(start=max(10.0, third), title=labels[1]),
-            ChapterMarker(start=max(20.0, min(duration - 0.01, third * 2)), title=labels[2]),
-        ]
+    chapters = sanitize_chapters(metadata.chapters, duration)
 
     tags = [tag.strip() for tag in metadata.tags if tag.strip()]
     seen_tags: set[str] = set()

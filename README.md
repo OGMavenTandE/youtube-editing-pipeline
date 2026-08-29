@@ -65,9 +65,12 @@ python run.py --input raw_video.mp4 --auto-editor
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
 python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.json
 python run.py --input raw_video.mp4 --skip-slides
+python run.py --input raw_video.mp4 --skip-studio
 ```
 
-`--input` is required. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, and `--skip-slides` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass.
+`--input` is required. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, `--skip-slides`, and `--skip-studio` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass.
+
+After the MP4 lands, the pipeline writes `output/<stem>_studio/`: a copy or hardlink of the video, `titles.txt` (five options, first is the default paste title), `description.txt` (SEO body plus a YouTube-legal chapter list), `tags.txt`, and a 1280x720 `thumbnail.jpg`. Drag that folder into YouTube Studio. There is no YouTube API upload. `*_youtube_metadata.json` stays the machine file.
 
 ## Layouts and pacing
 
@@ -93,7 +96,8 @@ Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Second pass is text-only: scenes (layout, reason, graphic card) plus YouTube metadata. Cuts longer than about 8 minutes are planned in 5-minute windows, then stitched. Micro-resets stay local in `pacing.py`. Talking-head filler cuts stay empty.
 3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`. Video B-roll can share the same `BrollAsset` later.
 4. `pipeline/compositor.py` — MoviePy 2 builds each scene on a 1920x1080 canvas, then concatenates. `FULL_FRAME` is cover-cropped webcam. `PIP_BOTTOM_RIGHT` is the slide plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the split PNG over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
-5. Export — MP4 plus YouTube metadata. The UI (Task 7) will let you pick which of the five titles goes into the Studio text file.
+5. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Paste files: `titles.txt` (all five options, first is default, clipped to 100 characters), `description.txt` (SEO body, then chapters starting at `0:00`), `tags.txt`. Thumbnail is a Playwright 1280x720 card (title option 1 plus a webcam frame), not Imagen and not a raw frame grab. JSON metadata stays the pipeline source of truth. No YouTube Data API upload.
+6. Task 7 (future) — Streamlit UI to pick among the five titles and review the Studio folder. Out of scope here.
 
 `pipeline/config.py` loads dotenv and typed settings, including canvas size and PiP scale. `pipeline/layouts.py` is the layout enum.
 
