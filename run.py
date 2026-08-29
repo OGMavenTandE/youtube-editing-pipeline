@@ -170,7 +170,12 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
     write_json(meta_path, script.metadata.model_dump())
 
-    print("[4/4] Compositing overlays and rendering...")
+    layout_counts = {}
+    for scene in script.scenes:
+        key = scene.layout.value
+        layout_counts[key] = layout_counts.get(key, 0) + 1
+    layout_note = " ".join(f"{name}={count}" for name, count in layout_counts.items())
+    print(f"[4/4] Compositing {settings.output_width}x{settings.output_height} ({layout_note or 'FULL_FRAME'})...")
     from pipeline.compositor import render_video
 
     final_path = render_video(
