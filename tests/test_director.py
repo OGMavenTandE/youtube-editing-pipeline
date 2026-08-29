@@ -8,6 +8,7 @@ from pipeline.gemini_director import (
     fit_scenes_to_window,
     normalize_youtube_metadata,
     parse_transcript,
+    plan_from_transcript,
     stitch_director_plans,
 )
 from pipeline.layouts import LayoutKind
@@ -55,11 +56,18 @@ def test_fit_scenes_keeps_absolute_timestamps() -> None:
     assert fitted[1].end == 340
 
 
-def test_stitch_uses_first_window_metadata() -> None:
+def test_stitch_does_not_keep_window_zero_metadata() -> None:
     plans = [
         DirectorPlan(
             scenes=[PlannedScene(start=0, end=20, reason="a")],
-            metadata=YouTubeMetadata(titles=["How to cut talking-head footage"]),
+            metadata=YouTubeMetadata(
+                titles=["How to cut talking-head footage"],
+                chapters=[
+                    ChapterMarker(start=0, title="Window zero intro"),
+                    ChapterMarker(start=40, title="Window zero body"),
+                    ChapterMarker(start=80, title="Window zero out"),
+                ],
+            ),
         ),
         DirectorPlan(
             scenes=[PlannedScene(start=0, end=20, reason="b")],
@@ -67,10 +75,116 @@ def test_stitch_uses_first_window_metadata() -> None:
         ),
     ]
     stitched = stitch_director_plans(plans, [(0.0, 300.0), (300.0, 600.0)], 600)
-    assert stitched.metadata.titles[0] == "How to cut talking-head footage"
+    assert stitched.metadata.titles == []
+    assert stitched.metadata.chapters == []
     assert stitched.scenes[0].start == 0
     assert stitched.scenes[1].start == 300
     assert stitched.scenes[1].end == 320
+
+
+def test_multi_window_plans_do_not_keep_only_window_zero_chapters() -> None:
+    """Dedicated full-cut metadata covers the whole duration, not window 0."""
+    window_zero = YouTubeMetadata(
+        titles=["W0", "W0b", "W0c", "W0d", "W0e"],
+        chapters=[
+            ChapterMarker(start=0, title="First five minutes"),
+            ChapterMarker(start=90, title="Still window zero"),
+            ChapterMarker(start=180, title="End of window zero"),
+        ],
+    )
+    stitched = stitch_director_plans(
+        [
+            DirectorPlan(scenes=[PlannedScene(start=0, end=20, reason="a")], metadata=window_zero),
+            DirectorPlan(scenes=[PlannedScene(start=0, end=20, reason="b")]),
+            DirectorPlan(scenes=[PlannedScene(start=0, end=20, reason="c")]),
+            DirectorPlan(scenes=[PlannedScene(start=0, end=20, reason="d")]),
+        ],
+        [(0.0, 300.0), (300.0, 600.0), (600.0, 900.0), (900.0, 1200.0)],
+        1200,
+    )
+    assert all(chapter.start < 300 for chapter in window_zero.chapters)
+    assert stitched.metadata.chapters == []
+
+    full = normalize_youtube_metadata(
+        YouTubeMetadata(
+            titles=["Full A", "Full B", "Full C", "Full D", "Full E"],
+            chapters=[
+                ChapterMarker(start=0, title="Open"),
+                ChapterMarker(start=180, title="Setup"),
+                ChapterMarker(start=480, title="Middle"),
+                ChapterMarker(start=840, title="Payoff"),
+                ChapterMarker(start=1080, title="Close"),
+            ],
+            tags=["edit"] * 10,
+        ),
+        1200.0,
+        fallback_title="Talk",
+    )
+    assert any(chapter.start >= 300 for chapter in full.chapters)
+    assert full.chapters[-1].start >= 840
+    assert full.chapters[0].start == 0.0
+
+
+def test_plan_from_transcript_uses_full_cut_metadata_pass(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_generate(client, *, model, contents, schema, temperature=0.4):
+        del client, model, contents, temperature
+        name = schema.__name__
+        calls.append(name)
+        if name == "_PackagingSchema":
+            return {
+                "titles": ["A", "B", "C", "D", "E"],
+                "description": "Full-cut body.",
+                "chapters": [
+                    {"start": 0, "title": "Open"},
+                    {"start": 20, "title": "Middle"},
+                    {"start": 35, "title": "Close"},
+                ],
+                "tags": ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"],
+            }
+        return {
+            "scenes": [
+                {
+                    "start": 0,
+                    "end": 10,
+                    "layout": "FULL_FRAME",
+                    "reason": "talk",
+                    "graphic": {"title": "Talk", "slide_id": "s1"},
+                }
+            ],
+            "metadata": {
+                "titles": ["Window only"],
+                "chapters": [{"start": 0, "title": "Window 0 only"}],
+            },
+        }
+
+    monkeypatch.setattr("pipeline.gemini_director._generate_json", fake_generate)
+    settings = Settings(
+        gemini_api_key="test",
+        director_chunk_threshold=60,
+        director_chunk_seconds=60,
+    )
+    transcript = TimedTranscript(
+        duration=180,
+        full_text="Hello later closer finish",
+        cues=[
+            TranscriptCue(start=0, end=8, text="Hello"),
+            TranscriptCue(start=60, end=70, text="later"),
+            TranscriptCue(start=120, end=130, text="closer"),
+            TranscriptCue(start=160, end=180, text="finish"),
+        ],
+    )
+    script = plan_from_transcript(
+        transcript, 180.0, settings, fallback_title="Talk", client=object()
+    )
+    assert calls.count("DirectorPlan") == 3
+    assert calls.count("_PackagingSchema") == 1
+    assert calls[-1] == "_PackagingSchema"
+    assert "Full-cut body." in script.metadata.description
+    assert any(chapter.start >= 20 for chapter in script.metadata.chapters)
+    assert script.metadata.titles[0] == "A"
+    assert "Window only" not in script.metadata.titles
 
 
 def test_normalize_fills_titles_chapters_and_tags() -> None:

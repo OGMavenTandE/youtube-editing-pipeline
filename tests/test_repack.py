@@ -190,7 +190,8 @@ def test_ui_rewrite_calls_write_studio_package() -> None:
     assert "analyze_video" not in inspect.getsource(ui)
 
 
-def _fake_thumb(title, webcam_path, dest, settings, duration=None):
+def _fake_thumb(title, webcam_path, dest, settings, duration=None, **kwargs):
+    dest = dest.with_suffix(".jpg")
     dest.write_bytes(b"fake-thumb")
     return dest
 

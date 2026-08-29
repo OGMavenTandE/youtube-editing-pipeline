@@ -57,6 +57,15 @@ class _TranscriptSchema(BaseModel):
     cues: list[TranscriptCue] = Field(default_factory=list)
 
 
+class _PackagingSchema(BaseModel):
+    """Gemini packaging payload. title_index is a local desk pick, not model output."""
+
+    titles: list[str] = Field(default_factory=list)
+    description: str = ""
+    chapters: list[ChapterMarker] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
 _TRANSCRIPT_PROMPT = """\
 Transcribe this talking-head audio.
 
@@ -96,16 +105,31 @@ Every scene needs a graphic card:
 - lower_third_title / lower_third_subtitle: optional name lines
 - slide_id: stable id like slide_001
 
-YouTube metadata (only when asked for this window):
-- titles: exactly 5 options, each a different angle (how-to, result, tension,
-  named concept, curiosity). Do not write five near-duplicates.
-- description: hook in the first two lines, then body, then a chapter list.
-- chapters: first chapter starts at exactly 0. At least 3 chapters. Each
-  chapter is at least 10 seconds. Prefer a new chapter every 90 to 180 seconds
-  on a real topic shift, not every sentence.
-- tags: 10 to 15 search terms.
+Do not write YouTube titles, description, chapters, or tags here.
+Return empty metadata. A later pass writes packaging for the full cut.
 
 Return JSON with only "scenes" and "metadata".
+"""
+
+_METADATA_PROMPT = """\
+You write YouTube packaging for a finished talking-head cut.
+
+You receive the FULL transcript and the FULL duration of the trimmed video.
+Write titles, description, chapters, and tags for the whole cut, not one
+window.
+
+Rules:
+- titles: exactly 5 options, each a different angle (how-to, result, tension,
+  named concept, curiosity). Do not write five near-duplicates.
+- description: hook in the first two lines, then body. You may include a
+  chapter list; a later step rewrites one canonical block.
+- chapters: first chapter starts at exactly 0. At least 3 chapters. Each
+  chapter is at least 10 seconds. Cover the entire duration. Prefer a new
+  chapter every 90 to 180 seconds on a real topic shift, not every sentence.
+  Do not cluster every chapter in the first few minutes.
+- tags: 10 to 15 search terms.
+
+Return JSON with titles, description, chapters, and tags only.
 """
 
 
@@ -240,7 +264,6 @@ def stitch_director_plans(
     duration: float,
 ) -> DirectorPlan:
     scenes: list[PlannedScene] = []
-    metadata = plans[0].metadata if plans else YouTubeMetadata()
     for plan, (start, end) in zip(plans, windows):
         scenes.extend(fit_scenes_to_window(plan.scenes, start, end))
     scenes.sort(key=lambda item: item.start)
@@ -254,7 +277,8 @@ def stitch_director_plans(
                 graphic=GraphicCard(title="Talking head", slide_id="slide_001"),
             )
         ]
-    return DirectorPlan(scenes=scenes, metadata=metadata)
+    # Window metadata is discarded. plan_youtube_metadata owns titles/chapters.
+    return DirectorPlan(scenes=scenes, metadata=YouTubeMetadata())
 
 
 def sanitize_chapters(
@@ -352,11 +376,13 @@ def normalize_youtube_metadata(
             unique_tags.append(extra)
             seen_tags.add(extra.casefold())
     unique_tags = unique_tags[:15]
+    index = max(0, min(int(getattr(metadata, "title_index", 0) or 0), 4))
     return YouTubeMetadata(
         titles=unique,
         description=description,
         chapters=chapters,
         tags=unique_tags,
+        title_index=index,
     )
 
 
@@ -369,7 +395,6 @@ def _director_user_text(
     duration: float,
     window_index: int,
     window_count: int,
-    include_metadata: bool,
 ) -> str:
     lo, hi = expected_scene_range(end - start, settings)
     parts = [
@@ -377,19 +402,30 @@ def _director_user_text(
         f"Plan scenes for this window only: {start:.2f}s to {end:.2f}s.",
         "Use absolute timestamps on the full timeline.",
         f"Aim for about {lo} to {hi} scenes in this window. Cover the window with no gaps.",
+        "Omit metadata. Return empty titles, chapters, and tags.",
     ]
     if window_count > 1:
         parts.append(f"This is window {window_index + 1} of {window_count}.")
-    if include_metadata:
-        parts.append(
-            "Also return metadata for the whole video (5 titles, description, "
-            "chapters from 0.0, 10-15 tags)."
-        )
-        if transcript.text:
-            parts.append(f"\nFull transcript (for titles, description, chapters):\n{transcript.text}")
-    else:
-        parts.append("Omit metadata. Return empty titles, chapters, and tags.")
     parts.append(f"\nTimed transcript for this window:\n{transcript.window_text(start, end)}")
+    return "\n".join(parts)
+
+
+def _metadata_user_text(transcript: TimedTranscript, duration: float) -> str:
+    parts = [
+        f"Full trimmed duration: {duration:.2f} seconds.",
+        "Write packaging for this entire cut. Chapters must span the whole duration.",
+    ]
+    if transcript.text:
+        parts.append(f"\nFull transcript:\n{transcript.text}")
+    if transcript.cues:
+        parts.append(
+            "\nTimed cues (trimmed timeline):\n"
+            + "\n".join(
+                f"[{cue.start:.2f}-{cue.end:.2f}] {cue.text.strip()}"
+                for cue in transcript.cues
+                if cue.text.strip()
+            )
+        )
     return "\n".join(parts)
 
 
@@ -452,7 +488,6 @@ def plan_from_transcript(
             start,
             end,
         )
-        include_metadata = index == 0
         payload = _generate_json(
             api,
             model=settings.gemini_model,
@@ -470,7 +505,6 @@ def plan_from_transcript(
                                 duration=duration,
                                 window_index=index,
                                 window_count=len(windows),
-                                include_metadata=include_metadata,
                             )
                         ),
                     ],
@@ -480,15 +514,16 @@ def plan_from_transcript(
             temperature=0.4,
         )
         plan = DirectorPlan.model_validate(payload)
-        if not include_metadata:
-            plan.metadata = YouTubeMetadata()
+        plan.metadata = YouTubeMetadata()
         plans.append(plan)
 
     stitched = stitch_director_plans(plans, windows, duration)
-    metadata = normalize_youtube_metadata(
-        stitched.metadata,
+    metadata = plan_youtube_metadata(
+        transcript,
         duration,
+        settings,
         fallback_title=fallback_title,
+        client=api,
     )
     return EditScript(
         transcript=transcript.text,
@@ -496,6 +531,35 @@ def plan_from_transcript(
         scenes=[scene.to_scene() for scene in stitched.scenes],
         metadata=metadata,
     )
+
+
+def plan_youtube_metadata(
+    transcript: TimedTranscript,
+    duration: float,
+    settings: Settings,
+    *,
+    fallback_title: str,
+    client: genai.Client | None = None,
+) -> YouTubeMetadata:
+    """Text-only packaging pass on the full transcript and full duration."""
+    api = client or _client(settings)
+    payload = _generate_json(
+        api,
+        model=settings.gemini_model,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=_METADATA_PROMPT),
+                    types.Part.from_text(text=_metadata_user_text(transcript, duration)),
+                ],
+            )
+        ],
+        schema=_PackagingSchema,
+        temperature=0.4,
+    )
+    raw = YouTubeMetadata.model_validate(payload)
+    return normalize_youtube_metadata(raw, duration, fallback_title=fallback_title)
 
 
 def transcript_to_payload(transcript: TimedTranscript) -> dict[str, Any]:

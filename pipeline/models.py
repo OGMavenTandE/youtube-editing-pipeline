@@ -223,6 +223,12 @@ class YouTubeMetadata(BaseModel):
     description: str = Field(default="", description="SEO YouTube description.")
     chapters: list[ChapterMarker] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+    title_index: int = Field(
+        default=0,
+        ge=0,
+        le=4,
+        description="Which titles[] entry is the paste title and thumbnail line.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -332,6 +338,34 @@ class SilenceCutMap(BaseModel):
                 return offset + (source_time - kept.start)
             offset += kept.duration
         return None
+
+    def to_trimmed_edge(self, source_time: float, *, edge: str = "start") -> float | None:
+        """Map a range edge, snapping into the nearest keep if the instant was cut."""
+        mapped = self.to_trimmed(source_time)
+        if mapped is not None:
+            return mapped
+        offset = 0.0
+        if edge == "start":
+            for kept in self.kept_ranges:
+                if kept.end > source_time:
+                    return offset + max(0.0, source_time - kept.start)
+                offset += kept.duration
+            return None
+        last_end: float | None = None
+        for kept in self.kept_ranges:
+            if kept.start < source_time:
+                last_end = offset + min(kept.duration, max(0.0, source_time - kept.start))
+            offset += kept.duration
+        return last_end
+
+    def remap_range(self, start: float, end: float) -> TimeRange | None:
+        mapped_start = self.to_trimmed_edge(start, edge="start")
+        mapped_end = self.to_trimmed_edge(end, edge="end")
+        if mapped_start is None or mapped_end is None:
+            return None
+        if mapped_end - mapped_start < 0.04:
+            return None
+        return TimeRange(start=mapped_start, end=mapped_end)
 
 
 class SilenceTrimResult(BaseModel):

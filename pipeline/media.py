@@ -202,6 +202,99 @@ def write_json(path: Path, payload: object) -> Path:
     return path
 
 
+def concat_scene_files(
+    parts: list[Path],
+    dest: Path,
+    settings: Settings,
+    *,
+    loudnorm: bool = True,
+) -> Path:
+    """Concat per-scene MP4s with ffmpeg. Optional YouTube ~-14 LUFS loudnorm."""
+    if not parts:
+        raise MediaError("No scene files to concat.")
+    ffmpeg_bin = require_ffmpeg(settings)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    work = dest.parent / f"{dest.stem}_concat"
+    work.mkdir(parents=True, exist_ok=True)
+    list_file = work / "concat.txt"
+    list_file.write_text(
+        "".join(f"file '{path.resolve()}'\n" for path in parts),
+        encoding="utf-8",
+    )
+    target = settings.target_lufs
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_file),
+    ]
+    if loudnorm:
+        cmd.extend(
+            [
+                "-af",
+                f"loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+            ]
+        )
+    else:
+        cmd.extend(["-c", "copy"])
+    cmd.extend(["-movflags", "+faststart", str(dest)])
+    try:
+        _run(cmd, f"concat scenes -> {dest}")
+    finally:
+        if list_file.exists():
+            list_file.unlink()
+        try:
+            work.rmdir()
+        except OSError:
+            pass
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise MediaError(f"Concat produced no output at {dest}")
+    return dest
+
+
+def apply_loudnorm(video_path: Path, dest: Path, settings: Settings) -> Path:
+    """Single-pass ffmpeg loudnorm toward settings.target_lufs."""
+    ffmpeg_bin = require_ffmpeg(settings)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(video_path),
+        "-af",
+        f"loudnorm=I={settings.target_lufs:.1f}:TP=-1.5:LRA=11",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "18",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
+        str(dest),
+    ]
+    _run(cmd, f"loudnorm {video_path} -> {dest}")
+    return dest
+
+
 def _run(cmd: list[str], label: str) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

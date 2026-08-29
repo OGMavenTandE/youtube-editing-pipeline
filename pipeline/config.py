@@ -45,16 +45,19 @@ class Settings(BaseModel):
     max_same_layout_streak: int = Field(default=3, ge=2)
     director_chunk_seconds: float = Field(default=300.0, ge=60.0)
     director_chunk_threshold: float = Field(default=480.0, ge=60.0)
+    target_lufs: float = Field(default=-14.0, le=0.0)
     input_dir: Path = REPO_ROOT / "input"
     output_dir: Path = REPO_ROOT / "output"
     work_dir: Path = REPO_ROOT / "work"
     slides_dir: Path = REPO_ROOT / "work" / "slides"
+    scenes_dir: Path = REPO_ROOT / "work" / "scenes"
 
     def ensure_dirs(self) -> None:
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.slides_dir.mkdir(parents=True, exist_ok=True)
+        self.scenes_dir.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings(env_file: Path | None = None) -> Settings:
@@ -94,10 +97,12 @@ def load_settings(env_file: Path | None = None) -> Settings:
         max_same_layout_streak=int(os.getenv("MAX_SAME_LAYOUT_STREAK", "3")),
         director_chunk_seconds=float(os.getenv("DIRECTOR_CHUNK_SECONDS", "300")),
         director_chunk_threshold=float(os.getenv("DIRECTOR_CHUNK_THRESHOLD", "480")),
+        target_lufs=float(os.getenv("TARGET_LUFS", "-14")),
         input_dir=Path(os.getenv("INPUT_DIR", str(REPO_ROOT / "input"))),
         output_dir=Path(os.getenv("OUTPUT_DIR", str(REPO_ROOT / "output"))),
         work_dir=Path(os.getenv("WORK_DIR", str(REPO_ROOT / "work"))),
         slides_dir=Path(os.getenv("SLIDES_DIR", str(REPO_ROOT / "work" / "slides"))),
+        scenes_dir=Path(os.getenv("SCENES_DIR", str(REPO_ROOT / "work" / "scenes"))),
     )
 
 

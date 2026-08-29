@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from pathlib import Path
 
 import numpy as np
 from moviepy import ColorClip, CompositeVideoClip, ImageClip, VideoFileClip, concatenate_videoclips
 from PIL import Image, ImageDraw, ImageFont
 
+from pipeline.broll.local import VIDEO_SUFFIXES, apply_local_broll
 from pipeline.config import Settings, require_ffmpeg
 from pipeline.layouts import LayoutKind
-from pipeline.media import probe_duration
+from pipeline.media import MediaError, concat_scene_files, probe_duration
 from pipeline.models import (
     EditScript,
     LowerThird,
@@ -16,6 +20,8 @@ from pipeline.models import (
     OverlayCallout,
     Scene,
 )
+
+logger = logging.getLogger(__name__)
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -71,6 +77,68 @@ def split_webcam_rect(
     return 0, 0, width, min(box_h, height)
 
 
+def scene_fingerprint(scene: Scene, settings: Settings) -> str:
+    payload = {
+        "start": round(scene.start, 3),
+        "end": round(scene.end, 3),
+        "layout": scene.layout.value,
+        "graphic": scene.graphic.model_dump(),
+        "micro": [event.model_dump() for event in scene.micro_events],
+        "canvas": [settings.output_width, settings.output_height, settings.pip_scale],
+    }
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def scene_encode_path(dest_dir: Path, index: int, fingerprint: str) -> Path:
+    return dest_dir / f"scene_{index:04d}_{fingerprint}.mp4"
+
+
+def scene_cache_valid(
+    path: Path,
+    scene: Scene,
+    settings: Settings,
+    *,
+    fingerprint: str | None = None,
+) -> bool:
+    """True when a scene MP4 exists and matches this scene (resume)."""
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    key = fingerprint or scene_fingerprint(scene, settings)
+    sidecar = path.with_suffix(".json")
+    if sidecar.is_file():
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+        if data.get("fingerprint") == key:
+            return True
+        return False
+    try:
+        duration = probe_duration(path, settings)
+    except MediaError:
+        return False
+    return abs(duration - scene.duration) < 0.2
+
+
+def write_scene_sidecar(path: Path, scene: Scene, fingerprint: str) -> Path:
+    sidecar = path.with_suffix(".json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "fingerprint": fingerprint,
+                "start": scene.start,
+                "end": scene.end,
+                "layout": scene.layout.value,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return sidecar
+
+
 def render_video(
     video_path: Path,
     script: EditScript,
@@ -79,8 +147,7 @@ def render_video(
     *,
     broll_dir: Path | None = None,
 ) -> Path:
-    """Composite each scene onto a 1920x1080 canvas and write the final MP4."""
-    del broll_dir
+    """Encode each scene, concat with ffmpeg, mux H.264/AAC toward -14 LUFS."""
     require_ffmpeg(settings)
     video_path = video_path.resolve()
     if not video_path.is_file():
@@ -88,13 +155,126 @@ def render_video(
 
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.ensure_dirs()
+    if broll_dir is not None:
+        apply_local_broll(script, Path(broll_dir))
+
     duration = probe_duration(video_path, settings)
     canvas = canvas_size(settings)
+    scenes = _scenes_or_full(script, duration)
+    scene_dir = (settings.scenes_dir / video_path.stem).resolve()
+    scene_dir.mkdir(parents=True, exist_ok=True)
 
+    parts = _encode_scenes(video_path, script, scenes, scene_dir, settings, canvas)
+    if not parts:
+        raise CompositorError("No scenes to composite")
+
+    try:
+        concat_scene_files(parts, output_path, settings, loudnorm=True)
+        print(f"      concat {len(parts)} scene(s) + loudnorm {settings.target_lufs:.0f} LUFS")
+    except MediaError as exc:
+        logger.warning("ffmpeg concat/loudnorm failed (%s). Falling back to MoviePy.", exc)
+        print(f"      ffmpeg concat failed, falling back to in-memory MoviePy: {exc}")
+        _render_in_memory(video_path, script, scenes, output_path, settings, canvas, duration)
+        try:
+            tmp = output_path.with_name(output_path.stem + "_loud.mp4")
+            from pipeline.media import apply_loudnorm
+
+            apply_loudnorm(output_path, tmp, settings)
+            tmp.replace(output_path)
+        except MediaError as loud_exc:
+            print(f"      loudnorm fallback skipped: {loud_exc}")
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise CompositorError(f"Render produced no output at {output_path}")
+    return output_path
+
+
+def _encode_scenes(
+    video_path: Path,
+    script: EditScript,
+    scenes: list[Scene],
+    scene_dir: Path,
+    settings: Settings,
+    canvas: tuple[int, int],
+) -> list[Path]:
+    parts: list[Path] = []
+    stills: dict[str, np.ndarray] = {}
+    base = VideoFileClip(str(video_path))
+    try:
+        for index, scene in enumerate(scenes):
+            fingerprint = scene_fingerprint(scene, settings)
+            dest = scene_encode_path(scene_dir, index, fingerprint)
+            stale = list(scene_dir.glob(f"scene_{index:04d}_*.mp4"))
+            if scene_cache_valid(dest, scene, settings, fingerprint=fingerprint):
+                print(f"      resume scene {index + 1}/{len(scenes)} {dest.name}")
+                parts.append(dest)
+                continue
+            for old in stale:
+                if old != dest and old.exists():
+                    old.unlink()
+                sidecar = old.with_suffix(".json")
+                if sidecar.exists() and sidecar != dest.with_suffix(".json"):
+                    sidecar.unlink()
+            print(f"      encode scene {index + 1}/{len(scenes)} {scene.layout.value}")
+            _encode_one_scene(base, script, scene, dest, settings, canvas, stills)
+            write_scene_sidecar(dest, scene, fingerprint)
+            parts.append(dest)
+    finally:
+        base.close()
+    return parts
+
+
+def _encode_one_scene(
+    a_roll: VideoFileClip,
+    script: EditScript,
+    scene: Scene,
+    dest: Path,
+    settings: Settings,
+    canvas: tuple[int, int],
+    stills: dict[str, np.ndarray],
+) -> Path:
+    piece = _compose_scene(a_roll, scene, settings, canvas, stills)
+    if piece is None:
+        raise CompositorError(f"Scene {scene.start:.2f}-{scene.end:.2f} produced no clip")
+    hold = float(piece.duration or scene.duration)
+    layers: list[object] = [piece]
+    for overlay in _scene_overlay_clips(script, scene, canvas):
+        layers.append(overlay)
+    final = CompositeVideoClip(layers, size=canvas).with_duration(hold)
+    start = max(0.0, min(scene.start, float(a_roll.duration or 0)))
+    end = max(start, min(scene.end, float(a_roll.duration or 0)))
+    if a_roll.audio is not None and end > start:
+        final = final.with_audio(a_roll.subclipped(start, end).audio)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    final.write_videofile(
+        str(dest),
+        codec="libx264",
+        audio_codec="aac",
+        fps=a_roll.fps or 30,
+        preset="medium",
+        threads=0,
+        logger=None,
+    )
+    final.close()
+    piece.close()
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise CompositorError(f"Scene encode produced no output at {dest}")
+    return dest
+
+
+def _render_in_memory(
+    video_path: Path,
+    script: EditScript,
+    scenes: list[Scene],
+    output_path: Path,
+    settings: Settings,
+    canvas: tuple[int, int],
+    duration: float,
+) -> Path:
     base = VideoFileClip(str(video_path))
     try:
         timeline = float(base.duration or duration)
-        scenes = _scenes_or_full(script, timeline)
         stills: dict[str, np.ndarray] = {}
         pieces = [
             _compose_scene(base, scene, settings, canvas, stills) for scene in scenes
@@ -133,9 +313,6 @@ def render_video(
             piece.close()
     finally:
         base.close()
-
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        raise CompositorError(f"Render produced no output at {output_path}")
     return output_path
 
 
@@ -162,17 +339,18 @@ def _compose_scene(
     width, height = canvas
     bg = ColorClip(size=canvas, color=_DARK).with_duration(hold)
     layers: list[object] = [bg]
+    graphic = _graphic_clip(scene.graphic.asset_path, canvas, hold, stills)
 
     if scene.layout is LayoutKind.PIP_BOTTOM_RIGHT:
         layers.extend(
-            _pip_layers(webcam, scene, settings, canvas, hold, start, stills)
+            _pip_layers(webcam, scene, settings, canvas, hold, start, graphic)
         )
     elif scene.layout is LayoutKind.SPLIT_TOP:
         layers.extend(
-            _split_layers(webcam, scene, settings, canvas, hold, start, stills)
+            _split_layers(webcam, scene, settings, canvas, hold, start, graphic)
         )
     else:
-        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start))
+        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, graphic))
 
     return CompositeVideoClip(layers, size=canvas).with_duration(hold)
 
@@ -183,8 +361,11 @@ def _full_frame_layers(
     canvas: tuple[int, int],
     hold: float,
     scene_start: float,
+    graphic: object | None = None,
 ) -> list[object]:
     width, height = canvas
+    if graphic is not None and _is_video_asset(scene.graphic.asset_path):
+        return [graphic]
     layers = [_cover(webcam, width, height).with_duration(hold)]
     layers.extend(
         _punch_layers(webcam, scene, scene_start, hold, dest=(0, 0, width, height))
@@ -199,14 +380,13 @@ def _pip_layers(
     canvas: tuple[int, int],
     hold: float,
     scene_start: float,
-    stills: dict[str, np.ndarray],
+    graphic: object | None,
 ) -> list[object]:
     width, height = canvas
     x, y, box_w, box_h = pip_rect(width, height, settings.pip_scale)
     layers: list[object] = []
-    slide = _still_clip(scene.graphic.asset_path, canvas, hold, stills)
-    if slide is not None:
-        layers.append(slide)
+    if graphic is not None:
+        layers.append(graphic)
     radius = max(16, box_h // 6)
     border = _rounded_border_clip(box_w, box_h, radius).with_duration(hold).with_position((x, y))
     layers.append(border)
@@ -226,7 +406,7 @@ def _split_layers(
     canvas: tuple[int, int],
     hold: float,
     scene_start: float,
-    stills: dict[str, np.ndarray],
+    graphic: object | None,
 ) -> list[object]:
     width, height = canvas
     x, y, box_w, box_h = split_webcam_rect(width, height, settings.split_top_ratio)
@@ -236,9 +416,8 @@ def _split_layers(
     layers.extend(
         _punch_layers(webcam, scene, scene_start, hold, dest=(x, y, box_w, box_h))
     )
-    slide = _still_clip(scene.graphic.asset_path, canvas, hold, stills)
-    if slide is not None:
-        layers.append(slide)
+    if graphic is not None:
+        layers.append(graphic)
     return layers
 
 
@@ -327,6 +506,41 @@ def _rounded_border_clip(width: int, height: int, radius: int) -> ImageClip:
     return ImageClip(np.array(img))
 
 
+def _is_video_asset(path: str) -> bool:
+    return bool(path) and Path(path).suffix.lower() in VIDEO_SUFFIXES
+
+
+def _graphic_clip(
+    path: str,
+    canvas: tuple[int, int],
+    hold: float,
+    stills: dict[str, np.ndarray],
+) -> object | None:
+    if not path:
+        return None
+    resolved = Path(path)
+    if not resolved.is_file():
+        return None
+    if _is_video_asset(path):
+        return _broll_video_clip(resolved, canvas, hold)
+    return _still_clip(path, canvas, hold, stills)
+
+
+def _broll_video_clip(path: Path, canvas: tuple[int, int], hold: float) -> VideoFileClip:
+    clip = VideoFileClip(str(path)).without_audio()
+    duration = float(clip.duration or 0)
+    if duration <= 0:
+        clip.close()
+        raise CompositorError(f"B-roll video has no duration: {path}")
+    if duration + 0.04 < hold:
+        loops = int(hold / duration) + 1
+        clip = concatenate_videoclips([clip] * loops, method="compose")
+    if float(clip.duration or 0) > hold:
+        clip = clip.subclipped(0, hold)
+    covered = _cover(clip, canvas[0], canvas[1]).with_duration(hold)
+    return covered
+
+
 def _still_clip(
     path: str,
     canvas: tuple[int, int],
@@ -346,6 +560,39 @@ def _still_clip(
     if (int(clip.w), int(clip.h)) != canvas:
         clip = clip.resized(new_size=canvas)
     return clip
+
+
+def _scene_overlay_clips(
+    script: EditScript, scene: Scene, canvas: tuple[int, int]
+) -> list[ImageClip]:
+    """Lower-thirds and takeaways clipped to this scene, times relative to 0."""
+    hold = scene.duration
+    layers: list[ImageClip] = []
+    for overlay in _lower_third_overlays(script, canvas, scene.end + 0.01):
+        shifted = _shift_overlay_to_scene(overlay, scene.start, hold)
+        if shifted is not None:
+            layers.append(shifted)
+    for callout in script.collected_text_overlays():
+        layer = _callout_clip(callout, canvas, scene.end + 0.01)
+        if layer is None:
+            continue
+        shifted = _shift_overlay_to_scene(layer, scene.start, hold)
+        if shifted is not None:
+            layers.append(shifted)
+    return layers
+
+
+def _shift_overlay_to_scene(
+    clip: ImageClip, scene_start: float, hold: float
+) -> ImageClip | None:
+    start = float(getattr(clip, "start", 0.0) or 0.0)
+    duration = float(clip.duration or 0.0)
+    end = start + duration
+    rel_start = max(0.0, start - scene_start)
+    rel_end = min(hold, end - scene_start)
+    if rel_end - rel_start < 0.2:
+        return None
+    return clip.with_start(rel_start).with_duration(rel_end - rel_start)
 
 
 def _lower_third_overlays(

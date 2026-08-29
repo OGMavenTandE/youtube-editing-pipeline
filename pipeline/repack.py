@@ -227,6 +227,7 @@ def repack_studio(
     """Rewrite studio text files and thumbnail. Reuses the existing MP4."""
     run = resolve_studio_run(raw, settings, input_hint=input_hint)
     label = fallback_title or run.stem.replace("_", " ").replace("-", " ").strip()
+    transcript_path = settings.output_dir / f"{run.stem}_transcript.json"
     return write_studio_package(
         video_path=run.video_path,
         webcam_path=run.webcam_path,
@@ -235,4 +236,6 @@ def repack_studio(
         settings=settings,
         fallback_title=label,
         title_index=title_index,
+        transcript_path=transcript_path if transcript_path.is_file() else None,
+        metadata_path=run.metadata_path,
     )
