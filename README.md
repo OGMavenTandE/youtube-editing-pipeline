@@ -67,11 +67,24 @@ python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.jso
 python run.py --input raw_video.mp4 --skip-slides
 python run.py --input raw_video.mp4 --skip-studio
 python run.py --input raw_video.mp4 --title-index 2
+python run.py --repack-studio output/raw_video_studio --title-index 2
 ```
 
-`--input` is required. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, `--skip-slides`, and `--skip-studio` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass. `--title-index` (0-4, default 0) picks which of the five titles is the paste title and the thumbnail line. Task 7 can reuse that flag.
+`--input` is required for a full run. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, `--skip-slides`, and `--skip-studio` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass. `--title-index` (0-4, default 0) picks which of the five titles is the paste title and the thumbnail line.
 
-After the MP4 lands, the pipeline writes `output/<stem>_studio/`: a copy or hardlink of the video, `titles.txt` (all five options in pipeline order), `description.txt` (SEO body plus one YouTube-legal chapter list), `tags.txt`, and a 1280x720 `thumbnail.jpg`. Drag that folder into YouTube Studio. There is no YouTube API upload. `*_youtube_metadata.json` stays the machine file.
+After the MP4 lands, the pipeline writes `output/<stem>_studio/`: a copy or hardlink of the video, `titles.txt` (chosen title on line 1, the other four below, plus `selected: N`), `description.txt` (SEO body plus one YouTube-legal chapter list), `tags.txt`, and a 1280x720 `thumbnail.jpg`. Drag that folder into YouTube Studio. There is no YouTube API upload. `*_youtube_metadata.json` stays the machine file.
+
+`--repack-studio` rewrites an existing Studio folder without silence trim, Gemini, slides, or MoviePy. Pass the `output/<stem>_studio` folder, the stem, or the original input that already has a studio folder plus `output/<stem>_youtube_metadata.json` and the final MP4. The thumbnail still needs the trimmed talking-head file (`work/<stem>_trimmed.mp4`) or the original webcam via `--input`. If that frame source is missing, the command fails instead of drawing a black frame. The existing MP4 is hardlinked or copied as before.
+
+## Studio review UI
+
+Task 7 is desk review, not the editor. It does not run the pipeline, edit scenes, or upload to YouTube.
+
+```bash
+streamlit run ui.py
+```
+
+`python -m pipeline.ui` also works. Open the local URL, pick an `output/*_studio` folder, choose one of the five titles, and rewrite the folder. Same writer as the CLI: `write_studio_package()`. Localhost only. No auth and no deploy.
 
 ## Layouts and pacing
 
@@ -97,8 +110,8 @@ Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Second pass is text-only: scenes (layout, reason, graphic card) plus YouTube metadata. Cuts longer than about 8 minutes are planned in 5-minute windows, then stitched. Micro-resets stay local in `pacing.py`. Talking-head filler cuts stay empty.
 3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`. Video B-roll can share the same `BrollAsset` later.
 4. `pipeline/compositor.py` — MoviePy 2 builds each scene on a 1920x1080 canvas, then concatenates. `FULL_FRAME` is cover-cropped webcam. `PIP_BOTTOM_RIGHT` is the slide plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the split PNG over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
-5. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt` (all five options, clipped to 100 characters), `description.txt` (SEO body with Gemini's chapter tail stripped, then one `0:00` block from the structured list), `tags.txt` (generic filler tags omitted when real tags exist). Thumbnail is a Playwright 1280x720 card (the `--title-index` title plus a webcam frame), not Imagen and not a raw frame grab. JSON metadata stays the pipeline source of truth. No YouTube Data API upload.
-6. Task 7 (future) — Streamlit UI to pick among the five titles and review the Studio folder. Out of scope here. `--title-index` is the hook that UI will call.
+5. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt` (chosen title on line 1, the other four below, clipped to 100 characters), `description.txt` (SEO body with Gemini's chapter tail stripped, then one `0:00` block from the structured list), `tags.txt` (generic filler tags omitted when real tags exist). Thumbnail is a Playwright 1280x720 card (the `--title-index` title plus a webcam frame), not Imagen and not a raw frame grab. JSON metadata stays the pipeline source of truth. No YouTube Data API upload.
+6. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder and a title, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
 
 `pipeline/config.py` loads dotenv and typed settings, including canvas size and PiP scale. `pipeline/layouts.py` is the layout enum.
 
