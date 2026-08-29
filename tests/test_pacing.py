@@ -1,0 +1,59 @@
+from pipeline.config import Settings
+from pipeline.layouts import LayoutKind
+from pipeline.models import EditScript, GraphicCard, Scene
+from pipeline.pacing import enforce_pacing, evaluate_pacing, expected_scene_range
+
+
+def test_twenty_minute_band_is_about_50_to_80() -> None:
+    low, high = expected_scene_range(20 * 60, Settings())
+    assert low == 50
+    assert 75 <= high <= 90
+
+
+def test_empty_script_fills_20_minute_timeline() -> None:
+    settings = Settings()
+    duration = 20 * 60
+    script = enforce_pacing(EditScript.empty(), duration, settings)
+    report = evaluate_pacing(script, duration, settings)
+    assert report.in_band
+    assert report.scene_count >= 50
+    assert script.scenes[0].start == 0.0
+    assert abs(script.scenes[-1].end - duration) < 0.05
+    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
+    assert report.micro_event_count > report.scene_count
+    kinds = {event.kind for scene in script.scenes for event in scene.micro_events}
+    assert "punch_in" in kinds
+    assert "text" in kinds
+    assert "cut" in kinds
+
+
+def test_lazy_three_scene_script_is_split() -> None:
+    settings = Settings()
+    duration = 20 * 60
+    lazy = EditScript(
+        scenes=[
+            Scene(start=0, end=400, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="A")),
+            Scene(start=400, end=800, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="B")),
+            Scene(start=800, end=1200, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="C")),
+        ]
+    )
+    script = enforce_pacing(lazy, duration, settings)
+    report = evaluate_pacing(script, duration, settings)
+    assert len(script.scenes) >= 50
+    assert report.in_band
+    streak = 1
+    max_streak = 1
+    for index in range(1, len(script.scenes)):
+        if script.scenes[index].layout == script.scenes[index - 1].layout:
+            streak += 1
+            max_streak = max(max_streak, streak)
+        else:
+            streak = 1
+    assert max_streak < 3
+
+
+def test_short_clip_stays_one_or_two_scenes() -> None:
+    settings = Settings()
+    script = enforce_pacing(EditScript.empty(), 3.0, settings)
+    assert 1 <= len(script.scenes) <= 2
+    assert abs(script.scenes[-1].end - 3.0) < 0.05

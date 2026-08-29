@@ -11,6 +11,7 @@ from pipeline.config import FFmpegNotFoundError, Settings, load_settings, requir
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
+from pipeline.pacing import enforce_pacing, evaluate_pacing
 from pipeline.silence_remover import remove_silence
 
 
@@ -129,9 +130,20 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
             duration=trim.cut_map.trimmed_duration,
         )
         print(
-            f"      lower-thirds={len(script.lower_thirds)}  "
+            f"      scenes={len(script.scenes)}  "
+            f"lower-thirds={len(script.lower_thirds)}  "
             f"b-roll={len(script.broll)}  overlays={len(script.overlays)}"
         )
+
+    script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
+    report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
+    print(
+        f"      pacing scenes={report.scene_count} "
+        f"(band {report.expected_min_scenes}-{report.expected_max_scenes} "
+        f"for {report.duration:.0f}s)  micro-resets={report.micro_event_count}"
+    )
+    for warning in report.warnings:
+        print(f"      pacing note: {warning}")
 
     script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     write_json(script_path, script.model_dump())

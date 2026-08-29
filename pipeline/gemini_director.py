@@ -10,34 +10,59 @@ from pydantic import ValidationError
 from pipeline.config import Settings
 from pipeline.media import extract_audio, probe_duration
 from pipeline.models import EditScript
+from pipeline.pacing import enforce_pacing, expected_scene_range
 
 
 class GeminiConfigError(RuntimeError):
     """Missing or invalid Gemini credentials / response."""
 
 
-DIRECTOR_PROMPT = """You are the edit director for a talking-head YouTube video.
+DIRECTOR_PROMPT = """You are the edit director for a landscape talking-head YouTube video.
 
 The attached audio is the CURRENT working cut (silence already trimmed).
-All timestamps you output MUST be in seconds on this trimmed timeline.
-Video duration: {duration:.3f} seconds.
+All timestamps MUST be seconds on this trimmed timeline.
+Video duration: {duration:.3f} seconds ({minutes:.1f} minutes).
 
 {transcript_block}
 
-Return a single JSON object that matches the schema exactly.
+Return one JSON object that matches the schema.
 
-Rules:
-- talking_head_cuts: optional extra keep-ranges if the speaker should drop more
-  filler after silence trim. Use an empty list to keep the whole cut.
-- lower_thirds: clean name/title cards (speaker name, topic, guest). Keep text short.
-- broll: moments that need a slide, screen, or B-roll insert. Prefer "pip" unless
-  a full-frame cutaway is clearly better ("fade" or "cut"). Put a search phrase
-  in query. Leave asset_path null.
-- overlays: takeaway / stat / quote callouts, not name cards.
-- metadata.titles: exactly 5 distinct high-CTR YouTube titles.
-- metadata.description: SEO description with a short hook, value, and CTA.
-- metadata.chapters: chapter markers on this same timeline.
-- transcript: full cleaned transcript of the attached audio.
+SCENE LIST (required)
+A scene is a short layout beat, NOT the whole video.
+A {minutes:.0f}-minute cut MUST have about {scene_low}-{scene_high} scenes, not 3.
+Cover 0.000 through {duration:.3f} with contiguous scenes (tiny gaps only).
+
+LAYOUT HOLDS (heavy change: FULL_FRAME / PIP_BOTTOM_RIGHT / SPLIT_TOP)
+- First {hook:.0f}s: hold 8-15s (target ~12s). Open FULL_FRAME, then switch when the first concrete idea is named.
+- After that: hold 15-25s (target ~20s).
+- Hard floor 8s unless the remaining tail is shorter.
+- Hard ceiling 40s on the same layout. Prefer staying under 25s after the hook.
+- Do NOT rotate in a fixed A-B-C order. Pick from the spoken line:
+  - hook, story, punchline, CTA, direct address -> FULL_FRAME
+  - list, definition, framework, "look at this" -> PIP_BOTTOM_RIGHT
+  - still talking, one supporting point on screen -> SPLIT_TOP
+- Ban the same layout three times in a row unless it is one continuous story, and even then split the hold.
+
+MICRO-RESETS (light change inside a hold)
+These are NOT layout swaps. Put them on scene.micro_events:
+- punch_in: digital zoom ~1.15x on a keyword (1.2-1.8s)
+- text: short takeaway / stat / quote
+- cut: hard cut at the scene boundary (you can emit these; the compositor also treats scene edges as cuts)
+Target a visual reset every 5-7s (every ~6s). In the first 60s, bias toward 3-5s light resets
+(punch-in or text) on top of the tighter layout holds.
+
+SLIDES
+New slide (graphic.title / bullets / slide_id) only when the topic changes.
+One slide_id may cover two or three adjacent PIP/SPLIT scenes.
+Keep bullets sparse (max 3). Do not put a new slide on every sentence.
+
+METADATA
+- metadata.titles: exactly 5 distinct high-CTR titles
+- metadata.description: SEO description with hook, value, CTA
+- metadata.chapters: chapter markers on this timeline
+- transcript: full cleaned transcript
+
+Also fill talking_head_cuts only if more filler should drop after silence trim. Empty means keep all.
 """
 
 
@@ -66,9 +91,14 @@ def analyze_video(
 
     client = genai.Client(api_key=settings.gemini_api_key)
     uploaded = client.files.upload(file=str(audio_path))
+    scene_low, scene_high = expected_scene_range(duration, settings)
     prompt = DIRECTOR_PROMPT.format(
         duration=duration,
+        minutes=duration / 60.0,
         transcript_block=_transcript_block(transcript),
+        scene_low=scene_low,
+        scene_high=scene_high,
+        hook=settings.pacing_hook_window,
     )
 
     try:
@@ -89,12 +119,12 @@ def analyze_video(
 
     parsed = getattr(response, "parsed", None)
     if isinstance(parsed, EditScript):
-        return parsed
+        return enforce_pacing(parsed, duration, settings)
 
     text = (getattr(response, "text", None) or "").strip()
     if not text:
         raise GeminiConfigError("Gemini returned an empty edit script.")
-    return parse_edit_script(text)
+    return enforce_pacing(parse_edit_script(text), duration, settings)
 
 
 def parse_edit_script(raw: str) -> EditScript:
@@ -126,4 +156,7 @@ def load_edit_script(path: Path) -> EditScript:
 def _transcript_block(transcript: str | None) -> str:
     if not transcript or not transcript.strip():
         return "No precomputed transcript was provided. Transcribe from the audio."
-    return "Human-provided transcript (use as a guide, correct timestamps from audio):\n" + transcript.strip()
+    return (
+        "Human-provided transcript (use as a guide, correct timestamps from audio):\n"
+        + transcript.strip()
+    )

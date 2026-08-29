@@ -66,13 +66,21 @@ python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.j
 
 `--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages.
 
-## Layouts
+## Layouts and pacing
 
-Gemini will assign one layout per scene (Task 3). Same webcam clip in every case.
+A scene is a short beat, not the whole 20-minute file. The director plus a local pacing guard target **50-80 layout scenes** on a 20-minute trimmed cut.
+
+Heavy change (one per scene):
 
 - `FULL_FRAME`: you fill the 1920x1080 frame.
 - `PIP_BOTTOM_RIGHT`: a slide fills the frame; you sit in a rounded lower-right bubble at about 25% width.
-- `SPLIT_TOP`: you occupy the top two-thirds; a graphic (title, bullets, detail) occupies the bottom third.
+- `SPLIT_TOP`: you occupy the top two-thirds; a graphic occupies the bottom third.
+
+Hold times: 8-15s in the first minute (target ~12s), then 15-25s (target ~20s). Same layout cannot run three times in a row. Order is content-driven, not a fixed A-B-C loop.
+
+Light change (inside a hold, every ~5-7s): punch-in zoom (~1.15x), a short text takeaway, or a cut at the scene edge. These are not layout swaps.
+
+If Gemini returns too few scenes, `pipeline/pacing.py` splits long holds and fills the timeline so the band still holds.
 
 ## Architecture
 
