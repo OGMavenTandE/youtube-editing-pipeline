@@ -7,6 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from pipeline.broll.slides import PlaywrightNotFoundError, render_slides
 from pipeline.config import FFmpegNotFoundError, Settings, load_settings, require_ffmpeg
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
@@ -69,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
             "ffmpeg (pauses > 0.7s only)."
         ),
     )
+    parser.add_argument(
+        "--skip-slides",
+        action="store_true",
+        help="Skip Playwright slide generation (compositor will not have slide PNGs).",
+    )
     return parser
 
 
@@ -99,9 +105,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     if args.skip_silence:
         duration = probe_duration(input_path, settings)
         trim = SilenceTrimResult.passthrough(input_path, duration)
-        print(f"[1/3] Silence trim skipped ({duration:.2f}s).")
+        print(f"[1/4] Silence trim skipped ({duration:.2f}s).")
     else:
-        print("[1/3] Trimming silence / dead air...")
+        print("[1/4] Trimming silence / dead air...")
         trim = remove_silence(
             input_path,
             settings,
@@ -120,12 +126,12 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
 
     if args.edit_script:
         script = load_edit_script(Path(args.edit_script))
-        print(f"[2/3] Loaded edit script from {args.edit_script}.")
+        print(f"[2/4] Loaded edit script from {args.edit_script}.")
     elif args.skip_gemini:
         script = EditScript.empty()
-        print("[2/3] Gemini skipped (empty edit script).")
+        print("[2/4] Gemini skipped (empty edit script).")
     else:
-        print(f"[2/3] Asking {settings.gemini_model} for a transcript, then a scene plan...")
+        print(f"[2/4] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
         transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
         script = analyze_video(
@@ -152,12 +158,19 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     for warning in report.warnings:
         print(f"      pacing note: {warning}")
 
+    if args.skip_slides:
+        print("[3/4] Slides skipped.")
+    else:
+        print("[3/4] Rendering 1920x1080 slides...")
+        assets = render_slides(script, settings)
+        print(f"      slides={len(assets)}  dir={settings.slides_dir}")
+
     script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     write_json(script_path, script.model_dump())
     meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
     write_json(meta_path, script.metadata.model_dump())
 
-    print("[3/3] Compositing overlays and rendering...")
+    print("[4/4] Compositing overlays and rendering...")
     from pipeline.compositor import render_video
 
     final_path = render_video(
@@ -170,6 +183,8 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     print(f"Done. Video: {final_path}")
     print(f"      Edit script: {script_path}")
     print(f"      YouTube metadata: {meta_path}")
+    if settings.slides_dir.is_dir() and any(settings.slides_dir.glob("*.png")):
+        print(f"      Slides: {settings.slides_dir}")
     transcript_note = settings.output_dir / f"{input_path.stem}_transcript.json"
     if transcript_note.is_file():
         print(f"      Transcript: {transcript_note}")
@@ -188,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
     except GeminiConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 3
+    except PlaywrightNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 4
     except (FileNotFoundError, MediaError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

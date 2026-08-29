@@ -64,9 +64,10 @@ python run.py --input raw_video.mp4 --skip-gemini
 python run.py --input raw_video.mp4 --auto-editor
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
 python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.json
+python run.py --input raw_video.mp4 --skip-slides
 ```
 
-`--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass.
+`--input` is required. Relative names are also resolved under `input/`. `--skip-silence`, `--skip-gemini`, and `--skip-slides` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass.
 
 ## Layouts and pacing
 
@@ -90,7 +91,7 @@ Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
 1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map. `--auto-editor` is an optional tighter pass.
 2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Second pass is text-only: scenes (layout, reason, graphic card) plus YouTube metadata. Cuts longer than about 8 minutes are planned in 5-minute windows, then stitched. Micro-resets stay local in `pacing.py`. Talking-head filler cuts stay empty.
-3. `pipeline/broll/` — slide provider now, video provider later. Same `BrollAsset` out.
+3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`. Video B-roll can share the same `BrollAsset` later.
 4. `pipeline/compositor.py` — MoviePy 2 assembles the canvas from layout + webcam + slide.
 5. Export — MP4 plus YouTube metadata. The UI (Task 7) will let you pick which of the five titles goes into the Studio text file.
 
