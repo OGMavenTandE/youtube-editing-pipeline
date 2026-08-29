@@ -36,6 +36,7 @@ def test_repack_keeps_description_and_chapters(monkeypatch) -> None:
     )
     write_json(settings.output_dir / "talk_youtube_metadata.json", meta.model_dump())
     monkeypatch.setattr("pipeline.studio.render_studio_thumbnail", _fake_thumb)
+    monkeypatch.setattr("pipeline.studio.probe_duration", lambda *_args, **_kwargs: 180.0)
 
     first = write_studio_package(
         video_path=video,
@@ -44,7 +45,6 @@ def test_repack_keeps_description_and_chapters(monkeypatch) -> None:
         dest_dir=settings.output_dir / "talk_studio",
         settings=settings,
         fallback_title="talk",
-        duration=180.0,
         title_index=0,
     )
     original_description = first.description_path.read_text(encoding="utf-8")
