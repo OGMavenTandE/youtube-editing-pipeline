@@ -26,7 +26,7 @@ Put your Google AI Studio key in `.env`:
 GEMINI_API_KEY=your_key_here
 ```
 
-Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`).
+Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`).
 
 ## FFmpeg
 
@@ -63,9 +63,10 @@ python run.py --input raw_video.mp4 --skip-silence
 python run.py --input raw_video.mp4 --skip-gemini
 python run.py --input raw_video.mp4 --auto-editor
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
+python run.py --input raw_video.mp4 --transcript output/raw_video_transcript.json
 ```
 
-`--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages.
+`--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages. `--transcript` reuses a saved JSON or plain-text transcript and skips the audio transcription pass.
 
 ## Layouts and pacing
 
@@ -88,7 +89,7 @@ If Gemini returns too few scenes, `pipeline/pacing.py` splits long holds and fil
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
 1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map. `--auto-editor` is an optional tighter pass.
-2. `pipeline/gemini_director.py` — Gemini 2.5 Flash (`google-genai`, `GEMINI_API_KEY`). Task 3 will switch this to a scene list (layout + slide copy + optional lower-third per beat) plus YouTube metadata.
+2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Second pass is text-only: scenes (layout, reason, graphic card) plus YouTube metadata. Cuts longer than about 8 minutes are planned in 5-minute windows, then stitched. Micro-resets stay local in `pacing.py`. Talking-head filler cuts stay empty.
 3. `pipeline/broll/` — slide provider now, video provider later. Same `BrollAsset` out.
 4. `pipeline/compositor.py` — MoviePy 2 assembles the canvas from layout + webcam + slide.
 5. Export — MP4 plus YouTube metadata. The UI (Task 7) will let you pick which of the five titles goes into the Studio text file.

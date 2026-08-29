@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from pipeline.layouts import LayoutKind
 
@@ -90,6 +90,21 @@ class GraphicCard(BaseModel):
         description="Stable id so adjacent scenes can share one generated slide.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def alias_lower_third(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if not data.get("lower_third_title") and data.get("lower_third"):
+            data = {**data, "lower_third_title": data["lower_third"]}
+        return data
+
+    @field_validator("bullets")
+    @classmethod
+    def cap_bullets(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        return cleaned[:3]
+
 
 class Scene(TimeRange):
     """One layout beat on the trimmed timeline. A 20-minute cut has 50-80 of these."""
@@ -100,9 +115,96 @@ class Scene(TimeRange):
     micro_events: list[MicroEvent] = Field(default_factory=list)
 
 
+class PlannedScene(TimeRange):
+    """Gemini scene payload. Micro-resets are added locally, not by the model."""
+
+    layout: LayoutKind = LayoutKind.FULL_FRAME
+    reason: str = ""
+    graphic: GraphicCard = Field(default_factory=GraphicCard)
+
+    def to_scene(self) -> Scene:
+        return Scene(
+            start=self.start,
+            end=self.end,
+            layout=self.layout,
+            reason=self.reason,
+            graphic=self.graphic,
+            micro_events=[],
+        )
+
+
+class TranscriptCue(TimeRange):
+    text: str = ""
+
+
+class TimedTranscript(BaseModel):
+    duration: float = 0.0
+    full_text: str = ""
+    cues: list[TranscriptCue] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_text_alias(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if not str(data.get("full_text") or "").strip() and data.get("text"):
+            data = {**data, "full_text": data["text"]}
+        return data
+
+    @property
+    def text(self) -> str:
+        if self.full_text.strip():
+            return self.full_text.strip()
+        return " ".join(cue.text.strip() for cue in self.cues if cue.text.strip()).strip()
+
+    def slice(self, start: float, end: float) -> TimedTranscript:
+        cues = [
+            TranscriptCue(
+                start=max(cue.start, start),
+                end=min(cue.end, end),
+                text=cue.text,
+            )
+            for cue in self.cues
+            if cue.end > start and cue.start < end and cue.text.strip()
+        ]
+        return TimedTranscript(
+            duration=max(0.0, end - start),
+            full_text="",
+            cues=cues,
+        )
+
+    def window_text(self, start: float, end: float) -> str:
+        chunk = self.slice(start, end)
+        if chunk.cues:
+            return "\n".join(
+                f"[{cue.start:.2f}-{cue.end:.2f}] {cue.text.strip()}" for cue in chunk.cues
+            )
+        if self.text:
+            return (
+                f"(No timed cues in {start:.1f}-{end:.1f}s. Full transcript follows.)\n"
+                f"{self.text}"
+            )
+        return ""
+
+    @classmethod
+    def from_plain(cls, text: str, duration: float) -> TimedTranscript:
+        cleaned = text.strip()
+        cues = [TranscriptCue(start=0.0, end=duration, text=cleaned)] if cleaned else []
+        return cls(duration=duration, full_text=cleaned, cues=cues)
+
+
 class ChapterMarker(BaseModel):
     start: float = Field(..., ge=0.0, description="Chapter start in seconds on the final cut.")
     title: str = Field(..., min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def alias_start_seconds(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if data.get("start") is None and data.get("start_seconds") is not None:
+            data = {**data, "start": data["start_seconds"]}
+        return data
 
 
 class YouTubeMetadata(BaseModel):
@@ -114,11 +216,33 @@ class YouTubeMetadata(BaseModel):
     chapters: list[ChapterMarker] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def alias_title_options(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if not data.get("titles") and data.get("title_options"):
+            data = {**data, "titles": data["title_options"]}
+        return data
+
     @field_validator("titles")
     @classmethod
     def cap_titles(cls, value: list[str]) -> list[str]:
         cleaned = [item.strip() for item in value if item and item.strip()]
         return cleaned[:5]
+
+    @field_validator("tags")
+    @classmethod
+    def cap_tags(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        return cleaned[:15]
+
+
+class DirectorPlan(BaseModel):
+    """Slim schema sent to Gemini for a timeline window: scenes plus metadata."""
+
+    scenes: list[PlannedScene] = Field(default_factory=list)
+    metadata: YouTubeMetadata = Field(default_factory=YouTubeMetadata)
 
 
 class EditScript(BaseModel):

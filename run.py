@@ -51,7 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--transcript",
         default=None,
-        help="Optional text transcript to send alongside the audio.",
+        help=(
+            "Reuse a saved *_transcript.json or a plain-text transcript. "
+            "Skips the Gemini audio transcription pass."
+        ),
     )
     parser.add_argument(
         "--broll-dir",
@@ -122,20 +125,21 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         script = EditScript.empty()
         print("[2/3] Gemini skipped (empty edit script).")
     else:
-        print(f"[2/3] Asking {settings.gemini_model} for an edit script...")
-        transcript = None
-        if args.transcript:
-            transcript = Path(args.transcript).read_text(encoding="utf-8")
+        print(f"[2/3] Asking {settings.gemini_model} for a transcript, then a scene plan...")
+        transcript_path = Path(args.transcript).expanduser() if args.transcript else None
+        transcript_out = settings.output_dir / f"{input_path.stem}_transcript.json"
         script = analyze_video(
             trim.output_path,
             settings,
-            transcript=transcript,
             duration=trim.cut_map.trimmed_duration,
+            transcript_path=transcript_path,
+            transcript_out=transcript_out,
         )
         print(
             f"      scenes={len(script.scenes)}  "
-            f"lower-thirds={len(script.lower_thirds)}  "
-            f"b-roll={len(script.broll)}  overlays={len(script.overlays)}"
+            f"titles={len(script.metadata.titles)}  "
+            f"chapters={len(script.metadata.chapters)}  "
+            f"transcript={transcript_out.name}"
         )
 
     script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
@@ -166,6 +170,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     print(f"Done. Video: {final_path}")
     print(f"      Edit script: {script_path}")
     print(f"      YouTube metadata: {meta_path}")
+    transcript_note = settings.output_dir / f"{input_path.stem}_transcript.json"
+    if transcript_note.is_file():
+        print(f"      Transcript: {transcript_note}")
     return final_path
 
 

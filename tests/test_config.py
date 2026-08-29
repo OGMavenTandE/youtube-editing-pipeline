@@ -24,6 +24,12 @@ def test_broll_spec_defaults_to_slide() -> None:
     assert spec.kind is BrollKind.SLIDE
 
 
+def test_director_chunk_defaults() -> None:
+    settings = Settings()
+    assert settings.director_chunk_seconds == 300
+    assert settings.director_chunk_threshold == 480
+
+
 def test_load_settings_reads_env_file(tmp_path: Path | None = None) -> None:
     env = Path("/tmp/yt-pipe-settings.env")
     env.write_text("GEMINI_API_KEY=test-key\nOUTPUT_WIDTH=1280\n", encoding="utf-8")

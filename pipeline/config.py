@@ -43,6 +43,8 @@ class Settings(BaseModel):
     punch_in_duration: float = Field(default=1.6, ge=0.3)
     text_hold: float = Field(default=2.4, ge=0.4)
     max_same_layout_streak: int = Field(default=3, ge=2)
+    director_chunk_seconds: float = Field(default=300.0, ge=60.0)
+    director_chunk_threshold: float = Field(default=480.0, ge=60.0)
     input_dir: Path = REPO_ROOT / "input"
     output_dir: Path = REPO_ROOT / "output"
     work_dir: Path = REPO_ROOT / "work"
@@ -90,6 +92,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         punch_in_duration=float(os.getenv("PUNCH_IN_DURATION", "1.6")),
         text_hold=float(os.getenv("TEXT_HOLD", "2.4")),
         max_same_layout_streak=int(os.getenv("MAX_SAME_LAYOUT_STREAK", "3")),
+        director_chunk_seconds=float(os.getenv("DIRECTOR_CHUNK_SECONDS", "300")),
+        director_chunk_threshold=float(os.getenv("DIRECTOR_CHUNK_THRESHOLD", "480")),
         input_dir=Path(os.getenv("INPUT_DIR", str(REPO_ROOT / "input"))),
         output_dir=Path(os.getenv("OUTPUT_DIR", str(REPO_ROOT / "output"))),
         work_dir=Path(os.getenv("WORK_DIR", str(REPO_ROOT / "work"))),
