@@ -98,6 +98,42 @@ streamlit run ui.py
 
 `python -m pipeline.ui` also works. Open the local URL, pick an `output/*_studio` folder, choose one of the five titles, read or edit the description and chapters, pick a thumbnail candidate, and rewrite the folder. Same writer as the CLI: `write_studio_package()`. Localhost only. No auth and no deploy.
 
+## Windows app
+
+Always-on desktop watcher for the same local pipeline. No terminal. No YouTube upload. Phone drop goes to a Google Drive inbox; the PC downloads the MP4, runs `run.py`, and uploads `output/<stem>_studio/` to Drive `outbox/<stem>/`.
+
+### Download
+
+GitHub Actions builds `youtube-pipeline.exe` (one-folder) on every pull request and on tags. Open the workflow run → Artifacts → `youtube-pipeline-windows`. Unzip next to a writable folder. FFmpeg and Playwright Chromium are not inside the zip. They stay on the PC.
+
+From a source checkout:
+
+```bash
+pip install -r requirements.txt
+python desktop/app.py
+```
+
+### First-run wizard
+
+Double-click `youtube-pipeline.exe` (or run `python desktop/app.py`). The first launch walks through one question per screen:
+
+1. What the app does.
+2. FFmpeg on PATH. If it is missing, the window shows copyable `winget install Gyan.FFmpeg` and `choco install ffmpeg`, plus Recheck. A button can run `playwright install chromium` once.
+3. Gemini key. Saved as `GEMINI_API_KEY` in the app `.env` next to the install. Never logged.
+4. Google Drive sign-in. Desktop OAuth client, Drive scope only. Paste `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, or point at `desktop/client_secret.json`. A browser popup completes login. The refresh token is stored with Windows DPAPI (or a user-only file).
+5. Folders. Create or pick `YouTube Pipeline/inbox`, `YouTube Pipeline/outbox`, and `YouTube Pipeline/done`. Folder IDs are saved locally.
+6. Start with Windows. A Startup-folder launcher. Finish.
+
+### After setup
+
+The main window plus a tray icon stay running. Status is Idle / Watching / Downloading / Processing / Uploading / Error. Close hides to the tray. Quit is in the tray menu (and on the window). Pause watching or Run once now from either place.
+
+Record on the phone, drop a landscape MP4 in the Drive inbox, and later open the outbox folder from the app. After a successful run you can pick titles 1–5. That calls the existing `--repack-studio --title-index` path and re-uploads the Studio folder. It is one screen, not the Streamlit reviewer.
+
+`--broll-dir` is still optional and local. Settings can reopen the Gemini key, Drive sign-in, folders, and startup screens.
+
+The CLI is unchanged: `python run.py --input …` still works.
+
 ## Layouts and pacing
 
 A scene is a short beat, not the whole 20-minute file. The director plus a local pacing guard target **50-80 layout scenes** on a 20-minute trimmed cut.
@@ -133,8 +169,9 @@ Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 5. `pipeline/compositor.py` — MoviePy 2 encodes each scene on a 1920x1080 canvas to `work/scenes/`, then ffmpeg concat + loudnorm. `FULL_FRAME` is cover-cropped webcam (or a matched B-roll cutaway). `PIP_BOTTOM_RIGHT` is the slide or B-roll plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the graphic over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
 6. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt`, `description.txt`, `tags.txt`, `captions.srt` / `captions.vtt`, and thumbnail candidates. JSON metadata stays the pipeline source of truth, including `title_index`. No YouTube Data API upload.
 7. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder, a title, description, chapters, and a thumbnail candidate, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
+8. `pipeline/drive_io.py` plus `desktop/` — Windows CustomTkinter tray app. Drive API resumable download/upload, claim-by-file-id, move inbox → done, processed-id store. Calls `run.py` / `repack_studio` on a worker thread. No YouTube Data API.
 
-`pipeline/config.py` loads dotenv and typed settings, including canvas size, PiP scale, and `target_lufs`. `pipeline/layouts.py` is the layout enum.
+`pipeline/config.py` loads dotenv and typed settings, including canvas size, PiP scale, and `target_lufs`. `pipeline/layouts.py` is the layout enum. Frozen builds treat the folder next to the exe as the install root.
 
 ## Notes
 
