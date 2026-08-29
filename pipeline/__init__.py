@@ -5,10 +5,12 @@ and MoviePy compositor share only the pydantic edit-script models.
 """
 
 from pipeline.config import Settings, load_settings, require_ffmpeg
+from pipeline.layouts import LayoutKind
 from pipeline.models import EditScript, SilenceCutMap, SilenceTrimResult
 
 __all__ = [
     "EditScript",
+    "LayoutKind",
     "Settings",
     "SilenceCutMap",
     "SilenceTrimResult",

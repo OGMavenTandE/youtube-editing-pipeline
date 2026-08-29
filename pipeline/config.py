@@ -24,14 +24,20 @@ class Settings(BaseModel):
     silence_min_duration: float = Field(default=0.7, ge=0.0)
     silence_padding: float = Field(default=0.15, ge=0.0)
     silence_threshold_db: float = Field(default=-40.0)
+    output_width: int = Field(default=1920, ge=16)
+    output_height: int = Field(default=1080, ge=16)
+    pip_scale: float = Field(default=0.25, gt=0.0, le=0.6)
+    split_top_ratio: float = Field(default=2.0 / 3.0, gt=0.3, lt=0.9)
     input_dir: Path = REPO_ROOT / "input"
     output_dir: Path = REPO_ROOT / "output"
     work_dir: Path = REPO_ROOT / "work"
+    slides_dir: Path = REPO_ROOT / "work" / "slides"
 
     def ensure_dirs(self) -> None:
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.slides_dir.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings(env_file: Path | None = None) -> Settings:
@@ -52,9 +58,14 @@ def load_settings(env_file: Path | None = None) -> Settings:
         silence_min_duration=float(os.getenv("SILENCE_MIN_DURATION", "0.7")),
         silence_padding=float(os.getenv("SILENCE_PADDING", "0.15")),
         silence_threshold_db=float(os.getenv("SILENCE_THRESHOLD_DB", "-40")),
+        output_width=int(os.getenv("OUTPUT_WIDTH", "1920")),
+        output_height=int(os.getenv("OUTPUT_HEIGHT", "1080")),
+        pip_scale=float(os.getenv("PIP_SCALE", "0.25")),
+        split_top_ratio=float(os.getenv("SPLIT_TOP_RATIO", str(2.0 / 3.0))),
         input_dir=Path(os.getenv("INPUT_DIR", str(REPO_ROOT / "input"))),
         output_dir=Path(os.getenv("OUTPUT_DIR", str(REPO_ROOT / "output"))),
         work_dir=Path(os.getenv("WORK_DIR", str(REPO_ROOT / "work"))),
+        slides_dir=Path(os.getenv("SLIDES_DIR", str(REPO_ROOT / "work" / "slides"))),
     )
 
 

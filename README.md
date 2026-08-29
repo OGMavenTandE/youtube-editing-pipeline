@@ -1,10 +1,12 @@
 # youtube-editing-pipeline
 
-Local CLI that turns a raw talking-head recording into a tighter YouTube cut: strip dead air, let Gemini 2.5 Flash write a structured edit script (cuts, lower-thirds, B-roll cues, takeaways, titles, description, chapters), then composite and render with MoviePy.
+Local pipeline for landscape talking-head webcam footage: trim dead air, let Gemini pick scene layouts and YouTube copy, generate presentation slides, composite you full-screen or over those slides, then export an MP4 plus a YouTube Studio package.
 
 ```bash
 python run.py --input raw_video.mp4
 ```
+
+Input is always a landscape webcam recording of you. B-roll today means generated 1920x1080 slides. The B-roll provider interface is built so a later video-clip provider can slot in without changing the timeline.
 
 ## Setup
 
@@ -14,6 +16,7 @@ Python 3.10+ and FFmpeg on PATH are required.
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+playwright install chromium
 cp .env.example .env
 ```
 
@@ -23,7 +26,7 @@ Put your Google AI Studio key in `.env`:
 GEMINI_API_KEY=your_key_here
 ```
 
-Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `INPUT_DIR`, `OUTPUT_DIR`.
+Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`).
 
 ## FFmpeg
 
@@ -59,49 +62,29 @@ python run.py --input raw_video.mp4 --output output/final.mp4
 python run.py --input raw_video.mp4 --skip-silence
 python run.py --input raw_video.mp4 --skip-gemini
 python run.py --input raw_video.mp4 --edit-script output/raw_video_edit_script.json --skip-gemini
-python run.py --input raw_video.mp4 --transcript notes.txt --broll-dir assets/broll
 ```
 
-`--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages. `--edit-script` replays a saved JSON plan.
+`--input` is required. Relative names are also resolved under `input/`. `--skip-silence` and `--skip-gemini` are for testing individual stages.
 
-Outputs land in `output/`:
+## Layouts
 
-- `<stem>_final.mp4`
-- `<stem>_edit_script.json`
-- `<stem>_youtube_metadata.json`
-- `<stem>_cut_map.json` (when silence trim runs)
+Gemini will assign one layout per scene (Task 3). Same webcam clip in every case.
+
+- `FULL_FRAME`: you fill the 1920x1080 frame.
+- `PIP_BOTTOM_RIGHT`: a slide fills the frame; you sit in a rounded lower-right bubble at about 25% width.
+- `SPLIT_TOP`: you occupy the top two-thirds; a graphic (title, bullets, detail) occupies the bottom third.
 
 ## Architecture
 
-Three swapable stages behind `run.py`. They share pydantic models in `pipeline/models.py`, not implicit dicts.
+Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
-1. `pipeline/silence_remover.py` — detect pauses longer than 0.7s, keep 0.15s of padding on each side, cut with auto-editor when installed or pydub + ffmpeg. Returns the trimmed path plus a cut map.
-2. `pipeline/gemini_director.py` — upload trimmed audio to Gemini 2.5 Flash via the official `google-genai` SDK (`GEMINI_API_KEY`). Validate the JSON against `EditScript` (talking-head cuts, lower-thirds, B-roll/slide cues, overlay timestamps, five titles, SEO description, chapters).
-3. `pipeline/compositor.py` — MoviePy 2 composites clean lower-third cards, takeaway callouts, and PiP/full-frame B-roll, then renders H.264/AAC. `ffmpeg-python` is used for probe/extract/concat helpers.
+1. `pipeline/silence_remover.py` — pauses longer than 0.7s, 0.15s padding, auto-editor or pydub + ffmpeg.
+2. `pipeline/gemini_director.py` — Gemini 2.5 Flash (`google-genai`, `GEMINI_API_KEY`). Task 3 will switch this to a scene list (layout + slide copy + optional lower-third per beat) plus YouTube metadata.
+3. `pipeline/broll/` — slide provider now, video provider later. Same `BrollAsset` out.
+4. `pipeline/compositor.py` — MoviePy 2 assembles the canvas from layout + webcam + slide.
+5. Export — MP4 plus YouTube metadata. The UI (Task 7) will let you pick which of the five titles goes into the Studio text file.
 
-`pipeline/config.py` loads dotenv + typed settings. Each stage can be imported and run on its own.
-
-The edit script is the source of truth after the director runs. Re-render with `--edit-script` without calling Gemini again.
-
-## Edit script shape
-
-```json
-{
-  "transcript": "...",
-  "talking_head_cuts": [{"start": 0.0, "end": 42.0, "reason": "keep A-roll"}],
-  "lower_thirds": [{"start": 1.2, "end": 5.0, "title": "Alex Chen", "subtitle": "Host"}],
-  "broll": [{"start": 12.0, "end": 16.0, "query": "dashboard ui", "transition": "pip", "asset_path": null}],
-  "overlays": [{"start": 20.0, "end": 24.0, "text": "Ship the cut, not the raw take", "kind": "takeaway"}],
-  "metadata": {
-    "titles": ["...", "...", "...", "...", "..."],
-    "description": "...",
-    "chapters": [{"start": 0.0, "title": "Intro"}],
-    "tags": ["youtube", "editing"]
-  }
-}
-```
-
-B-roll files are optional. If `asset_path` is empty, the compositor looks in `--broll-dir` for a filename that matches `query`. Missing assets are skipped rather than failing the render.
+`pipeline/config.py` loads dotenv and typed settings, including canvas size and PiP scale. `pipeline/layouts.py` is the layout enum.
 
 ## Notes
 
