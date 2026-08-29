@@ -13,6 +13,7 @@ from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit
 from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
+from pipeline.repack import repack_studio
 from pipeline.silence_remover import remove_silence
 from pipeline.studio import write_studio_package
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input",
-        required=True,
+        default=None,
         help="Path to the raw talking-head video (e.g. raw_video.mp4).",
     )
     parser.add_argument(
@@ -88,6 +89,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=range(5),
         metavar="N",
         help="Which of the five titles to paste and put on the thumbnail (0-4, default 0).",
+    )
+    parser.add_argument(
+        "--repack-studio",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Rewrite an existing output/<stem>_studio folder without re-rendering. "
+            "Pass the studio folder, a stem, or the input that already has a studio "
+            "folder plus *_youtube_metadata.json and the final MP4."
+        ),
     )
     return parser
 
@@ -227,12 +238,33 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     return final_path
 
 
+def run_repack(args: argparse.Namespace, settings: Settings) -> Path:
+    """Rewrite studio text + thumbnail. No silence, Gemini, slides, or MoviePy."""
+    settings.ensure_dirs()
+    require_ffmpeg(settings)
+    package = repack_studio(
+        args.repack_studio,
+        settings,
+        title_index=getattr(args, "title_index", 0),
+        input_hint=args.input,
+    )
+    print(f"Studio folder: {package.directory}")
+    return package.directory
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.repack_studio and getattr(args, "skip_studio", False):
+        parser.error("--repack-studio cannot be combined with --skip-studio")
+    if not args.repack_studio and not args.input:
+        parser.error("--input is required unless --repack-studio is set")
     settings = load_settings()
     try:
-        run_pipeline(args, settings)
+        if args.repack_studio:
+            run_repack(args, settings)
+        else:
+            run_pipeline(args, settings)
     except FFmpegNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2

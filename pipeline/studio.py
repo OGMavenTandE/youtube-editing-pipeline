@@ -108,8 +108,36 @@ def select_title(titles: list[str], title_index: int = 0) -> str:
     return titles[index]
 
 
-def format_titles_file(titles: list[str]) -> str:
-    return "\n".join(clip_title(title) for title in titles) + "\n"
+def format_titles_file(titles: list[str], title_index: int = 0) -> str:
+    """Chosen title on line 1 for paste, then the other four, then selected: N."""
+    if not titles:
+        return "selected: 0\n"
+    index = max(0, min(int(title_index), len(titles) - 1))
+    paste = clip_title(titles[index])
+    rest = [clip_title(title) for offset, title in enumerate(titles) if offset != index]
+    return "\n".join([paste, *rest, f"selected: {index}"]) + "\n"
+
+
+def parse_titles_file(text: str) -> tuple[list[str], int]:
+    """Read titles.txt into (titles_in_file_order, selected_index)."""
+    titles: list[str] = []
+    selected = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.casefold().startswith("selected:"):
+            try:
+                selected = int(line.split(":", 1)[1].strip())
+            except ValueError:
+                pass
+            continue
+        if line.startswith(">"):
+            line = line[1:].strip()
+        titles.append(line)
+    if titles and selected >= len(titles):
+        selected = 0
+    return titles, selected
 
 
 def paste_tags(tags: list[str]) -> list[str]:
@@ -322,7 +350,7 @@ def write_studio_package(
     titles_path = dest_dir / "titles.txt"
     description_path = dest_dir / "description.txt"
     tags_path = dest_dir / "tags.txt"
-    titles_path.write_text(format_titles_file(titles), encoding="utf-8")
+    titles_path.write_text(format_titles_file(titles, title_index), encoding="utf-8")
     description_path.write_text(description + "\n", encoding="utf-8")
     tags_path.write_text(format_tags_file(tags), encoding="utf-8")
 

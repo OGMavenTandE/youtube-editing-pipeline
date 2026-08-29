@@ -17,6 +17,7 @@ from pipeline.studio import (
     format_chapter_timestamp,
     format_tags_file,
     format_titles_file,
+    parse_titles_file,
     select_title,
     write_studio_package,
 )
@@ -142,11 +143,14 @@ def test_titles_file_clips_to_100_and_keeps_five_lines() -> None:
     long_title = "A" * 150
     titles = [long_title, "Second", "Third", "Fourth", "Fifth extra words"]
     pasted = format_titles_file(titles)
-    lines = pasted.strip().splitlines()
-    assert len(lines) == 5
-    assert lines[0] == "A" * TITLE_CHAR_LIMIT
-    assert lines[1] == "Second"
+    titles_in_file, selected = parse_titles_file(pasted)
+    assert selected == 0
+    assert len(titles_in_file) == 5
+    assert titles_in_file[0] == "A" * TITLE_CHAR_LIMIT
+    assert titles_in_file[1] == "Second"
     assert clip_title(long_title) == "A" * 100
+    assert pasted.splitlines()[0] == "A" * TITLE_CHAR_LIMIT
+    assert "selected: 0" in pasted
 
 
 def test_build_studio_texts_does_not_put_all_titles_in_description() -> None:
@@ -190,6 +194,11 @@ def test_title_index_selects_paste_title() -> None:
     assert paste_title == "Three"
     assert select_title(titles, 4) == "Five"
     assert "Body only." in description
+    pasted = format_titles_file(titles, title_index=2)
+    file_titles, selected = parse_titles_file(pasted)
+    assert selected == 2
+    assert file_titles[0] == "Three"
+    assert set(file_titles) == set(titles)
 
 
 def test_filler_tags_kept_when_they_are_the_only_tags() -> None:
@@ -207,7 +216,17 @@ def test_help_lists_skip_studio() -> None:
     help_text = build_parser().format_help()
     assert "--skip-studio" in help_text
     assert "--title-index" in help_text
+    assert "--repack-studio" in help_text
     assert "Studio" in help_text
+
+
+def test_repack_flag_does_not_require_input() -> None:
+    args = build_parser().parse_args(
+        ["--repack-studio", "output/talk_studio", "--title-index", "2"]
+    )
+    assert args.repack_studio == "output/talk_studio"
+    assert args.title_index == 2
+    assert args.input is None
 
 
 def test_write_studio_package_folder(tmp_path: Path | None = None) -> None:
@@ -238,8 +257,10 @@ def test_write_studio_package_folder(tmp_path: Path | None = None) -> None:
     assert package.directory.is_dir()
     assert package.video_path.is_file()
     assert package.video_path.stat().st_size == video.stat().st_size
-    titles = package.titles_path.read_text(encoding="utf-8").splitlines()
+    titles, selected = parse_titles_file(package.titles_path.read_text(encoding="utf-8"))
+    assert selected == 1
     assert len(titles) == 5
+    assert titles[0] == "B"
     assert len(titles[0]) <= 100
     description = package.description_path.read_text(encoding="utf-8")
     assert description.startswith("Hook.")
@@ -255,6 +276,59 @@ def test_write_studio_package_folder(tmp_path: Path | None = None) -> None:
     assert thumb.size == (1280, 720)
     assert package.thumbnail_path.stat().st_size < 2 * 1024 * 1024
     assert package.thumbnail_path.suffix == ".jpg"
+
+
+def test_write_studio_package_title_index_drives_paste_and_thumbnail(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-studio-title-index")
+    work.mkdir(parents=True, exist_ok=True)
+    video = work / "pick_final.mp4"
+    _write_source_video(video, seconds=2)
+    seen: dict[str, str] = {}
+
+    def fake_render(title, webcam_path, dest, settings, duration=None):
+        seen["title"] = title
+        dest.write_bytes(b"fake-thumb")
+        return dest
+
+    monkeypatch.setattr("pipeline.studio.render_studio_thumbnail", fake_render)
+    settings = Settings(work_dir=work, output_dir=work, slides_dir=work / "slides")
+    meta = YouTubeMetadata(
+        titles=["Alpha hook", "Bravo angle", "Charlie take", "Delta line", "Echo close"],
+        description="SEO body stays put.",
+        chapters=[
+            ChapterMarker(start=0, title="Open"),
+            ChapterMarker(start=40, title="Work"),
+            ChapterMarker(start=80, title="Close"),
+        ],
+        tags=["talk"],
+    )
+    package = write_studio_package(
+        video_path=video,
+        webcam_path=video,
+        metadata=meta,
+        dest_dir=work / "pick_studio",
+        settings=settings,
+        fallback_title="pick",
+        duration=180.0,
+        title_index=2,
+    )
+    titles, selected = parse_titles_file(package.titles_path.read_text(encoding="utf-8"))
+    assert selected == 2
+    assert titles[0] == "Charlie take"
+    assert set(titles) == {
+        "Alpha hook",
+        "Bravo angle",
+        "Charlie take",
+        "Delta line",
+        "Echo close",
+    }
+    assert package.paste_title == "Charlie take"
+    assert package.title_index == 2
+    assert seen["title"] == "Charlie take"
+    description = package.description_path.read_text(encoding="utf-8")
+    assert "SEO body stays put." in description
+    assert "0:00 Open" in description
+    assert "Charlie take" not in description
 
 
 def test_pipeline_skip_gemini_writes_studio_folder() -> None:

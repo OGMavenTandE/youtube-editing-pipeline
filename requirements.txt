@@ -6,3 +6,4 @@ playwright
 python-dotenv
 pydantic
 pydub
+streamlit
