@@ -7,9 +7,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-from desktop.envfile import read_env_value
-from desktop.paths import env_path, first_existing_client_secret, token_path
-from desktop.secrets import read_secret_file, write_secret_file
+from .envfile import read_env_value
+from .paths import env_path, first_existing_client_secret, token_path
+from .secrets import read_secret_file, write_secret_file
 from pipeline.drive_io import DRIVE_SCOPE
 
 DRIVE_SCOPES = [DRIVE_SCOPE]

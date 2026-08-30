@@ -1,14 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 """One-folder Windows build. Playwright Chromium and FFmpeg stay on the PC."""
 
+import sys
 from pathlib import Path
 
 from PyInstaller.building.api import COLLECT, EXE, PYZ
 from PyInstaller.building.build_main import Analysis
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 SPEC_DIR = Path(SPECPATH).resolve()
 ROOT = SPEC_DIR.parent if SPEC_DIR.name == "desktop" else SPEC_DIR
+
+# Spec lives in desktop/; collect_submodules needs the repo root on sys.path.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 datas: list = []
 binaries: list = []
@@ -35,6 +40,17 @@ for package in (
     binaries += extra_binaries
     hiddenimports += extra_hidden
 
+# Every first-party module. Do not hand-list a subset.
+hiddenimports += collect_submodules("desktop")
+hiddenimports += collect_submodules("pipeline")
+
+# Collect the desktop package itself (package data + modules).
+desk_datas, desk_binaries, desk_hidden = collect_all("desktop")
+datas += desk_datas
+binaries += desk_binaries
+hiddenimports += desk_hidden
+datas += collect_data_files("desktop", include_py_files=True)
+
 datas += collect_data_files("pipeline")
 datas += [
     (str(ROOT / "pipeline" / "broll" / "templates"), "pipeline/broll/templates"),
@@ -44,30 +60,19 @@ datas += [
 
 hiddenimports += [
     "run",
-    "pipeline",
-    "pipeline.broll.slides",
-    "pipeline.broll.local",
-    "pipeline.compositor",
-    "pipeline.drive_io",
-    "pipeline.repack",
-    "pipeline.studio",
-    "pipeline.gemini_director",
-    "desktop.app",
-    "desktop.main_window",
-    "desktop.wizard",
-    "desktop.worker",
-    "desktop.tray",
 ]
 
+# Import desktop as a package. Do not freeze desktop/app.py as a bare script
+# named "app" — that makes `import desktop.worker` fail at runtime.
 a = Analysis(
-    [str(ROOT / "desktop" / "app.py")],
+    [str(ROOT / "desktop" / "__main__.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(SPEC_DIR / "rthooks" / "pyi_rth_syspath.py")],
     excludes=["streamlit"],
     noarchive=False,
 )

@@ -71,6 +71,29 @@ def test_client_secret_candidates_include_desktop() -> None:
     assert any(path.endswith("desktop/client_secret.json") for path in paths)
 
 
+def test_desktop_package_relative_imports() -> None:
+    import ast
+
+    from desktop.config_store import AppConfig
+    from desktop.startup import set_startup
+
+    assert AppConfig().wizard_complete is False
+    assert callable(set_startup)
+    worker = Path(__file__).resolve().parent.parent / "desktop" / "worker.py"
+    ast.parse(worker.read_text(encoding="utf-8"))
+
+
+def test_spec_collects_desktop_and_pipeline_submodules() -> None:
+    spec = Path(__file__).resolve().parent.parent / "desktop" / "youtube-pipeline.spec"
+    text = spec.read_text(encoding="utf-8")
+    assert "collect_submodules(\"desktop\")" in text
+    assert "collect_submodules(\"pipeline\")" in text
+    assert "collect_all(\"desktop\")" in text
+    assert "pyi_rth_syspath.py" in text
+    assert 'ROOT / "desktop" / "__main__.py"' in text
+    assert 'ROOT / "desktop" / "app.py"' not in text
+
+
 def test_default_env_file_override(monkeypatch, tmp_path: Path) -> None:
     custom = tmp_path / "custom.env"
     monkeypatch.setenv("YOUTUBE_PIPELINE_ENV", str(custom))

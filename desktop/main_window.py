@@ -8,9 +8,9 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from desktop.config_store import AppConfig, load_config
-from desktop.wizard import open_wizard_window
-from desktop.worker import JobResult, JobStatus, PipelineWorker
+from .config_store import AppConfig, load_config
+from .wizard import open_wizard_window
+from .worker import JobResult, JobStatus, PipelineWorker
 
 MAX_LOG_LINES = 50
 

@@ -14,10 +14,10 @@ from typing import Any, Callable
 
 import ffmpeg
 
-from desktop.config_store import AppConfig, load_config, save_config
-from desktop.logutil import LogWriter, sanitize_log_line
-from desktop.oauth import build_drive_service, load_saved_credentials
-from desktop.paths import env_path, install_root, processed_ids_path
+from .config_store import AppConfig, load_config, save_config
+from .logutil import LogWriter, sanitize_log_line
+from .oauth import build_drive_service, load_saved_credentials
+from .paths import env_path, install_root, processed_ids_path
 from pipeline.config import Settings, load_settings, require_ffprobe
 from pipeline.drive_io import (
     DriveClient,
@@ -166,6 +166,7 @@ class PipelineWorker:
             if not self._pause.is_set() or forced:
                 try:
                     self.poll_once(log_empty=forced)
+                except Exception as exc:
                     self._set_status(JobStatus.ERROR, "Watch failed")
                     self.log(f"Watch error: {exc}")
             if self._stop.is_set():
