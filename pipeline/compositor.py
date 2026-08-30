@@ -200,33 +200,29 @@ def _encode_scenes(
 ) -> list[Path]:
     parts: list[Path] = []
     stills: dict[str, np.ndarray] = {}
-    base = VideoFileClip(str(video_path))
-    try:
-        for index, scene in enumerate(scenes):
-            fingerprint = scene_fingerprint(scene, settings)
-            dest = scene_encode_path(scene_dir, index, fingerprint)
-            stale = list(scene_dir.glob(f"scene_{index:04d}_*.mp4"))
-            if scene_cache_valid(dest, scene, settings, fingerprint=fingerprint):
-                print(f"      resume scene {index + 1}/{len(scenes)} {dest.name}")
-                parts.append(dest)
-                continue
-            for old in stale:
-                if old != dest and old.exists():
-                    old.unlink()
-                sidecar = old.with_suffix(".json")
-                if sidecar.exists() and sidecar != dest.with_suffix(".json"):
-                    sidecar.unlink()
-            print(f"      encode scene {index + 1}/{len(scenes)} {scene.layout.value}")
-            _encode_one_scene(base, script, scene, dest, settings, canvas, stills)
-            write_scene_sidecar(dest, scene, fingerprint)
+    for index, scene in enumerate(scenes):
+        fingerprint = scene_fingerprint(scene, settings)
+        dest = scene_encode_path(scene_dir, index, fingerprint)
+        stale = list(scene_dir.glob(f"scene_{index:04d}_*.mp4"))
+        if scene_cache_valid(dest, scene, settings, fingerprint=fingerprint):
+            print(f"      resume scene {index + 1}/{len(scenes)} {dest.name}")
             parts.append(dest)
-    finally:
-        base.close()
+            continue
+        for old in stale:
+            if old != dest and old.exists():
+                old.unlink()
+            sidecar = old.with_suffix(".json")
+            if sidecar.exists() and sidecar != dest.with_suffix(".json"):
+                sidecar.unlink()
+        print(f"      encode scene {index + 1}/{len(scenes)} {scene.layout.value}")
+        _encode_one_scene(video_path, script, scene, dest, settings, canvas, stills)
+        write_scene_sidecar(dest, scene, fingerprint)
+        parts.append(dest)
     return parts
 
 
 def _encode_one_scene(
-    a_roll: VideoFileClip,
+    video_path: Path,
     script: EditScript,
     scene: Scene,
     dest: Path,
@@ -234,30 +230,35 @@ def _encode_one_scene(
     canvas: tuple[int, int],
     stills: dict[str, np.ndarray],
 ) -> Path:
-    piece = _compose_scene(a_roll, scene, settings, canvas, stills)
-    if piece is None:
-        raise CompositorError(f"Scene {scene.start:.2f}-{scene.end:.2f} produced no clip")
-    hold = float(piece.duration or scene.duration)
-    layers: list[object] = [piece]
-    for overlay in _scene_overlay_clips(script, scene, canvas):
-        layers.append(overlay)
-    final = CompositeVideoClip(layers, size=canvas).with_duration(hold)
-    start = max(0.0, min(scene.start, float(a_roll.duration or 0)))
-    end = max(start, min(scene.end, float(a_roll.duration or 0)))
-    if a_roll.audio is not None and end > start:
-        final = final.with_audio(a_roll.subclipped(start, end).audio)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    final.write_videofile(
-        str(dest),
-        codec="libx264",
-        audio_codec="aac",
-        fps=a_roll.fps or 30,
-        preset="medium",
-        threads=0,
-        logger=None,
-    )
-    final.close()
-    piece.close()
+    # Open a fresh source clip per scene. MoviePy 2 CompositeVideoClip.close()
+    # closes self.audio, and AudioFileClip.close() kills the shared ffmpeg
+    # reader (proc=None). The audio reader has no initialize() recovery, so
+    # reusing one VideoFileClip then raises None.stdout on the next scene.
+    with VideoFileClip(str(video_path)) as a_roll:
+        piece = _compose_scene(a_roll, scene, settings, canvas, stills)
+        if piece is None:
+            raise CompositorError(f"Scene {scene.start:.2f}-{scene.end:.2f} produced no clip")
+        hold = float(piece.duration or scene.duration)
+        layers: list[object] = [piece]
+        for overlay in _scene_overlay_clips(script, scene, canvas):
+            layers.append(overlay)
+        final = CompositeVideoClip(layers, size=canvas).with_duration(hold)
+        start = max(0.0, min(scene.start, float(a_roll.duration or 0)))
+        end = max(start, min(scene.end, float(a_roll.duration or 0)))
+        if a_roll.audio is not None and end > start:
+            final = final.with_audio(a_roll.subclipped(start, end).audio)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        final.write_videofile(
+            str(dest),
+            codec="libx264",
+            audio_codec="aac",
+            fps=a_roll.fps or 30,
+            preset="medium",
+            threads=0,
+            logger=None,
+        )
+        final.close()
+        piece.close()
     if not dest.exists() or dest.stat().st_size == 0:
         raise CompositorError(f"Scene encode produced no output at {dest}")
     return dest

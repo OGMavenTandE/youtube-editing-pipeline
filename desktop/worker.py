@@ -6,6 +6,7 @@ import contextlib
 import json
 import threading
 import time
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -333,6 +334,8 @@ class PipelineWorker:
             store.mark_error(item.id, str(exc))
             self._set_status(JobStatus.ERROR, item.name)
             self.log(f"Job failed: {exc}")
+            for line in traceback.format_exc().splitlines():
+                self.log(line)
             if self._on_job_done:
                 self._on_job_done(
                     JobResult(
