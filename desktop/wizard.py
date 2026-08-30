@@ -181,7 +181,11 @@ class WizardView(ctk.CTkFrame):
             self._status.set(message)
 
     def _screen_gemini(self) -> None:
-        self._label("Paste your Google AI Studio key. It is written to the app .env and is never logged.")
+        self._label(
+            "Paste your Google AI Studio key. It is saved in the user data "
+            "folder (not next to the EXE), so unzipping a new build keeps it. "
+            "It is never logged."
+        )
         entry = ctk.CTkEntry(self.body, textvariable=self._gemini, show="*", width=420)
         entry.grid(sticky="w", pady=8)
         self._status_label()

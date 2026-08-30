@@ -70,7 +70,11 @@ class Settings(BaseModel):
 
 
 def default_env_file() -> Path:
-    """`.env` next to the install, or `YOUTUBE_PIPELINE_ENV` when set."""
+    """`.env` next to the install, or `YOUTUBE_PIPELINE_ENV` when set.
+
+    The desktop app sets `YOUTUBE_PIPELINE_ENV` to the user-data `.env`
+    so frozen builds do not depend on a file next to the EXE.
+    """
     override = os.getenv("YOUTUBE_PIPELINE_ENV", "").strip()
     if override:
         return Path(override)
