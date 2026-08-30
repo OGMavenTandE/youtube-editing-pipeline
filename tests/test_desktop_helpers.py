@@ -50,11 +50,22 @@ def test_parse_web_client_secret_rejected(tmp_path: Path) -> None:
         raise AssertionError("web client should be rejected")
 
 
-def test_job_failure_logs_traceback(monkeypatch) -> None:
+def test_job_failure_logs_traceback(monkeypatch, tmp_path: Path) -> None:
     from desktop.worker import PipelineWorker
+    from pipeline.config import Settings
 
     logs: list[str] = []
     worker = PipelineWorker(log=logs.append, status=lambda *_: None)
+    monkeypatch.setattr(
+        "desktop.worker.pipeline_settings",
+        lambda: Settings(
+            input_dir=tmp_path / "input",
+            output_dir=tmp_path / "output",
+            work_dir=tmp_path / "work",
+            slides_dir=tmp_path / "slides",
+            scenes_dir=tmp_path / "scenes",
+        ),
+    )
 
     class Store:
         def claim(self, *args: object, **kwargs: object) -> bool:
@@ -67,14 +78,13 @@ def test_job_failure_logs_traceback(monkeypatch) -> None:
         def claim_file(self, file_id: str) -> bool:
             return True
 
+        def download_resumable(self, *args: object, **kwargs: object) -> None:
+            raise AttributeError("'NoneType' object has no attribute 'stdout'")
+
     class Item:
         id = "abc"
         name = "talk.mp4"
 
-    def boom() -> object:
-        raise AttributeError("'NoneType' object has no attribute 'stdout'")
-
-    monkeypatch.setattr("desktop.worker.pipeline_settings", boom)
     worker._process(Client(), Store(), AppConfig(), Item(), "talk")
     text = "\n".join(logs)
     assert any(line.startswith("Job failed:") for line in logs)
