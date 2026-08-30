@@ -1,3 +1,5 @@
+import asyncio  # stdlib may subclass Popen; do that before we patch.
+
 from pipeline.hidden_process import install_hidden_subprocess
 
 install_hidden_subprocess()
