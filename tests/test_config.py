@@ -30,9 +30,38 @@ def test_director_chunk_defaults() -> None:
     assert settings.director_chunk_threshold == 480
 
 
+def test_settings_default_gemini_model() -> None:
+    settings = Settings()
+    assert settings.gemini_model == "gemini-3.6-flash"
+
+
 def test_load_settings_reads_env_file(tmp_path: Path | None = None) -> None:
     env = Path("/tmp/yt-pipe-settings.env")
     env.write_text("GEMINI_API_KEY=test-key\nOUTPUT_WIDTH=1280\n", encoding="utf-8")
     settings = load_settings(env)
     assert settings.gemini_api_key == "test-key"
     assert settings.output_width == 1280
+
+
+def test_load_settings_defaults_gemini_model(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("GEMINI_API_KEY=test-key\n", encoding="utf-8")
+    settings = load_settings(env)
+    assert settings.gemini_model == "gemini-3.6-flash"
+
+
+def test_load_settings_respects_gemini_model_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-custom-pin")
+    env = tmp_path / ".env"
+    env.write_text("GEMINI_API_KEY=test-key\n", encoding="utf-8")
+    settings = load_settings(env)
+    assert settings.gemini_model == "gemini-custom-pin"
+
+
+def test_load_settings_blank_gemini_model_falls_back(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "   ")
+    env = tmp_path / ".env"
+    env.write_text("", encoding="utf-8")
+    settings = load_settings(env)
+    assert settings.gemini_model == "gemini-3.6-flash"

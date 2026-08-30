@@ -26,7 +26,7 @@ Put your Google AI Studio key in `.env`:
 GEMINI_API_KEY=your_key_here
 ```
 
-Optional env vars: `GEMINI_MODEL` (default `gemini-2.5-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`), `TARGET_LUFS` (default `-14`).
+Optional env vars: `GEMINI_MODEL` (default `gemini-3.6-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`), `TARGET_LUFS` (default `-14`).
 
 ## FFmpeg
 
@@ -163,7 +163,7 @@ Each scene encodes to `work/scenes/<stem>/`. If that file already exists and its
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
 1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map that matches the file handed to the director. `--auto-editor` is an optional tighter pass; its cut map uses the rendered duration.
-2. `pipeline/gemini_director.py` — two Gemini 2.5 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Scene windows are text-only and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Micro-resets stay local in `pacing.py`.
+2. `pipeline/gemini_director.py` — two Gemini 3.6 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Scene windows are text-only and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Micro-resets stay local in `pacing.py`.
 3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`.
 4. `pipeline/broll/local.py` — optional `--broll-dir` matcher. Local video files become `BrollAsset` clips for PIP, SPLIT, or FULL_FRAME when the filename matches a query.
 5. `pipeline/compositor.py` — MoviePy 2 encodes each scene on a 1920x1080 canvas to `work/scenes/`, then ffmpeg concat + loudnorm. `FULL_FRAME` is cover-cropped webcam (or a matched B-roll cutaway). `PIP_BOTTOM_RIGHT` is the slide or B-roll plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the graphic over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
