@@ -7,6 +7,7 @@ from pipeline.config import Settings
 from pipeline.gemini_director import (
     GeminiConfigError,
     _audio_part,
+    _transcript_upload_line,
     analyze_video,
     director_windows,
     fit_scenes_to_window,
@@ -259,9 +260,23 @@ def test_analyze_video_requires_api_key() -> None:
     try:
         analyze_video(Path("/tmp/missing.mp4"), Settings(gemini_api_key=""))
     except GeminiConfigError as exc:
-        assert "GEMINI_API_KEY" in str(exc)
+        message = str(exc)
+        assert "Gemini API key is not set" in message
+        assert "GEMINI_API_KEY" not in message
     else:
         raise AssertionError("expected GeminiConfigError")
+
+
+def test_transcript_upload_line_reports_inline_vs_files_api(
+    tmp_path: Path, monkeypatch
+) -> None:
+    small = tmp_path / "talk_gemini.mp3"
+    small.write_bytes(b"x" * 32)
+    assert _transcript_upload_line(small) == "Gemini audio: talk_gemini.mp3 (32 bytes), inline"
+    monkeypatch.setattr("pipeline.gemini_director.INLINE_AUDIO_LIMIT_BYTES", 8)
+    big = tmp_path / "talk_gemini.mp3"
+    big.write_bytes(b"x" * 32)
+    assert _transcript_upload_line(big) == "Gemini audio: talk_gemini.mp3 (32 bytes), Files API"
 
 
 def test_audio_part_small_file_uses_from_bytes(tmp_path: Path) -> None:
@@ -318,7 +333,7 @@ def test_audio_part_large_file_uploads_as_uri_part(tmp_path: Path, monkeypatch) 
 
 
 def test_transcribe_audio_large_file_never_puts_bare_file_in_parts(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr("pipeline.gemini_director.INLINE_AUDIO_LIMIT_BYTES", 8)
     monkeypatch.setattr(
@@ -345,6 +360,8 @@ def test_transcribe_audio_large_file_never_puts_bare_file_in_parts(
     transcript = transcribe_audio(
         path, Settings(gemini_api_key="test"), duration=1.0, client=client
     )
+    printed = capsys.readouterr().out
+    assert "Gemini audio: big.wav (32 bytes), Files API" in printed
     parts = captured["parts"]
     assert isinstance(parts, list)
     assert len(parts) == 2

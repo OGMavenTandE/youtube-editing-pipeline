@@ -119,7 +119,7 @@ Double-click `youtube-pipeline.exe` (or run `python desktop/app.py`). The first 
 
 1. What the app does.
 2. FFmpeg on PATH. If it is missing, the window shows copyable `winget install Gyan.FFmpeg` and `choco install ffmpeg`, plus Recheck. A button can run `playwright install chromium` once.
-3. Gemini key. Saved as `GEMINI_API_KEY` in the app `.env` next to the install. Never logged.
+3. Gemini key. Saved as `GEMINI_API_KEY` in the user data dir (`%APPDATA%\YouTubePipeline\.env` on Windows), not next to the EXE. Unzipping a new build into a new folder keeps the key. Never logged.
 4. Google Drive sign-in. Desktop OAuth client, Drive scope only. Paste `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, or point at `desktop/client_secret.json`. A browser popup completes login. The refresh token is stored with Windows DPAPI (or a user-only file).
 5. Folders. Create or pick `YouTube Pipeline/inbox`, `YouTube Pipeline/outbox`, and `YouTube Pipeline/done`. Folder IDs are saved locally.
 6. Start with Windows. A Startup-folder launcher. Finish.
@@ -171,8 +171,8 @@ Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 7. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder, a title, description, chapters, and a thumbnail candidate, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
 8. `pipeline/drive_io.py` plus `desktop/` — Windows CustomTkinter tray app. Drive API resumable download/upload, claim-by-file-id, move inbox → done, processed-id store. Calls `run.py` / `repack_studio` on a worker thread. No YouTube Data API.
 
-`pipeline/config.py` loads dotenv and typed settings, including canvas size, PiP scale, and `target_lufs`. `pipeline/layouts.py` is the layout enum. Frozen builds treat the folder next to the exe as the install root.
+`pipeline/config.py` loads dotenv and typed settings, including canvas size, PiP scale, and `target_lufs`. `pipeline/layouts.py` is the layout enum. Frozen builds treat the folder next to the exe as the install root. Credentials stay in the user data dir so replacing the EXE zip is safe.
 
 ## Notes
 
-No API keys are stored in the repo. Intermediate media stays in `work/` and is gitignored with `output/`.
+No API keys are stored in the repo. The Windows app keeps the Gemini key and OAuth client values in the user data dir (`%APPDATA%\YouTubePipeline` on Windows). Intermediate media stays in `work/` and is gitignored with `output/`.

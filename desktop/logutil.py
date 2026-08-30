@@ -1,21 +1,37 @@
-"""Sanitize UI log lines so secrets never appear."""
+"""Sanitize UI log lines so secret values never appear.
+
+Key *names* (GEMINI_API_KEY, client_secret, access_token) are not enough
+to hide a line. User-facing errors such as "Gemini API key is not set"
+must stay readable. Only assignments and secret *values* are redacted.
+"""
 
 from __future__ import annotations
 
-_SECRET_MARKERS = (
-    "GEMINI_API_KEY",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "client_secret",
-    "refresh_token",
-    "access_token",
+import re
+
+_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"GEMINI_API_KEY|"
+    r"GOOGLE_OAUTH_CLIENT_SECRET|"
+    r"GOOGLE_OAUTH_CLIENT_ID|"
+    r"refresh_token|"
+    r"access_token|"
+    r"client_secret"
+    r""")\b\s*["']?\s*[:=]\s*["']?[^\s"']+["']?"""
 )
+_AIZA_RE = re.compile(r"AIza[0-9A-Za-z_\-]{20,}")
+_OAUTH_ACCESS_RE = re.compile(r"ya29\.[0-9A-Za-z._\-]+")
+_OAUTH_REFRESH_RE = re.compile(r"1//[0-9A-Za-z_\-]+")
+_LONG_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{40,}(?![A-Za-z0-9+/=_\-])")
 
 
 def sanitize_log_line(line: str) -> str:
     text = line.replace("\r", "").rstrip("\n")
-    upper = text.upper()
-    if any(marker.upper() in upper for marker in _SECRET_MARKERS):
-        return "[redacted]"
+    text = _ASSIGNMENT_RE.sub("[redacted]", text)
+    text = _AIZA_RE.sub("[redacted]", text)
+    text = _OAUTH_ACCESS_RE.sub("[redacted]", text)
+    text = _OAUTH_REFRESH_RE.sub("[redacted]", text)
+    text = _LONG_TOKEN_RE.sub("[redacted]", text)
     return text
 
 

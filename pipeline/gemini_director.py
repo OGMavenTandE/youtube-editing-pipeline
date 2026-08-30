@@ -137,8 +137,7 @@ Return JSON with titles, description, chapters, and tags only.
 def _require_key(settings: Settings) -> None:
     if not settings.gemini_api_key:
         raise GeminiConfigError(
-            "GEMINI_API_KEY is not set. Copy .env.example to .env and add a "
-            "Google AI Studio key. Do not commit the key."
+            "Gemini API key is not set. Open Settings and paste a Google AI Studio key."
         )
 
 
@@ -515,6 +514,13 @@ def _metadata_user_text(transcript: TimedTranscript, duration: float) -> str:
     return "\n".join(parts)
 
 
+def _transcript_upload_line(audio_path: Path) -> str:
+    """Stdout line the desktop UI log can show before the transcript call."""
+    size = audio_path.stat().st_size
+    mode = "inline" if size <= INLINE_AUDIO_LIMIT_BYTES else "Files API"
+    return f"Gemini audio: {audio_path.name} ({size} bytes), {mode}"
+
+
 def transcribe_audio(
     audio_path: Path,
     settings: Settings,
@@ -527,6 +533,7 @@ def transcribe_audio(
         raise FileNotFoundError(f"Audio not found: {audio_path}")
     audio_path = _prepare_transcript_audio(audio_path, settings)
     api = client or _client(settings)
+    print(_transcript_upload_line(audio_path), flush=True)
     payload = _generate_json(
         api,
         model=settings.gemini_model,

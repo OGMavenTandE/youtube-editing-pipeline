@@ -1,8 +1,14 @@
-"""Install, .env, and per-user data paths for the desktop app."""
+"""Install, .env, and per-user data paths for the desktop app.
+
+Credentials live in the user data dir so replacing the EXE zip is safe.
+Frozen builds use %APPDATA%\\YouTubePipeline\\.env (or XDG on Unix).
+Source checkouts keep using the repo-root .env.
+"""
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -25,10 +31,37 @@ def install_root() -> Path:
 
 
 def env_path() -> Path:
+    """Return the app `.env` path.
+
+    `YOUTUBE_PIPELINE_ENV` wins. Frozen builds prefer
+    `user_data_dir() / ".env"` and copy a leftover install-root `.env`
+    on first run. Source checkouts keep repo-root `.env`.
+    """
     override = os.getenv("YOUTUBE_PIPELINE_ENV", "").strip()
     if override:
         return Path(override)
-    return install_root() / ".env"
+    if not is_frozen():
+        return install_root() / ".env"
+    dest = user_data_dir() / ".env"
+    migrate_install_env(dest)
+    return dest
+
+
+def migrate_install_env(dest: Path) -> Path:
+    """Copy install-root `.env` to dest when dest is missing.
+
+    Never overwrites an existing AppData file, even if the install-root
+    copy is newer.
+    """
+    dest = Path(dest)
+    if dest.is_file():
+        return dest
+    legacy = install_root() / ".env"
+    if not legacy.is_file():
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(legacy, dest)
+    return dest
 
 
 def client_secret_candidates(extra: str | Path | None = None) -> list[Path]:

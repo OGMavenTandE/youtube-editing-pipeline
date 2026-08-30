@@ -6,7 +6,7 @@ from desktop.config_store import AppConfig, load_config, save_config
 from desktop.envfile import read_env_value, upsert_env_value
 from desktop.logutil import sanitize_log_line
 from desktop.oauth import OAuthConfigError, parse_client_secret_json
-from desktop.paths import client_secret_candidates
+from desktop.paths import client_secret_candidates, env_path, migrate_install_env
 from pipeline.config import default_env_file
 
 
@@ -55,6 +55,35 @@ def test_sanitize_log_hides_key() -> None:
     assert sanitize_log_line("Downloading talk.mp4") == "Downloading talk.mp4"
 
 
+def test_sanitize_log_keeps_missing_key_error() -> None:
+    line = "Gemini API key is not set. Open Settings and paste a Google AI Studio key."
+    assert sanitize_log_line(line) == line
+    named = "GEMINI_API_KEY is not set. Copy .env.example to .env"
+    assert sanitize_log_line(named) == named
+
+
+def test_sanitize_log_keeps_key_names_without_values() -> None:
+    secret_file = "Could not find client_secret.json next to the EXE."
+    assert sanitize_log_line(secret_file) == secret_file
+    token_name = "Failed to refresh access_token from disk."
+    assert sanitize_log_line(token_name) == token_name
+
+
+def test_sanitize_log_redacts_secret_values() -> None:
+    aiza = "Using key AIzaSyA-test-key-value-1234567890abcd"
+    cleaned = sanitize_log_line(aiza)
+    assert "AIza" not in cleaned
+    assert "[redacted]" in cleaned
+    assigned = sanitize_log_line("access_token=ya29.a0AfH6SMB-very-long-token-value-here")
+    assert "ya29" not in assigned
+    assert assigned == "[redacted]"
+    jsonish = sanitize_log_line('{"refresh_token": "1//0eVeryLongRefreshTokenValueHere"}')
+    assert "1//" not in jsonish
+    assert "[redacted]" in jsonish
+    long_token = "token " + ("AbCdEfGh" * 8)
+    assert "AbCdEfGh" not in sanitize_log_line(long_token)
+
+
 def test_config_roundtrip(tmp_path: Path) -> None:
     path = tmp_path / "app_config.json"
     saved = save_config(
@@ -98,3 +127,63 @@ def test_default_env_file_override(monkeypatch, tmp_path: Path) -> None:
     custom = tmp_path / "custom.env"
     monkeypatch.setenv("YOUTUBE_PIPELINE_ENV", str(custom))
     assert default_env_file() == custom
+
+
+def test_env_path_override_wins(monkeypatch, tmp_path: Path) -> None:
+    custom = tmp_path / "custom.env"
+    monkeypatch.setenv("YOUTUBE_PIPELINE_ENV", str(custom))
+    monkeypatch.setattr("desktop.paths.is_frozen", lambda: True)
+    assert env_path() == custom
+
+
+def test_env_path_source_checkout_uses_repo_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("YOUTUBE_PIPELINE_ENV", raising=False)
+    monkeypatch.setattr("desktop.paths.is_frozen", lambda: False)
+    monkeypatch.setattr("desktop.paths.install_root", lambda: tmp_path)
+    assert env_path() == tmp_path / ".env"
+
+
+def test_env_path_frozen_prefers_appdata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("YOUTUBE_PIPELINE_ENV", raising=False)
+    appdata = tmp_path / "appdata"
+    install = tmp_path / "install"
+    appdata.mkdir()
+    install.mkdir()
+    (appdata / ".env").write_text("GEMINI_API_KEY=from-appdata\n", encoding="utf-8")
+    (install / ".env").write_text("GEMINI_API_KEY=from-install\n", encoding="utf-8")
+    monkeypatch.setattr("desktop.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("desktop.paths.user_data_dir", lambda: appdata)
+    monkeypatch.setattr("desktop.paths.install_root", lambda: install)
+    dest = env_path()
+    assert dest == appdata / ".env"
+    assert dest.read_text(encoding="utf-8") == "GEMINI_API_KEY=from-appdata\n"
+
+
+def test_env_path_migrates_from_install_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("YOUTUBE_PIPELINE_ENV", raising=False)
+    appdata = tmp_path / "appdata"
+    install = tmp_path / "install"
+    appdata.mkdir()
+    install.mkdir()
+    (install / ".env").write_text("GEMINI_API_KEY=legacy\n", encoding="utf-8")
+    monkeypatch.setattr("desktop.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("desktop.paths.user_data_dir", lambda: appdata)
+    monkeypatch.setattr("desktop.paths.install_root", lambda: install)
+    dest = env_path()
+    assert dest == appdata / ".env"
+    assert dest.is_file()
+    assert dest.read_text(encoding="utf-8") == "GEMINI_API_KEY=legacy\n"
+    assert (install / ".env").read_text(encoding="utf-8") == "GEMINI_API_KEY=legacy\n"
+
+
+def test_migrate_install_env_does_not_overwrite_appdata(tmp_path: Path, monkeypatch) -> None:
+    appdata = tmp_path / "appdata"
+    install = tmp_path / "install"
+    appdata.mkdir()
+    install.mkdir()
+    dest = appdata / ".env"
+    dest.write_text("GEMINI_API_KEY=keep-me\n", encoding="utf-8")
+    (install / ".env").write_text("GEMINI_API_KEY=ignore-me\n", encoding="utf-8")
+    monkeypatch.setattr("desktop.paths.install_root", lambda: install)
+    assert migrate_install_env(dest) == dest
+    assert dest.read_text(encoding="utf-8") == "GEMINI_API_KEY=keep-me\n"
