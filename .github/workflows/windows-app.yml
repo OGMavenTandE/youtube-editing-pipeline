@@ -24,8 +24,16 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Install Playwright Chromium
+        run: |
+          $env:PLAYWRIGHT_BROWSERS_PATH = "0"
+          python -m playwright install chromium
+
       - name: Build youtube-pipeline.exe
         run: pyinstaller --noconfirm desktop/youtube-pipeline.spec
+
+      - name: Bundle Chromium into dist
+        run: python -m desktop.playwright_runtime dist/youtube-pipeline
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4

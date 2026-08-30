@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-folder Windows build. Playwright Chromium and FFmpeg stay on the PC."""
+"""One-folder Windows build. Chromium is bundled; FFmpeg stays on the PC."""
 
 import sys
 from pathlib import Path
@@ -57,6 +57,22 @@ datas += [
     (str(ROOT / "run.py"), "."),
     (str(ROOT / ".env.example"), "."),
 ]
+
+
+def _playwright_local_browsers():
+    try:
+        import playwright
+    except Exception:
+        return None
+    path = Path(playwright.__file__).resolve().parent / "driver" / "package" / ".local-browsers"
+    if path.is_dir() and any(path.iterdir()):
+        return path
+    return None
+
+
+_pw_browsers = _playwright_local_browsers()
+if _pw_browsers is not None:
+    datas += [(str(_pw_browsers), "playwright/driver/package/.local-browsers")]
 
 hiddenimports += [
     "run",

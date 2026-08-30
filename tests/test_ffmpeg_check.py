@@ -8,6 +8,7 @@ from pipeline.config import which_or_path
 from desktop.ffmpeg_check import (
     REG_EXPAND_SZ,
     check_ffmpeg,
+    check_playwright,
     common_ffmpeg_probe_paths,
     expand_registry_path,
     first_existing_file,
@@ -236,6 +237,16 @@ def test_adopted_bin_dir_makes_ffprobe_visible_to_which(monkeypatch, tmp_path: P
     _adopt_ffmpeg_bin(str(ffmpeg))
     assert which_or_path("ffprobe") == str(probe)
     assert sibling_ffprobe(ffmpeg) == probe
+
+
+def test_check_playwright_hint_frozen_points_at_settings(monkeypatch) -> None:
+    monkeypatch.setattr("desktop.paths.is_frozen", lambda: True)
+    monkeypatch.setattr("desktop.ffmpeg_check.playwright_chromium_ok", lambda: False)
+    check = check_playwright()
+    assert not check.found
+    assert "Install Chromium" in check.hint
+    assert "Recheck" in check.hint
+    assert "box drawing" not in check.hint.lower()
 
 
 def test_check_ffmpeg_not_found_keeps_hint(monkeypatch) -> None:
