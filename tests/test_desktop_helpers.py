@@ -50,6 +50,39 @@ def test_parse_web_client_secret_rejected(tmp_path: Path) -> None:
         raise AssertionError("web client should be rejected")
 
 
+def test_job_failure_logs_traceback(monkeypatch) -> None:
+    from desktop.worker import PipelineWorker
+
+    logs: list[str] = []
+    worker = PipelineWorker(log=logs.append, status=lambda *_: None)
+
+    class Store:
+        def claim(self, *args: object, **kwargs: object) -> bool:
+            return True
+
+        def mark_error(self, file_id: str, message: str) -> None:
+            return None
+
+    class Client:
+        def claim_file(self, file_id: str) -> bool:
+            return True
+
+    class Item:
+        id = "abc"
+        name = "talk.mp4"
+
+    def boom() -> object:
+        raise AttributeError("'NoneType' object has no attribute 'stdout'")
+
+    monkeypatch.setattr("desktop.worker.pipeline_settings", boom)
+    worker._process(Client(), Store(), AppConfig(), Item(), "talk")
+    text = "\n".join(logs)
+    assert any(line.startswith("Job failed:") for line in logs)
+    assert "Traceback (most recent call last):" in text
+    assert "AttributeError" in text
+    assert "stdout" in text
+
+
 def test_sanitize_log_hides_key() -> None:
     assert sanitize_log_line("GEMINI_API_KEY=secret-value") == "[redacted]"
     assert sanitize_log_line("Downloading talk.mp4") == "Downloading talk.mp4"

@@ -1,8 +1,11 @@
+import shutil
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from pipeline.compositor import (
+    _encode_scenes,
     cover_scale,
     pip_rect,
     render_video,
@@ -91,6 +94,57 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
     assert info == (1920, 1080)
 
 
+def test_two_scenes_do_not_poison_source_audio_reader(tmp_path: Path) -> None:
+    """Second scene must encode after the first close() (MoviePy None.stdout)."""
+    _require_ffmpeg()
+    source = tmp_path / "source.mp4"
+    # MoviePy AudioFileClip buffers ~4.5s. A 3s fixture never leaves that
+    # buffer, so the closed reader is never touched. Use 8s / 3s+3s.
+    _write_source_video(source, seconds=8)
+    settings = Settings(
+        output_width=640,
+        output_height=360,
+        work_dir=tmp_path,
+        output_dir=tmp_path,
+        slides_dir=tmp_path,
+        scenes_dir=tmp_path / "scenes",
+    )
+    scenes = [
+        Scene(
+            start=0,
+            end=3,
+            layout=LayoutKind.FULL_FRAME,
+            graphic=GraphicCard(title="Talk"),
+        ),
+        Scene(
+            start=3,
+            end=6,
+            layout=LayoutKind.SPLIT_TOP,
+            graphic=GraphicCard(title="Claim"),
+        ),
+    ]
+    script = EditScript(scenes=scenes)
+    canvas = (settings.output_width, settings.output_height)
+    scene_dir = (settings.scenes_dir / source.stem).resolve()
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    parts = _encode_scenes(source, script, scenes, scene_dir, settings, canvas)
+    assert len(parts) == 2
+    for index, (part, scene) in enumerate(zip(parts, scenes)):
+        assert part.is_file()
+        assert part.stat().st_size > 0
+        fingerprint = scene_fingerprint(scene, settings)
+        assert part == scene_encode_path(scene_dir, index, fingerprint)
+        assert scene_cache_valid(part, scene, settings, fingerprint=fingerprint)
+
+    # Resume must still skip a finished scene and encode the rest.
+    parts[1].unlink()
+    parts[1].with_suffix(".json").unlink(missing_ok=True)
+    resumed = _encode_scenes(source, script, scenes, scene_dir, settings, canvas)
+    assert resumed[0] == parts[0]
+    assert resumed[1].is_file()
+    assert resumed[1].stat().st_size > 0
+
+
 def test_scene_cache_skips_when_fingerprint_matches() -> None:
     work = Path("/tmp/yt-pipe-scene-resume")
     work.mkdir(parents=True, exist_ok=True)
@@ -110,7 +164,12 @@ def test_scene_cache_skips_when_fingerprint_matches() -> None:
     assert not scene_cache_valid(dest, changed, settings)
 
 
-def _write_source_video(path: Path) -> None:
+def _require_ffmpeg() -> None:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not on PATH")
+
+
+def _write_source_video(path: Path, seconds: float = 3) -> None:
     frame = work_frame()
     png = path.with_suffix(".png")
     frame.save(png)
@@ -126,9 +185,9 @@ def _write_source_video(path: Path) -> None:
         "-f",
         "lavfi",
         "-i",
-        "sine=frequency=440:duration=3",
+        f"sine=frequency=440:duration={seconds}",
         "-t",
-        "3",
+        str(seconds),
         "-c:v",
         "libx264",
         "-pix_fmt",
