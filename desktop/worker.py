@@ -12,13 +12,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-import ffmpeg
-
 from .config_store import AppConfig, load_config, save_config
 from .logutil import LogWriter, sanitize_log_line
 from .oauth import build_drive_service, load_saved_credentials
 from .paths import env_path, install_root, processed_ids_path
-from pipeline.config import Settings, load_settings, require_ffprobe
+from pipeline.config import Settings, load_settings
 from pipeline.drive_io import (
     DriveClient,
     ProcessedIdStore,
@@ -89,8 +87,9 @@ def invoke_run_py(argv: list[str], log: LogFn) -> int:
 
 
 def probe_landscape(path: Path, settings: Settings) -> bool:
-    ffprobe = require_ffprobe(settings)
-    info = ffmpeg.probe(str(path), cmd=ffprobe)
+    from pipeline.media import probe_media
+
+    info = probe_media(path, settings)
     for stream in info.get("streams", []):
         if stream.get("codec_type") != "video":
             continue
@@ -386,6 +385,10 @@ class PipelineWorker:
 def prepare_runtime_env() -> None:
     """Point the CLI settings loader at the app .env and writable media dirs."""
     import os
+
+    from pipeline.hidden_process import install_hidden_subprocess
+
+    install_hidden_subprocess()
 
     root = install_root()
     os.environ.setdefault("YOUTUBE_PIPELINE_ENV", str(env_path()))

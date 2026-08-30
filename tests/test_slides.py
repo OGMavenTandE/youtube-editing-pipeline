@@ -81,6 +81,16 @@ def test_filename_suffixes() -> None:
     assert slide_filename("slide_a", SlideVariant.LOWER_THIRD) == "slide_a_lt.png"
 
 
+def test_playwright_launches_are_headless() -> None:
+    slides = Path(__file__).resolve().parent.parent / "pipeline" / "broll" / "slides.py"
+    studio = Path(__file__).resolve().parent.parent / "pipeline" / "studio.py"
+    check = Path(__file__).resolve().parent.parent / "desktop" / "ffmpeg_check.py"
+    for path in (slides, studio, check):
+        text = path.read_text(encoding="utf-8")
+        assert "chromium.launch(headless=True)" in text
+        assert "chromium.launch()" not in text.replace("chromium.launch(headless=True)", "")
+
+
 def test_playwright_renders_1920x1080_pngs(tmp_path: Path | None = None) -> None:
     dest = Path("/tmp/yt-pipe-slide-test")
     dest.mkdir(parents=True, exist_ok=True)

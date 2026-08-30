@@ -334,6 +334,9 @@ def run_repack(args: argparse.Namespace, settings: Settings) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from pipeline.hidden_process import install_hidden_subprocess
+
+    install_hidden_subprocess()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.repack_studio and getattr(args, "skip_studio", False):

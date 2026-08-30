@@ -7,6 +7,7 @@ from pathlib import Path
 from pydub import AudioSegment, silence as pydub_silence
 
 from pipeline.config import Settings, require_ffmpeg
+from pipeline.hidden_process import run_hidden
 from pipeline.media import MediaError, concat_keep_ranges, extract_audio, probe_duration
 from pipeline.models import SilenceCutMap, SilenceTrimResult, TimeRange
 
@@ -191,7 +192,7 @@ def _render_auto_editor(
         str(dest),
         "--no-open",
     ]
-    rendered = subprocess.run(render, capture_output=True, text=True)
+    rendered = run_hidden(render, capture_output=True, text=True)
     if rendered.returncode != 0 or not dest.exists():
         raise MediaError(rendered.stderr or "auto-editor render failed")
     actual = probe_duration(dest, settings)

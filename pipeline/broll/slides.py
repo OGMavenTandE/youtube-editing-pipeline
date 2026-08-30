@@ -155,7 +155,7 @@ class SlideProvider:
         try:
             with sync_playwright() as playwright:
                 try:
-                    browser = playwright.chromium.launch()
+                    browser = playwright.chromium.launch(headless=True)
                 except PlaywrightError as exc:
                     raise PlaywrightNotFoundError(_chromium_help(exc)) from exc
                 try:

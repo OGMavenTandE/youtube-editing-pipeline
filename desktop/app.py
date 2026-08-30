@@ -25,11 +25,15 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = io.StringIO()
 
+from pipeline.hidden_process import install_hidden_subprocess
+
 from .config_store import AppConfig, ensure_user_data, load_config
 from .paths import install_root
 from .tray import TrayController
 from .worker import JobResult, JobStatus, PipelineWorker, prepare_runtime_env
 from .wizard import WizardView
+
+install_hidden_subprocess()
 
 
 def build_parser() -> argparse.ArgumentParser:
