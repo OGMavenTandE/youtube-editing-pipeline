@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from desktop.paths import config_path, user_data_dir
+from .paths import config_path, user_data_dir
 
 
 class AppConfig(BaseModel):

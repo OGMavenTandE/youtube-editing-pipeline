@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
-from desktop.worker import JobStatus
+from .worker import JobStatus
 
 ShowFn = Callable[[], None]
 QuitFn = Callable[[], None]

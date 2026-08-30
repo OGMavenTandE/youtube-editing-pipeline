@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from desktop.paths import launch_command
+from .paths import launch_command
 
 STARTUP_NAME = "YouTube Pipeline.bat"
 

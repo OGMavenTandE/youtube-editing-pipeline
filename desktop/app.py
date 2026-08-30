@@ -8,20 +8,28 @@ import io
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# `python desktop/app.py` is not a package import. Put the repo root on
+# sys.path and set __package__ so relative imports resolve. Frozen EXE
+# entry is desktop/__main__.py; the runtime hook owns sys.path there.
+if __package__ in (None, ""):
+    if not getattr(sys, "frozen", False):
+        _root = Path(__file__).resolve().parent.parent
+        if str(_root) not in sys.path:
+            sys.path.insert(0, str(_root))
+    __package__ = "desktop"
+    if "desktop" not in sys.modules:
+        import desktop as _desktop_pkg  # noqa: F401
 
 if sys.stdout is None:
     sys.stdout = io.StringIO()
 if sys.stderr is None:
     sys.stderr = io.StringIO()
 
-from desktop.config_store import AppConfig, ensure_user_data, load_config
-from desktop.paths import install_root
-from desktop.tray import TrayController
-from desktop.worker import JobResult, JobStatus, PipelineWorker, prepare_runtime_env
-from desktop.wizard import WizardView
+from .config_store import AppConfig, ensure_user_data, load_config
+from .paths import install_root
+from .tray import TrayController
+from .worker import JobResult, JobStatus, PipelineWorker, prepare_runtime_env
+from .wizard import WizardView
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,7 +89,7 @@ class DesktopApp:
         self._wizard.pack(fill="both", expand=True)
 
     def _show_main(self) -> None:
-        from desktop.main_window import MainView
+        from .main_window import MainView
 
         self._clear_root()
         self._main = MainView(self.root, worker=self.worker, on_quit=self.quit_app)

@@ -6,23 +6,23 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from desktop.config_store import AppConfig, load_config, save_config
-from desktop.envfile import read_env_value, upsert_env_value
-from desktop.ffmpeg_check import (
+from .config_store import AppConfig, load_config, save_config
+from .envfile import read_env_value, upsert_env_value
+from .ffmpeg_check import (
     check_ffmpeg,
     check_playwright,
     copyable_ffmpeg_help,
     install_playwright_chromium,
 )
-from desktop.oauth import (
+from .oauth import (
     OAuthConfigError,
     load_client_id_secret,
     load_saved_credentials,
     run_installed_app_flow,
     signed_in,
 )
-from desktop.paths import env_path, first_existing_client_secret
-from desktop.startup import set_startup, startup_enabled
+from .paths import env_path, first_existing_client_secret
+from .startup import set_startup, startup_enabled
 from pipeline.drive_io import (
     DriveClient,
     PIPELINE_ROOT_NAME,
@@ -256,7 +256,7 @@ class WizardView(ctk.CTkFrame):
         if creds is None:
             self._status.set("Sign in on the previous screen first.")
             return None
-        from desktop.oauth import build_drive_service
+        from .oauth import build_drive_service
 
         return DriveClient(build_drive_service(creds))
 
