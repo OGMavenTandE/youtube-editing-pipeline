@@ -121,6 +121,8 @@ def test_spec_collects_desktop_and_pipeline_submodules() -> None:
     assert "pyi_rth_syspath.py" in text
     assert 'ROOT / "desktop" / "__main__.py"' in text
     assert 'ROOT / "desktop" / "app.py"' not in text
+    assert ".local-browsers" in text
+    assert "playwright/driver/package/.local-browsers" in text
 
 
 def test_default_env_file_override(monkeypatch, tmp_path: Path) -> None:

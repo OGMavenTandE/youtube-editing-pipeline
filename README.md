@@ -104,7 +104,7 @@ Always-on desktop watcher for the same local pipeline. No terminal. No YouTube u
 
 ### Download
 
-GitHub Actions builds `youtube-pipeline.exe` (one-folder) on every pull request and on tags. Open the workflow run → Artifacts → `youtube-pipeline-windows`. Unzip next to a writable folder. FFmpeg and Playwright Chromium are not inside the zip. They stay on the PC.
+GitHub Actions builds `youtube-pipeline.exe` (one-folder) on every pull request and on tags. Open the workflow run → Artifacts → `youtube-pipeline-windows`. Unzip next to a writable folder. Chromium is bundled in the zip and copied to `%APPDATA%\YouTubePipeline\ms-playwright` so a later unzip does not wipe it. FFmpeg stays on the PC.
 
 From a source checkout:
 
@@ -118,7 +118,7 @@ python desktop/app.py
 Double-click `youtube-pipeline.exe` (or run `python desktop/app.py`). The first launch walks through one question per screen:
 
 1. What the app does.
-2. FFmpeg on PATH. If it is missing, the window shows copyable `winget install Gyan.FFmpeg` and `choco install ffmpeg`, plus Recheck. A button can run `playwright install chromium` once.
+2. FFmpeg on PATH. If it is missing, the window shows copyable `winget install Gyan.FFmpeg` and `choco install ffmpeg`, plus Recheck. Install Chromium uses the bundled Playwright driver (no system Python) and writes to AppData.
 3. Gemini key. Saved as `GEMINI_API_KEY` in the user data dir (`%APPDATA%\YouTubePipeline\.env` on Windows), not next to the EXE. Unzipping a new build into a new folder keeps the key. Never logged.
 4. Google Drive sign-in. Desktop OAuth client, Drive scope only. Paste `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`, or point at `desktop/client_secret.json`. A browser popup completes login. The refresh token is stored with Windows DPAPI (or a user-only file).
 5. Folders. Create or pick `YouTube Pipeline/inbox`, `YouTube Pipeline/outbox`, and `YouTube Pipeline/done`. Folder IDs are saved locally.

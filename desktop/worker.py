@@ -383,7 +383,7 @@ class PipelineWorker:
 
 
 def prepare_runtime_env() -> None:
-    """Point the CLI settings loader at the app .env and writable media dirs."""
+    """Point the CLI at the app .env, writable media dirs, and Chromium."""
     import os
 
     from pipeline.hidden_process import install_hidden_subprocess
@@ -397,3 +397,7 @@ def prepare_runtime_env() -> None:
     os.environ.setdefault("WORK_DIR", str(root / "work"))
     os.environ.setdefault("SLIDES_DIR", str(root / "work" / "slides"))
     os.environ.setdefault("SCENES_DIR", str(root / "work" / "scenes"))
+
+    from .playwright_runtime import configure_playwright_browsers
+
+    configure_playwright_browsers()

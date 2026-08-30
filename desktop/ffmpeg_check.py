@@ -12,6 +12,13 @@ from pathlib import Path
 
 from pipeline.config import load_settings, which_or_path
 
+from .playwright_runtime import (
+    SETTINGS_CHROMIUM_HINT,
+    chromium_user_hint,
+    playwright_install_argv,
+    playwright_install_environ,
+)
+
 HKLM_ENV_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
 HKCU_ENV_KEY = "Environment"
 # winreg.REG_EXPAND_SZ. Kept numeric so tests do not import winreg.
@@ -19,7 +26,6 @@ REG_EXPAND_SZ = 2
 
 WINGET_FFMPEG = "winget install Gyan.FFmpeg"
 CHOCO_FFMPEG = "choco install ffmpeg"
-PLAYWRIGHT_INSTALL = "playwright install chromium"
 
 
 @dataclass(frozen=True)
@@ -261,17 +267,17 @@ def check_playwright() -> ToolCheck:
         name="Playwright Chromium",
         found=found,
         path=None,
-        hint=PLAYWRIGHT_INSTALL,
+        hint=chromium_user_hint(),
     )
 
 
 def install_playwright_chromium() -> tuple[bool, str]:
-    """Run the official install once. Returns (ok, friendly message)."""
+    """Install Chromium once. Frozen EXE uses bundled node+cli, not system Python."""
     command = _playwright_install_argv()
     if command is None:
         return False, (
-            "Could not find a Python that can run Playwright. "
-            f"In a terminal, run: {PLAYWRIGHT_INSTALL}"
+            "Could not find the bundled Playwright driver. "
+            f"{SETTINGS_CHROMIUM_HINT}"
         )
     try:
         from pipeline.hidden_process import run_hidden
@@ -282,32 +288,28 @@ def install_playwright_chromium() -> tuple[bool, str]:
             text=True,
             timeout=600,
             check=False,
+            env=playwright_install_environ(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False, (
             "Chromium could not be installed from the app. "
-            f"In a terminal, run: {PLAYWRIGHT_INSTALL}"
+            f"{chromium_user_hint()}"
         )
     if result.returncode != 0:
         return False, (
             "Chromium could not be installed from the app. "
-            f"In a terminal, run: {PLAYWRIGHT_INSTALL}"
+            f"{chromium_user_hint()}"
         )
     if playwright_chromium_ok():
         return True, "Chromium is installed."
     return False, (
         "The installer finished but Chromium is still missing. "
-        f"In a terminal, run: {PLAYWRIGHT_INSTALL}"
+        f"{chromium_user_hint()}"
     )
 
 
 def _playwright_install_argv() -> list[str] | None:
-    if not getattr(sys, "frozen", False):
-        return [sys.executable, "-m", "playwright", "install", "chromium"]
-    python = shutil.which("python") or shutil.which("python3") or shutil.which("py")
-    if python:
-        return [python, "-m", "playwright", "install", "chromium"]
-    return None
+    return playwright_install_argv()
 
 
 def copyable_ffmpeg_help() -> str:

@@ -226,11 +226,9 @@ def _safe_id(value: str) -> str:
     return cleaned.strip("_") or "slide"
 
 
-def _chromium_help(exc: Exception) -> str:
+def _chromium_help(_exc: Exception) -> str:
     return (
-        "Playwright Chromium was not available.\n"
-        "Install it, then retry:\n"
-        "  pip install playwright\n"
-        "  playwright install chromium\n"
-        f"Original error: {exc}"
+        "Playwright Chromium is not installed.\n"
+        "Open Settings and click Install Chromium, then Recheck.\n"
+        "From a source checkout, run: playwright install chromium"
     )

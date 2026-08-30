@@ -4,6 +4,7 @@ from PIL import Image
 
 from pipeline.broll.base import BrollSpec, SlideVariant
 from pipeline.broll.slides import (
+    _chromium_help,
     build_slide_html,
     collect_slide_jobs,
     ensure_slide_id,
@@ -79,6 +80,22 @@ def test_filename_suffixes() -> None:
     assert slide_filename("slide_a", SlideVariant.PIP_CLAIM) == "slide_a_pip.png"
     assert slide_filename("slide_a", SlideVariant.SPLIT) == "slide_a_split.png"
     assert slide_filename("slide_a", SlideVariant.LOWER_THIRD) == "slide_a_lt.png"
+
+
+def test_chromium_help_points_at_settings_not_banner() -> None:
+    banner = (
+        "Playwright Chromium was not available.\n"
+        "╔════════════════════════════════════════════╗\n"
+        "║     playwright install                     ║\n"
+        "╚════════════════════════════════════════════╝\n"
+        "Executable doesn't exist at C:\\\\bundled\\\\chrome-headless-shell.exe"
+    )
+    message = _chromium_help(Exception(banner))
+    assert "Open Settings and click Install Chromium" in message
+    assert "Recheck" in message
+    assert "╔" not in message
+    assert "Executable doesn't exist" not in message
+    assert banner not in message
 
 
 def test_playwright_launches_are_headless() -> None:
