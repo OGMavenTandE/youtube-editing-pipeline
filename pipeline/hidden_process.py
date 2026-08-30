@@ -4,6 +4,10 @@ ffmpeg, ffprobe, auto-editor, MoviePy, and pydub all spawn tools via
 subprocess. On Windows, that flashes a console even with capture_output=True
 unless CREATE_NO_WINDOW is set. The CustomTkinter tray/wizard is this
 process; do not hide it.
+
+subprocess.Popen must stay a class. CPython asyncio/windows_utils.py does
+`class Popen(subprocess.Popen)` on Windows. Assigning a function there
+raises TypeError: function() argument 'code' must be code, not str.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from typing import Any
 # Windows CREATE_NO_WINDOW. Defined here so tests can assert the value on Linux.
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
-_original_popen: Any | None = None
+_original_popen: type[subprocess.Popen[Any]] | None = None
 
 
 def hidden_popen_kwargs() -> dict[str, Any]:
@@ -32,35 +36,40 @@ def hidden_popen_kwargs() -> dict[str, Any]:
     return kwargs
 
 
+def _merge_hidden_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    extra = hidden_popen_kwargs()
+    if not extra:
+        return kwargs
+    merged = dict(kwargs)
+    flags = int(merged.get("creationflags", 0) or 0) | int(extra.get("creationflags", 0) or 0)
+    merged["creationflags"] = flags
+    if extra.get("startupinfo") is not None and merged.get("startupinfo") is None:
+        merged["startupinfo"] = extra["startupinfo"]
+    return merged
+
+
+class HiddenPopen(subprocess.Popen):
+    """subprocess.Popen that ORs in CREATE_NO_WINDOW / STARTUPINFO on Windows."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **_merge_hidden_kwargs(kwargs))
+
+
 def run_hidden(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     """subprocess.run with Windows console-hide flags merged in."""
-    extra = hidden_popen_kwargs()
-    if extra:
-        flags = int(kwargs.get("creationflags", 0) or 0) | int(extra.get("creationflags", 0) or 0)
-        kwargs["creationflags"] = flags
-        if extra.get("startupinfo") is not None and kwargs.get("startupinfo") is None:
-            kwargs["startupinfo"] = extra["startupinfo"]
-    return subprocess.run(args, **kwargs)
+    return subprocess.run(args, **_merge_hidden_kwargs(kwargs))
 
 
 def install_hidden_subprocess() -> None:
     """Patch subprocess.Popen so ffmpeg-python, MoviePy, and pydub stay windowless.
 
-    No-op on non-Windows. Safe to call more than once.
+    Assigns HiddenPopen (a class), never a function. Safe to call more than once.
+    No-op on non-Windows.
     """
     global _original_popen
-    if sys.platform != "win32" or _original_popen is not None:
+    if sys.platform != "win32":
         return
-    extra = hidden_popen_kwargs()
-    if not extra:
+    if _original_popen is not None or subprocess.Popen is HiddenPopen:
         return
     _original_popen = subprocess.Popen
-
-    def hidden_popen(*args: Any, **kwargs: Any) -> Any:
-        flags = int(kwargs.get("creationflags", 0) or 0) | int(extra.get("creationflags", 0) or 0)
-        kwargs["creationflags"] = flags
-        if extra.get("startupinfo") is not None and kwargs.get("startupinfo") is None:
-            kwargs["startupinfo"] = extra["startupinfo"]
-        return _original_popen(*args, **kwargs)
-
-    subprocess.Popen = hidden_popen  # type: ignore[misc, assignment]
+    subprocess.Popen = HiddenPopen
