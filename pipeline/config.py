@@ -27,7 +27,7 @@ class Settings(BaseModel):
     """Runtime settings loaded from the environment and optional .env file."""
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     silence_min_duration: float = Field(default=0.7, ge=0.0)
@@ -92,8 +92,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
             ffprobe_default = str(sibling)
     return Settings(
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
-        or "gemini-2.5-flash",
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+        or "gemini-3.6-flash",
         ffmpeg_bin=ffmpeg_bin,
         ffprobe_bin=os.getenv("FFPROBE_PATH") or os.getenv("FFPROBE_BIN") or ffprobe_default,
         silence_min_duration=float(os.getenv("SILENCE_MIN_DURATION", "0.7")),
