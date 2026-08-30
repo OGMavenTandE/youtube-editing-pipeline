@@ -1,8 +1,12 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+from google.genai import types
 
 from pipeline.config import Settings
 from pipeline.gemini_director import (
     GeminiConfigError,
+    _audio_part,
     analyze_video,
     director_windows,
     fit_scenes_to_window,
@@ -10,6 +14,7 @@ from pipeline.gemini_director import (
     parse_transcript,
     plan_from_transcript,
     stitch_director_plans,
+    transcribe_audio,
 )
 from pipeline.layouts import LayoutKind
 from pipeline.models import (
@@ -257,3 +262,96 @@ def test_analyze_video_requires_api_key() -> None:
         assert "GEMINI_API_KEY" in str(exc)
     else:
         raise AssertionError("expected GeminiConfigError")
+
+
+def test_audio_part_small_file_uses_from_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "small.wav"
+    path.write_bytes(b"RIFF" + b"\x00" * 64)
+    client = SimpleNamespace(files=SimpleNamespace(upload=lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("small files must not use Files API")
+    )))
+    part = _audio_part(client, path)
+    assert isinstance(part, types.Part)
+    assert part.inline_data is not None
+    assert part.file_data is None
+    assert part.inline_data.mime_type == "audio/wav"
+
+
+def test_audio_part_large_file_uploads_as_uri_part(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("pipeline.gemini_director.INLINE_AUDIO_LIMIT_BYTES", 8)
+    path = tmp_path / "big.wav"
+    path.write_bytes(b"x" * 32)
+    uploaded = SimpleNamespace(
+        uri="https://generativelanguage.googleapis.com/v1beta/files/abc",
+        mime_type="audio/wav",
+        name="files/abc",
+        state="PROCESSING",
+    )
+    active = SimpleNamespace(
+        uri=uploaded.uri,
+        mime_type="audio/wav",
+        name="files/abc",
+        state="ACTIVE",
+    )
+    gets: list[str] = []
+
+    def upload(*, file: str) -> SimpleNamespace:
+        assert file == str(path)
+        return uploaded
+
+    def get(*, name: str) -> SimpleNamespace:
+        gets.append(name)
+        return active
+
+    client = SimpleNamespace(files=SimpleNamespace(upload=upload, get=get))
+    monkeypatch.setattr("pipeline.gemini_director.time.sleep", lambda *_args, **_kwargs: None)
+    part = _audio_part(client, path)
+    assert isinstance(part, types.Part)
+    assert part is not uploaded
+    assert part is not active
+    assert not isinstance(part, types.File)
+    assert part.file_data is not None
+    assert part.file_data.file_uri == uploaded.uri
+    assert part.file_data.mime_type == "audio/wav"
+    assert part.inline_data is None
+    assert gets == ["files/abc"]
+
+
+def test_transcribe_audio_large_file_never_puts_bare_file_in_parts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("pipeline.gemini_director.INLINE_AUDIO_LIMIT_BYTES", 8)
+    monkeypatch.setattr(
+        "pipeline.gemini_director._prepare_transcript_audio",
+        lambda path, settings: path,
+    )
+    path = tmp_path / "big.wav"
+    path.write_bytes(b"x" * 32)
+    uploaded = SimpleNamespace(
+        uri="https://generativelanguage.googleapis.com/v1beta/files/xyz",
+        mime_type="audio/wav",
+        name="files/xyz",
+        state="ACTIVE",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_generate(client, *, model, contents, schema, temperature=0.4):
+        del client, model, schema, temperature
+        captured["parts"] = contents[0].parts
+        return {"text": "hello there", "cues": [{"start": 0, "end": 1, "text": "hello there"}]}
+
+    monkeypatch.setattr("pipeline.gemini_director._generate_json", fake_generate)
+    client = SimpleNamespace(files=SimpleNamespace(upload=lambda **kwargs: uploaded))
+    transcript = transcribe_audio(
+        path, Settings(gemini_api_key="test"), duration=1.0, client=client
+    )
+    parts = captured["parts"]
+    assert isinstance(parts, list)
+    assert len(parts) == 2
+    assert isinstance(parts[0], types.Part)
+    assert isinstance(parts[1], types.Part)
+    assert parts[1] is not uploaded
+    assert not isinstance(parts[1], types.File)
+    assert parts[1].file_data is not None
+    assert parts[1].file_data.file_uri == uploaded.uri
+    assert transcript.text == "hello there"

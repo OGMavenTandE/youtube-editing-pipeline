@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
-from pipeline.media import extract_audio, probe_duration
+from pipeline.media import MediaError, extract_audio, extract_compact_audio, probe_duration
 from pipeline.models import (
     ChapterMarker,
     DirectorPlan,
@@ -146,15 +147,100 @@ def _client(settings: Settings) -> genai.Client:
     return genai.Client(api_key=settings.gemini_api_key)
 
 
-def _audio_part(client: genai.Client, audio_path: Path) -> Any:
+def _audio_mime(audio_path: Path) -> str:
+    suffix = audio_path.suffix.lower()
+    if suffix == ".mp3":
+        return "audio/mpeg"
+    if suffix in {".m4a", ".aac"}:
+        return "audio/mp4"
+    return "audio/wav"
+
+
+def _file_state_name(uploaded: Any) -> str:
+    state = getattr(uploaded, "state", None)
+    if state is None:
+        return ""
+    name = getattr(state, "name", None)
+    if isinstance(name, str) and name:
+        return name.upper()
+    text = str(state)
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.upper()
+
+
+def _wait_until_active(
+    client: genai.Client,
+    uploaded: Any,
+    *,
+    timeout_s: float = 180.0,
+    sleep: Any = time.sleep,
+) -> Any:
+    """Poll Files API until ACTIVE. Returns immediately if already usable."""
+    deadline = time.monotonic() + timeout_s
+    current = uploaded
+    interval = 0.25
+    while True:
+        state = _file_state_name(current)
+        if state == "FAILED":
+            raise GeminiConfigError("Gemini Files API processing failed for uploaded audio.")
+        if state in {"", "ACTIVE"}:
+            if getattr(current, "uri", None) or state == "ACTIVE":
+                return current
+        if time.monotonic() >= deadline:
+            raise GeminiConfigError(
+                "Timed out waiting for Gemini Files API upload to become ACTIVE."
+            )
+        sleep(interval)
+        interval = min(interval * 1.5, 5.0)
+        name = getattr(current, "name", None)
+        if not name:
+            uri = getattr(current, "uri", None)
+            if uri:
+                return current
+            raise GeminiConfigError("Gemini Files API upload returned no file name or URI.")
+        current = client.files.get(name=name)
+
+
+def _part_from_uploaded(uploaded: Any, mime: str) -> types.Part:
+    uri = getattr(uploaded, "uri", None)
+    mime_type = getattr(uploaded, "mime_type", None) or mime
+    if not uri:
+        raise GeminiConfigError("Gemini Files API upload returned no file URI.")
+    return types.Part.from_uri(file_uri=str(uri), mime_type=str(mime_type))
+
+
+def _prepare_transcript_audio(audio_path: Path, settings: Settings) -> Path:
+    """Prefer a compact 16 kHz mono MP3 when the WAV would exceed the inline limit."""
+    if audio_path.stat().st_size <= INLINE_AUDIO_LIMIT_BYTES:
+        return audio_path
+    dest = audio_path.with_name(f"{audio_path.stem}_inline.mp3")
+    try:
+        extract_compact_audio(audio_path, dest, settings)
+    except (MediaError, OSError) as exc:
+        logger.warning("Could not compact audio for Gemini (%s); using Files API", exc)
+        return audio_path
+    if dest.is_file() and dest.stat().st_size > 0:
+        logger.info(
+            "Compacted transcript audio %s -> %s bytes",
+            dest.name,
+            dest.stat().st_size,
+        )
+        return dest
+    return audio_path
+
+
+def _audio_part(client: genai.Client, audio_path: Path) -> types.Part:
+    """Build a real Part. Never put a raw Files API File into contents.parts."""
     size = audio_path.stat().st_size
-    mime = "audio/mpeg" if audio_path.suffix.lower() == ".mp3" else "audio/wav"
+    mime = _audio_mime(audio_path)
     if size <= INLINE_AUDIO_LIMIT_BYTES:
         logger.info("Uploading audio inline (%s bytes)", size)
         return types.Part.from_bytes(data=audio_path.read_bytes(), mime_type=mime)
     logger.info("Uploading audio via Files API (%s bytes)", size)
     uploaded = client.files.upload(file=str(audio_path))
-    return uploaded
+    ready = _wait_until_active(client, uploaded)
+    return _part_from_uploaded(ready, mime)
 
 
 def _generate_json(
@@ -439,6 +525,7 @@ def transcribe_audio(
     """Pass 1: audio only. Persist the result so the director can be re-run."""
     if not audio_path.is_file():
         raise FileNotFoundError(f"Audio not found: {audio_path}")
+    audio_path = _prepare_transcript_audio(audio_path, settings)
     api = client or _client(settings)
     payload = _generate_json(
         api,
@@ -631,8 +718,12 @@ def analyze_video(
         if timed.duration <= 0:
             timed.duration = duration
     else:
-        audio_path = settings.work_dir / f"{video_path.stem}_gemini.wav"
-        extract_audio(video_path, audio_path, settings)
+        compact = settings.work_dir / f"{video_path.stem}_gemini.mp3"
+        try:
+            audio_path = extract_compact_audio(video_path, compact, settings)
+        except MediaError:
+            audio_path = settings.work_dir / f"{video_path.stem}_gemini.wav"
+            extract_audio(video_path, audio_path, settings)
         timed = transcribe_audio(audio_path, settings, duration=duration)
 
     if transcript_out:

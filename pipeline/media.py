@@ -1,25 +1,44 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
-
-import ffmpeg
+from typing import Any
 
 from pipeline.config import Settings, require_ffmpeg, require_ffprobe
+from pipeline.hidden_process import run_hidden
 
 
 class MediaError(RuntimeError):
     """FFmpeg or probe failure."""
 
 
-def probe_duration(path: Path, settings: Settings) -> float:
+def probe_media(path: Path, settings: Settings) -> dict[str, Any]:
+    """ffprobe JSON with Windows consoles hidden. Replaces ffmpeg.probe."""
     ffprobe = require_ffprobe(settings)
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    result = run_hidden(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise MediaError(f"ffprobe failed for {path}: {result.stderr.strip()}")
     try:
-        info = ffmpeg.probe(str(path), cmd=ffprobe)
-    except ffmpeg.Error as exc:
-        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else str(exc)
-        raise MediaError(f"ffprobe failed for {path}: {stderr}") from exc
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise MediaError(f"ffprobe returned invalid JSON for {path}") from exc
+    if not isinstance(payload, dict):
+        raise MediaError(f"ffprobe returned no object for {path}")
+    return payload
+
+
+def probe_duration(path: Path, settings: Settings) -> float:
+    info = probe_media(path, settings)
     duration = info.get("format", {}).get("duration")
     if duration is None:
         for stream in info.get("streams", []):
@@ -49,7 +68,7 @@ def extract_audio(video_path: Path, dest: Path, settings: Settings) -> Path:
         "pcm_s16le",
         str(dest),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_hidden(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise MediaError(
             f"Could not extract audio from {video_path}. "
@@ -58,6 +77,36 @@ def extract_audio(video_path: Path, dest: Path, settings: Settings) -> Path:
         )
     if not dest.exists() or dest.stat().st_size == 0:
         raise MediaError(f"Audio extract produced an empty file: {dest}")
+    return dest
+
+
+def extract_compact_audio(src: Path, dest: Path, settings: Settings) -> Path:
+    """16 kHz mono MP3, typically well under Gemini's inline size limit."""
+    ffmpeg_bin = require_ffmpeg(settings)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(src),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "64k",
+        str(dest),
+    ]
+    result = run_hidden(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise MediaError(
+            f"Could not extract compact audio from {src}.\n{result.stderr.strip()}"
+        )
+    if not dest.exists() or dest.stat().st_size == 0:
+        raise MediaError(f"Compact audio extract produced an empty file: {dest}")
     return dest
 
 
@@ -296,6 +345,6 @@ def apply_loudnorm(video_path: Path, dest: Path, settings: Settings) -> Path:
 
 
 def _run(cmd: list[str], label: str) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_hidden(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise MediaError(f"{label} failed:\n{result.stderr.strip()}")

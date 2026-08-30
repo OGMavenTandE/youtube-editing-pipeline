@@ -41,7 +41,7 @@ def playwright_chromium_ok() -> bool:
         return False
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
+            browser = playwright.chromium.launch(headless=True)
             browser.close()
         return True
     except Exception:
@@ -67,7 +67,9 @@ def install_playwright_chromium() -> tuple[bool, str]:
             f"In a terminal, run: {PLAYWRIGHT_INSTALL}"
         )
     try:
-        result = subprocess.run(
+        from pipeline.hidden_process import run_hidden
+
+        result = run_hidden(
             command,
             capture_output=True,
             text=True,
