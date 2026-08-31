@@ -65,3 +65,5 @@ Identity and find-me strings are config. Title / exec / close-card copy come fro
 ## Persist
 
 Write `output/<stem>_tagged_beats.json` after tagging and bookends, before encode, so a retry skips the model.
+
+The Windows tray form writes `<stem>_talk_sheet.json` (title, overview, Point 1–3 platform/still/cards, source flags). Close and identity stay locked. Empty slots may auto-fill. User slots do not.
