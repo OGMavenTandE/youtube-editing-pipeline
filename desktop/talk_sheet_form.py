@@ -8,7 +8,7 @@ from typing import Callable
 import customtkinter as ctk
 
 from pipeline.config import identity_from_settings, load_settings
-from pipeline.models import TALK_POINT_COUNT, TalkPoint, TalkSheet
+from pipeline.models import TALK_POINT_COUNT, TalkSheet
 from pipeline.talk_sheet import (
     collect_form_text,
     default_talk_sheet_md_path,
@@ -98,6 +98,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             text="\n".join(line for line in close_lines if line),
             justify="left",
             anchor="w",
+            wraplength=720,
         )
         self.close_preview.pack(anchor="w", padx=12, pady=(0, 12))
 
@@ -270,7 +271,3 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         except Exception:
             self._preview_images[index] = None
             label.configure(image=None, text=Path(path).name)
-
-
-def empty_point() -> TalkPoint:
-    return TalkPoint()
