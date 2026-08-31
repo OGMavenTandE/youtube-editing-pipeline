@@ -36,7 +36,8 @@ Host is always the real camera. Never a generated face. Never a full-screen wipe
 
 Host stays full 1920x1080.
 Top-left plate: x=56 y=48 w=620 radius 22 pad 32.
-Gold all-caps kicker, 2-line white headline, 72px gold line-art icon square.
+Gold all-caps kicker (one short line, ~40 characters), 2-line white headline that fits the 556px plate (~76 characters). Long copy truncates on the plate. Never mid-word overflow.
+Card Title[j] paints with Card body[j] of the same card. No cross-card zip.
 No third font, no extra colors, no TAKEAWAY pills.
 
 ### pip

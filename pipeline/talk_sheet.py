@@ -9,6 +9,12 @@ import shutil
 from pathlib import Path
 
 from pipeline.layouts import PictureTag
+from pipeline.picture_kit import (
+    HEADLINE_CHAR_LIMIT,
+    KICKER_CHAR_LIMIT,
+    clip_plate_headline,
+    clip_plate_kicker,
+)
 from pipeline.models import (
     TALK_CARDS_PER_POINT,
     TALK_POINT_COUNT,
@@ -394,7 +400,99 @@ def _is_point_image_text(text: str, point: TalkPoint) -> bool:
 
 def still_plate_copy(point: TalkPoint) -> tuple[str, str]:
     """Gold kicker, white content. Empty title means content-only. Never split image_text."""
-    return (point.image_title or "").strip(), (point.image_text or "").strip()
+    return (
+        clip_plate_kicker((point.image_title or "").strip()),
+        clip_plate_headline((point.image_text or "").strip()),
+    )
+
+
+def paired_card_copy(point: TalkPoint, card_i: int) -> tuple[str, str]:
+    """Title[j] with body[j] of the same card. Never a cross-card zip."""
+    if card_i < 0 or card_i >= TALK_CARDS_PER_POINT:
+        return "", ""
+    return (
+        clip_plate_kicker((point.titles[card_i] or "").strip()),
+        clip_plate_headline((point.cards[card_i] or "").strip()),
+    )
+
+
+def card_has_copy(point: TalkPoint, card_i: int) -> bool:
+    if card_i < 0 or card_i >= TALK_CARDS_PER_POINT:
+        return False
+    return bool(
+        point.card_locked(card_i)
+        or point.title_locked(card_i)
+        or point.cards[card_i].strip()
+        or point.titles[card_i].strip()
+    )
+
+
+def apply_open_form_values(
+    sheet: TalkSheet,
+    title: str,
+    line1: str,
+    line2: str,
+    notes: str,
+) -> TalkSheet:
+    """Map open overview fields 1:1. Never copy these onto Point cards."""
+    title, title_source = collect_form_text(title, sheet.title, sheet.title_source)
+    sheet.title = clip_plate_kicker(title)
+    sheet.title_source = title_source
+    if sheet.title:
+        sheet.open_card.kicker = sheet.title
+    combined = "\n".join(part for part in (line1.strip(), line2.strip()) if part)
+    headline, headline_source = collect_form_text(
+        combined, sheet.exec_headline, sheet.exec_headline_source
+    )
+    sheet.exec_headline = clip_plate_headline(headline)
+    sheet.exec_headline_source = headline_source
+    if sheet.exec_headline:
+        sheet.open_card.headline = sheet.exec_headline
+    sheet.exec_notes = (notes or "").strip()
+    return sheet
+
+
+def apply_point_form_values(
+    point: TalkPoint,
+    *,
+    platform: str = "",
+    image_title: str = "",
+    image_text: str = "",
+    titles: list[str] | None = None,
+    cards: list[str] | None = None,
+) -> TalkPoint:
+    """Map one Point's form slots by index. Card j title stays with card j body."""
+    platform, platform_source = collect_form_text(platform, point.platform, point.platform_source)
+    point.platform = platform
+    point.platform_source = platform_source
+    image_title, image_title_source = collect_form_text(
+        image_title, point.image_title, point.image_title_source
+    )
+    point.image_title = clip_plate_kicker(image_title)
+    point.image_title_source = image_title_source
+    image_text, image_text_source = collect_form_text(
+        image_text, point.image_text, point.image_text_source
+    )
+    point.image_text = clip_plate_headline(image_text)
+    point.image_text_source = image_text_source
+    title_vals = list(titles or [])
+    card_vals = list(cards or [])
+    while len(title_vals) < TALK_CARDS_PER_POINT:
+        title_vals.append("")
+    while len(card_vals) < TALK_CARDS_PER_POINT:
+        card_vals.append("")
+    for card_i in range(TALK_CARDS_PER_POINT):
+        text, source = collect_form_text(
+            card_vals[card_i], point.cards[card_i], point.card_sources[card_i]
+        )
+        point.cards[card_i] = clip_plate_headline(text)
+        point.card_sources[card_i] = source
+        title, title_source = collect_form_text(
+            title_vals[card_i], point.titles[card_i], point.title_sources[card_i]
+        )
+        point.titles[card_i] = clip_plate_kicker(title)
+        point.title_sources[card_i] = title_source
+    return point
 
 
 def resolve_auto_image_text(
@@ -430,37 +528,49 @@ def _still_basename_label(path: str) -> str:
 
 def _overlay_kicker_for_card(point: TalkPoint, card_i: int, scene: Scene, allowed: str) -> str:
     """Card Title is the gold kicker. Image text never fills this slot."""
-    headline = point.cards[card_i].strip() or scene.graphic.title
+    headline = point.cards[card_i].strip()
     if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
-        return point.titles[card_i]
+        return clip_plate_kicker(point.titles[card_i])
     candidate = point.titles[card_i].strip()
     if candidate and _is_point_image_text(candidate, point):
         candidate = ""
-    return resolve_auto_kicker(
-        candidate,
-        headline=headline,
-        said=scene.said,
-        platform=point.platform,
-        allowed=allowed,
+    return clip_plate_kicker(
+        resolve_auto_kicker(
+            candidate,
+            headline=headline,
+            said=scene.said,
+            platform=point.platform,
+            allowed=allowed,
+        )
     )
 
 
-def _strip_image_text_from_overlay(scene: Scene, sheet: TalkSheet) -> None:
-    """Hard wall: still image text cannot be the overlay gold line."""
+def _strip_image_text_from_overlay(
+    scene: Scene,
+    sheet: TalkSheet,
+    *,
+    point: TalkPoint | None = None,
+    card_i: int | None = None,
+) -> None:
+    """Hard wall: still copy cannot be the overlay gold line. Keep this card's pair."""
     if scene.layout is not PictureTag.OVERLAY or scene.role != "body":
         return
-    for point in sheet.points:
-        if not _is_point_image_text(scene.graphic.kicker, point):
+    points = [point] if point is not None else list(sheet.points)
+    for item in points:
+        if not _is_point_image_text(scene.graphic.kicker, item):
             continue
         replacement = ""
-        for card_i, title in enumerate(point.titles):
-            if point.title_locked(card_i) and title.strip() and not _is_point_image_text(title, point):
+        if card_i is not None and item.title_locked(card_i):
+            title = item.titles[card_i].strip()
+            if title and not _is_point_image_text(title, item):
                 replacement = title
-                break
-        scene.graphic.kicker = replacement or derive_kicker(
-            point.cards[0].strip() or scene.graphic.title,
-            said=scene.said,
-            platform=point.platform,
+        scene.graphic.kicker = clip_plate_kicker(
+            replacement
+            or derive_kicker(
+                scene.graphic.title,
+                said=scene.said,
+                platform=item.platform,
+            )
         )
         return
 
@@ -719,11 +829,7 @@ def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
     for index, (point, (w0, w1)) in enumerate(zip(sheet.points, windows)):
         if w1 <= w0:
             continue
-        user_cards = [
-            card_i
-            for card_i in range(TALK_CARDS_PER_POINT)
-            if point.card_locked(card_i) or point.title_locked(card_i)
-        ]
+        needed = [card_i for card_i in range(TALK_CARDS_PER_POINT) if card_has_copy(point, card_i)]
         need_pip = point.still_locked()
         if need_pip:
             pip_scene = _ensure_pip_slot(script, w0, w1, PIP_HOLD_SECONDS)
@@ -736,20 +842,12 @@ def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
         elif point.platform.strip():
             _stamp_platform_query(script, w0, w1, point.platform.strip())
 
-        if not user_cards:
+        if not needed:
             continue
-        overlays = [
-            scene
-            for scene in _scenes_in_window(script, w0, w1)
-            if scene.layout is PictureTag.OVERLAY
-        ]
-        for card_i, scene in zip(user_cards, overlays):
-            _stamp_overlay(scene, point, index, card_i, allowed)
-        missing = user_cards[len(overlays) :]
-        if missing:
-            extras = _ensure_overlay_slots(script, w0, w1, len(missing), skip_pip=need_pip)
-            for card_i, scene in zip(missing, extras):
-                _stamp_overlay(scene, point, index, card_i, allowed)
+        slots = _aligned_overlay_slots(script, w0, w1, max(needed) + 1, skip_pip=need_pip)
+        for card_i in needed:
+            if card_i < len(slots):
+                _stamp_overlay(slots[card_i], point, index, card_i, allowed)
     sanitize_script_kickers(script, sheet)
     enforce_pip_holds(script, PIP_HOLD_SECONDS)
     return script
@@ -786,7 +884,7 @@ def autofill_talk_sheet(
         for card_i in range(TALK_CARDS_PER_POINT):
             scene = overlays[card_i] if card_i < len(overlays) else None
             if not point.card_locked(card_i) and scene is not None:
-                point.cards[card_i] = scene.graphic.title.strip()
+                point.cards[card_i] = clip_plate_headline(scene.graphic.title.strip())
                 point.card_sources[card_i] = "auto"
             if not point.title_locked(card_i):
                 headline = point.cards[card_i] or (scene.graphic.title if scene else "")
@@ -795,12 +893,14 @@ def autofill_talk_sheet(
                 if candidate and _is_point_image_text(candidate, point):
                     candidate = ""
                 if headline.strip() or candidate.strip():
-                    point.titles[card_i] = resolve_auto_kicker(
-                        candidate,
-                        headline=headline,
-                        said=said,
-                        platform=point.platform,
-                        allowed=allowed,
+                    point.titles[card_i] = clip_plate_kicker(
+                        resolve_auto_kicker(
+                            candidate,
+                            headline=headline,
+                            said=said,
+                            platform=point.platform,
+                            allowed=allowed,
+                        )
                     )
                     point.title_sources[card_i] = "auto"
         pips = [
@@ -823,21 +923,25 @@ def autofill_talk_sheet(
         has_still = bool(point.still_path.strip() or pips or point.platform.strip())
         if not point.image_title_locked() and has_still and not point.image_title.strip():
             candidate = _still_basename_label(point.still_path) or point.platform
-            point.image_title = resolve_auto_kicker(
-                candidate,
-                headline=point.platform,
-                said="",
-                platform=point.platform,
-                allowed=allowed,
+            point.image_title = clip_plate_kicker(
+                resolve_auto_kicker(
+                    candidate,
+                    headline=point.platform,
+                    said="",
+                    platform=point.platform,
+                    allowed=allowed,
+                )
             )
             point.image_title_source = "auto"
         if not point.image_text_locked() and has_still and not point.image_text.strip():
-            point.image_text = resolve_auto_image_text(
-                cards=point.cards,
-                said=pip.said if pip is not None else "",
-                platform=point.platform,
-                pip_title=pip.graphic.title if pip is not None else "",
-                allowed=allowed,
+            point.image_text = clip_plate_headline(
+                resolve_auto_image_text(
+                    cards=point.cards,
+                    said=pip.said if pip is not None else "",
+                    platform=point.platform,
+                    pip_title=pip.graphic.title if pip is not None else "",
+                    allowed=allowed,
+                )
             )
             point.image_text_source = "auto"
     _lock_close(sheet)
@@ -910,9 +1014,9 @@ def _set_title(sheet: TalkSheet, value: str) -> None:
     text = value.strip()
     if not text or sheet.title_locked():
         return
-    sheet.title = text
+    sheet.title = clip_plate_kicker(text)
     sheet.title_source = "user"
-    sheet.open_card.kicker = text
+    sheet.open_card.kicker = sheet.title
 
 
 def _set_platform(sheet: TalkSheet, point_index: int, value: str) -> None:
@@ -931,7 +1035,7 @@ def _set_card(sheet: TalkSheet, point_index: int, card_index: int, value: str) -
     text = value.strip()
     if not text or point.card_locked(card_index - 1):
         return
-    point.cards[card_index - 1] = text
+    point.cards[card_index - 1] = clip_plate_headline(text)
     point.card_sources[card_index - 1] = "user"
 
 
@@ -942,7 +1046,7 @@ def _set_card_title(sheet: TalkSheet, point_index: int, card_index: int, value: 
     text = value.strip()
     if not text or point.title_locked(card_index - 1):
         return
-    point.titles[card_index - 1] = text
+    point.titles[card_index - 1] = clip_plate_kicker(text)
     point.title_sources[card_index - 1] = "user"
 
 
@@ -951,7 +1055,7 @@ def _set_image_title(sheet: TalkSheet, point_index: int, value: str) -> None:
     text = value.strip()
     if not text or point.image_title_locked():
         return
-    point.image_title = text
+    point.image_title = clip_plate_kicker(text)
     point.image_title_source = "user"
 
 
@@ -960,7 +1064,7 @@ def _set_image_text(sheet: TalkSheet, point_index: int, value: str) -> None:
     text = value.strip()
     if not text or point.image_text_locked():
         return
-    point.image_text = text
+    point.image_text = clip_plate_headline(text)
     point.image_text_source = "user"
 
 
@@ -1156,12 +1260,13 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
             if scene.layout is PictureTag.OVERLAY
         ]
         for card_i, scene in zip(range(TALK_CARDS_PER_POINT), overlays):
-            scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
-            if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
-                scene.graphic.kicker = point.titles[card_i]
-            elif point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
-                if not _is_point_image_text(scene.graphic.kicker, point):
-                    point.titles[card_i] = scene.graphic.kicker
+            if card_has_copy(point, card_i):
+                _stamp_overlay(scene, point, 0, card_i, allowed)
+                if point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+                    if not _is_point_image_text(scene.graphic.kicker, point):
+                        point.titles[card_i] = scene.graphic.kicker
+            else:
+                _strip_image_text_from_overlay(scene, sheet, point=point, card_i=card_i)
             locked_ids.add(id(scene))
         for scene in _scenes_in_window(script, w0, w1):
             if scene.layout is not PictureTag.PIP:
@@ -1322,6 +1427,42 @@ def _split_scene(scene: Scene, pieces: int) -> list[Scene]:
     return out
 
 
+def _aligned_overlay_slots(
+    script: EditScript,
+    start: float,
+    end: float,
+    count: int,
+    *,
+    skip_pip: bool,
+) -> list[Scene]:
+    """Scenes [0..count) in time order. Slot j is card j. Never a sparse zip."""
+    count = max(0, int(count))
+    if count <= 0:
+        return []
+    overlays = [
+        scene
+        for scene in _scenes_in_window(script, start, end)
+        if scene.layout is PictureTag.OVERLAY
+    ]
+    if len(overlays) >= count:
+        return overlays[:count]
+    extras = _ensure_overlay_slots(script, start, end, count - len(overlays), skip_pip=skip_pip)
+    overlays = [
+        scene
+        for scene in _scenes_in_window(script, start, end)
+        if scene.layout is PictureTag.OVERLAY
+    ]
+    seen = {id(scene) for scene in overlays}
+    slots = list(overlays)
+    for scene in extras:
+        if id(scene) not in seen:
+            slots.append(scene)
+            seen.add(id(scene))
+    while len(slots) < count:
+        slots.append(_insert_nothing(script, start, end))
+    return slots[:count]
+
+
 def _stamp_overlay(
     scene: Scene,
     point: TalkPoint,
@@ -1329,16 +1470,23 @@ def _stamp_overlay(
     card_i: int,
     allowed: str,
 ) -> None:
+    """Paint Title[j] + body[j] onto this overlay. Never borrow another card."""
     scene.layout = PictureTag.OVERLAY
-    headline = point.cards[card_i].strip()
-    if headline:
-        scene.graphic.title = headline
-    scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
+    kicker, headline = paired_card_copy(point, card_i)
+    scene.graphic.title = headline
+    if point.title_locked(card_i) and kicker and not _is_point_image_text(kicker, point):
+        scene.graphic.kicker = kicker
+    else:
+        scene.graphic.kicker = clip_plate_kicker(
+            _overlay_kicker_for_card(point, card_i, scene, allowed)
+        )
     if not scene.graphic.kicker.strip():
-        scene.graphic.kicker = derive_kicker(
-            headline or scene.graphic.title,
-            said=scene.said,
-            platform=point.platform or f"POINT {point_index + 1}",
+        scene.graphic.kicker = clip_plate_kicker(
+            derive_kicker(
+                headline,
+                said=scene.said,
+                platform=point.platform or f"POINT {point_index + 1}",
+            )
         )
     if not scene.graphic.icon.strip():
         scene.graphic.icon = "bar_chart"

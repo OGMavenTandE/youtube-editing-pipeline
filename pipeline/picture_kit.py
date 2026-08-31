@@ -33,6 +33,12 @@ from pipeline.layouts import (
 if TYPE_CHECKING:
     from pipeline.models import HostIdentity, TalkSheet
 
+# Measured on the locked 1920×1080 plate (inner width 556px).
+# Gold kicker: one 16px Inter Bold line of caps (~37–49 glyphs). 40 is one short line.
+# White body: two 26px Inter Bold lines of mixed case (~76 glyphs).
+KICKER_CHAR_LIMIT = 40
+HEADLINE_CHAR_LIMIT = 76
+
 FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 _REGULAR = FONTS_DIR / "Inter-Regular.ttf"
 _BOLD = FONTS_DIR / "Inter-Bold.ttf"
@@ -141,9 +147,32 @@ def _wrap_px(
         trial = (lines[-1] + " " + current).strip()
         if draw.textlength(trial, font=font) <= max_width:
             lines[-1] = trial
-        else:
-            lines[-1] = lines[-1]
-    return lines[:max_lines] or [""]
+    fitted = [_ellipsis_px(line, font, max_width) for line in lines[:max_lines] if line]
+    return fitted or [""]
+
+
+def _ellipsis_px(text: str, font: ImageFont.ImageFont, max_width: int) -> str:
+    """Keep a line on the plate. Mid-word clip becomes an ellipsis, not overflow."""
+    text = text or ""
+    if not text:
+        return ""
+    draw = ImageDraw.Draw(_blank((4, 4)))
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    ell = "…"
+    for cut in range(len(text), 0, -1):
+        trial = text[:cut].rstrip() + ell
+        if draw.textlength(trial, font=font) <= max_width:
+            return trial
+    return ell
+
+
+def clip_plate_kicker(text: str) -> str:
+    return (text or "")[:KICKER_CHAR_LIMIT]
+
+
+def clip_plate_headline(text: str) -> str:
+    return (text or "")[:HEADLINE_CHAR_LIMIT]
 
 
 def _fit_headline(
@@ -307,11 +336,11 @@ def render_overlay(
     plate_w = max(scale.px(160), max_plate_right - x0)
     inner_w = plate_w - 2 * pad
 
-    kicker_text = (kicker or "").strip().upper()
-    kicker_lines = _fit_lines(kicker_text, scale, inner_w, max_lines=2, start=16, floor=12)
-    head_limit = max(1, int(max_headline_lines or 2))
+    kicker_text = clip_plate_kicker((kicker or "").strip()).upper()
+    kicker_lines = _fit_lines(kicker_text, scale, inner_w, max_lines=1, start=16, floor=12)
+    head_limit = max(1, min(2, int(max_headline_lines or 2)))
     head_font, head_lines, head_size = _fit_headline(
-        (headline or "").strip(),
+        clip_plate_headline((headline or "").strip()),
         scale,
         inner_w,
         max_lines=head_limit,
@@ -428,10 +457,10 @@ def render_pip_type(
     headline = "\n".join(headline_parts)
     return render_overlay(
         size,
-        kicker=(kicker or "").strip(),
-        headline=headline,
+        kicker=clip_plate_kicker((kicker or "").strip()),
+        headline=clip_plate_headline(headline),
         icon="bar_chart",
-        max_headline_lines=5,
+        max_headline_lines=2,
     )
 
 

@@ -10,8 +10,10 @@ import customtkinter as ctk
 
 from pipeline.config import identity_from_settings, load_settings
 from pipeline.models import TALK_POINT_COUNT, TalkPoint, TalkSheet
+from pipeline.picture_kit import HEADLINE_CHAR_LIMIT, KICKER_CHAR_LIMIT
 from pipeline.talk_sheet import (
-    collect_form_text,
+    apply_open_form_values,
+    apply_point_form_values,
     copy_point_still,
     default_stills_dir,
     default_talk_sheet_md_path,
@@ -19,8 +21,43 @@ from pipeline.talk_sheet import (
     talk_sheet_to_markdown,
 )
 
+OVERVIEW_LINE_LIMIT = HEADLINE_CHAR_LIMIT // 2
+
 MARKDOWN_TYPES = [("Markdown", "*.md *.markdown *.txt"), ("All files", "*.*")]
 OnChange = Callable[[], None]
+
+
+def _bind_char_limit(var: ctk.StringVar, limit: int, counter: ctk.CTkLabel | None = None) -> None:
+    """Hard max. Trim pasted overflow. Optional live counter."""
+
+    def _trim(*_args: object) -> None:
+        text = var.get()
+        if len(text) > limit:
+            var.set(text[:limit])
+            text = var.get()
+        if counter is not None:
+            counter.configure(text=f"{len(text)}/{limit}")
+
+    var.trace_add("write", _trim)
+    _trim()
+
+
+def _limited_entry(
+    parent: ctk.CTkFrame,
+    row: int,
+    label: str,
+    var: ctk.StringVar,
+    limit: int,
+    *,
+    columnspan: int = 2,
+) -> None:
+    ctk.CTkLabel(parent, text=label).grid(row=row, column=0, sticky="w", padx=12, pady=4)
+    ctk.CTkEntry(parent, textvariable=var).grid(
+        row=row, column=1, columnspan=columnspan, sticky="ew", padx=12, pady=4
+    )
+    counter = ctk.CTkLabel(parent, text=f"0/{limit}", text_color="#888888")
+    counter.grid(row=row, column=1 + columnspan, sticky="e", padx=(0, 12), pady=4)
+    _bind_char_limit(var, limit, counter)
 
 
 def image_filetypes(*, platform: str | None = None) -> list[tuple[str, str]]:
@@ -165,23 +202,14 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         open_box.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         open_box.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(open_box, text="Open overview", font=ctk.CTkFont(size=16, weight="bold")).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 6)
+            row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(10, 6)
         )
-        ctk.CTkLabel(open_box, text="Title (kicker)").grid(row=1, column=0, sticky="w", padx=12, pady=4)
         self.title_var = ctk.StringVar()
-        ctk.CTkEntry(open_box, textvariable=self.title_var).grid(
-            row=1, column=1, sticky="ew", padx=12, pady=4
-        )
-        ctk.CTkLabel(open_box, text="Overview line 1").grid(row=2, column=0, sticky="w", padx=12, pady=4)
+        _limited_entry(open_box, 1, "Title (kicker)", self.title_var, KICKER_CHAR_LIMIT, columnspan=1)
         self.line1_var = ctk.StringVar()
-        ctk.CTkEntry(open_box, textvariable=self.line1_var).grid(
-            row=2, column=1, sticky="ew", padx=12, pady=4
-        )
-        ctk.CTkLabel(open_box, text="Overview line 2").grid(row=3, column=0, sticky="w", padx=12, pady=4)
+        _limited_entry(open_box, 2, "Overview line 1", self.line1_var, OVERVIEW_LINE_LIMIT, columnspan=1)
         self.line2_var = ctk.StringVar()
-        ctk.CTkEntry(open_box, textvariable=self.line2_var).grid(
-            row=3, column=1, sticky="ew", padx=12, pady=4
-        )
+        _limited_entry(open_box, 3, "Overview line 2", self.line2_var, OVERVIEW_LINE_LIMIT, columnspan=1)
         ctk.CTkLabel(open_box, text="Spoken notes (not painted)").grid(
             row=4, column=0, sticky="nw", padx=12, pady=4
         )
@@ -221,7 +249,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         box.grid(row=3 + index, column=0, sticky="ew", pady=(0, 12))
         box.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(box, text=f"Point {index + 1}", font=ctk.CTkFont(size=16, weight="bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(10, 6)
+            row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(10, 6)
         )
         platform = ctk.StringVar()
         ctk.CTkLabel(box, text="Platform / still query").grid(row=1, column=0, sticky="w", padx=12, pady=4)
@@ -248,15 +276,9 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         self._previews.append(preview)
 
         image_title = ctk.StringVar()
-        ctk.CTkLabel(box, text="Image title (optional)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
-        ctk.CTkEntry(box, textvariable=image_title).grid(
-            row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=4
-        )
+        _limited_entry(box, 4, "Image title (optional)", image_title, KICKER_CHAR_LIMIT)
         image_text = ctk.StringVar()
-        ctk.CTkLabel(box, text="Image text").grid(row=5, column=0, sticky="w", padx=12, pady=4)
-        ctk.CTkEntry(box, textvariable=image_text).grid(
-            row=5, column=1, columnspan=2, sticky="ew", padx=12, pady=4
-        )
+        _limited_entry(box, 5, "Image text", image_text, HEADLINE_CHAR_LIMIT)
 
         cards: list[ctk.StringVar] = []
         titles: list[ctk.StringVar] = []
@@ -265,14 +287,8 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             title_var = ctk.StringVar()
             headline_var = ctk.StringVar()
             row = 6 + card_i * 2
-            ctk.CTkLabel(box, text=f"{label} title (gold on card)").grid(row=row, column=0, sticky="w", padx=12, pady=4)
-            ctk.CTkEntry(box, textvariable=title_var).grid(
-                row=row, column=1, columnspan=2, sticky="ew", padx=12, pady=4
-            )
-            ctk.CTkLabel(box, text=label).grid(row=row + 1, column=0, sticky="w", padx=12, pady=4)
-            ctk.CTkEntry(box, textvariable=headline_var).grid(
-                row=row + 1, column=1, columnspan=2, sticky="ew", padx=12, pady=4
-            )
+            _limited_entry(box, row, f"{label} title (gold on card)", title_var, KICKER_CHAR_LIMIT)
+            _limited_entry(box, row + 1, label, headline_var, HEADLINE_CHAR_LIMIT)
             titles.append(title_var)
             cards.append(headline_var)
         self._point_vars.append(
@@ -314,50 +330,23 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
 
     def collect_sheet(self) -> TalkSheet:
         sheet = self._sheet.model_copy(deep=True)
-        title, title_source = collect_form_text(self.title_var.get(), sheet.title, sheet.title_source)
-        sheet.title = title
-        sheet.title_source = title_source
-        if title:
-            sheet.open_card.kicker = title
-        line1 = self.line1_var.get().strip()
-        line2 = self.line2_var.get().strip()
-        combined = "\n".join(part for part in (line1, line2) if part)
-        headline, headline_source = collect_form_text(
-            combined, sheet.exec_headline, sheet.exec_headline_source
+        apply_open_form_values(
+            sheet,
+            self.title_var.get(),
+            self.line1_var.get(),
+            self.line2_var.get(),
+            self.notes_box.get("1.0", "end"),
         )
-        sheet.exec_headline = headline
-        sheet.exec_headline_source = headline_source
-        if headline:
-            sheet.open_card.headline = headline
-        sheet.exec_notes = self.notes_box.get("1.0", "end").strip()
         for index, vars_ in enumerate(self._point_vars):
             point = sheet.points[index]
-            platform, platform_source = collect_form_text(
-                vars_["platform"].get(), point.platform, point.platform_source
+            apply_point_form_values(
+                point,
+                platform=vars_["platform"].get(),
+                image_title=vars_["image_title"].get(),
+                image_text=vars_["image_text"].get(),
+                titles=[vars_["t1"].get(), vars_["t2"].get(), vars_["t3"].get()],
+                cards=[vars_["c1"].get(), vars_["c2"].get(), vars_["c3"].get()],
             )
-            point.platform = platform
-            point.platform_source = platform_source
-            image_title, title_source = collect_form_text(
-                vars_["image_title"].get(), point.image_title, point.image_title_source
-            )
-            point.image_title = image_title
-            point.image_title_source = title_source
-            image_text, image_source = collect_form_text(
-                vars_["image_text"].get(), point.image_text, point.image_text_source
-            )
-            point.image_text = image_text
-            point.image_text_source = image_source
-            cards = [vars_["c1"].get(), vars_["c2"].get(), vars_["c3"].get()]
-            titles = [vars_["t1"].get(), vars_["t2"].get(), vars_["t3"].get()]
-            for card_i, typed in enumerate(cards):
-                text, source = collect_form_text(typed, point.cards[card_i], point.card_sources[card_i])
-                point.cards[card_i] = text
-                point.card_sources[card_i] = source
-                title, title_source = collect_form_text(
-                    titles[card_i], point.titles[card_i], point.title_sources[card_i]
-                )
-                point.titles[card_i] = title
-                point.title_sources[card_i] = title_source
             commit_form_still(point, self._still_paths[index])
         sheet.close_card.kicker = "WORK WITH ME"
         sheet.close_card.headline = "Independent AI T&E.\nVendor-agnostic."

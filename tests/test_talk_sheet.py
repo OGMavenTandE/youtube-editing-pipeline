@@ -5,9 +5,19 @@ from pipeline.layouts import PictureTag
 from pipeline.models import EditScript, GraphicCard, Scene, TalkPoint, TalkSheet, field_is_locked
 from pipeline.pacing import enforce_pacing
 from pipeline.stills import match_local_still
+from pipeline.picture_kit import (
+    HEADLINE_CHAR_LIMIT,
+    KICKER_CHAR_LIMIT,
+    clip_plate_headline,
+    clip_plate_kicker,
+    render_overlay,
+    render_pip_type,
+)
 from pipeline.talk_sheet import (
     KNOWN_MARKDOWN_SHAPE,
     PIP_HOLD_SECONDS,
+    apply_open_form_values,
+    apply_point_form_values,
     apply_user_point_locks,
     attach_talk_sheet,
     autofill_talk_sheet,
@@ -16,9 +26,11 @@ from pipeline.talk_sheet import (
     enforce_pip_holds,
     job_talk_sheet_path,
     load_talk_sheet,
+    paired_card_copy,
     parse_talk_sheet_markdown,
     persist_talk_sheet,
     point_still_filename,
+    point_windows,
     resolve_auto_kicker,
     rewrite_house_style,
     save_talk_sheet,
@@ -834,3 +846,234 @@ def test_autofill_does_not_split_user_image_text(tmp_path: Path) -> None:
     pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
     assert pip.graphic.title == DRONE_CABLE
     assert pip.graphic.kicker != DRONE_CABLE.split(".", 1)[0]
+
+
+def _sentinel_sheet(tmp_path: Path) -> TalkSheet:
+    sheet = TalkSheet()
+    apply_open_form_values(sheet, "OPEN_T", "OPEN_H1", "OPEN_H2", "")
+    for point_i, point in enumerate(sheet.points):
+        still = tmp_path / f"p{point_i + 1}.jpg"
+        still.write_bytes(b"x")
+        apply_point_form_values(
+            point,
+            platform=f"P{point_i + 1}PLAT",
+            image_title=f"P{point_i + 1}ST",
+            image_text=f"P{point_i + 1}SX",
+            titles=[f"P{point_i + 1}C{card + 1}T" for card in range(3)],
+            cards=[f"P{point_i + 1}C{card + 1}B" for card in range(3)],
+        )
+        point.still_path = str(still)
+        point.still_source = "user"
+        point.platform_source = "user"
+        point.image_title_source = "user"
+        point.image_text_source = "user"
+        point.title_sources = ["user", "user", "user"]
+        point.card_sources = ["user", "user", "user"]
+    return sheet
+
+
+def test_form_values_keep_every_slot_paired() -> None:
+    sheet = TalkSheet()
+    apply_open_form_values(sheet, "OPEN_T", "OPEN_H1", "OPEN_H2", "notes")
+    apply_point_form_values(
+        sheet.points[0],
+        image_title="P1ST",
+        image_text="P1SX",
+        titles=["P1C1T", "P1C2T", "P1C3T"],
+        cards=["P1C1B", "P1C2B", "P1C3B"],
+    )
+    assert sheet.title == "OPEN_T"
+    assert sheet.exec_headline == "OPEN_H1\nOPEN_H2"
+    assert sheet.open_card.kicker == "OPEN_T"
+    assert "OPEN_H1" in sheet.open_card.headline
+    assert sheet.points[0].titles == ["P1C1T", "P1C2T", "P1C3T"]
+    assert sheet.points[0].cards == ["P1C1B", "P1C2B", "P1C3B"]
+    assert paired_card_copy(sheet.points[0], 1) == ("P1C2T", "P1C2B")
+    assert still_plate_copy(sheet.points[0]) == ("P1ST", "P1SX")
+
+
+def test_form_values_clip_to_plate_limits() -> None:
+    long_kicker = "K" * (KICKER_CHAR_LIMIT + 12)
+    long_body = "B" * (HEADLINE_CHAR_LIMIT + 20)
+    sheet = TalkSheet()
+    apply_open_form_values(sheet, long_kicker, long_body, "", "")
+    apply_point_form_values(
+        sheet.points[0],
+        image_title=long_kicker,
+        image_text=long_body,
+        titles=[long_kicker, "T2", "T3"],
+        cards=[long_body, "C2", "C3"],
+    )
+    assert len(sheet.title) == KICKER_CHAR_LIMIT
+    assert len(sheet.points[0].image_title) == KICKER_CHAR_LIMIT
+    assert len(sheet.points[0].image_text) == HEADLINE_CHAR_LIMIT
+    assert len(sheet.points[0].titles[0]) == KICKER_CHAR_LIMIT
+    assert len(sheet.points[0].cards[0]) == HEADLINE_CHAR_LIMIT
+
+
+def test_card_two_and_three_do_not_cross_pair(tmp_path: Path) -> None:
+    still = tmp_path / "x.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                still_path=str(still),
+                still_source="user",
+                titles=["P1C1T", "NOT AUTONOMOUS", "CDAO GAVE ANDURIL 100M"],
+                title_sources=["user", "user", "user"],
+                cards=["P1C1B", "Card two body only", "Humans must be in the loop for an attack"],
+                card_sources=["user", "user", "user"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="WRONG2", title="WRONG2B"),
+            ),
+            Scene(
+                start=18,
+                end=26,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="WRONG3", title="WRONG3B"),
+            ),
+            Scene(
+                start=26,
+                end=34,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="WRONG1", title="WRONG1B"),
+            ),
+            Scene(start=34, end=110, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    apply_user_point_locks(script, sheet)
+    overlays = [scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY]
+    assert len(overlays) >= 3
+    assert overlays[0].graphic.kicker == "P1C1T"
+    assert overlays[0].graphic.title == "P1C1B"
+    assert overlays[1].graphic.kicker == "NOT AUTONOMOUS"
+    assert overlays[1].graphic.title == "Card two body only"
+    assert overlays[2].graphic.kicker == "CDAO GAVE ANDURIL 100M"
+    assert overlays[2].graphic.title == "Humans must be in the loop for an attack"
+    assert overlays[1].graphic.title != overlays[2].graphic.title
+    assert "Humans must be in the loop" not in overlays[1].graphic.title
+
+
+def test_full_matrix_form_sheet_json_markdown_render(tmp_path: Path) -> None:
+    sheet = _sentinel_sheet(tmp_path)
+    path = tmp_path / "talk.json"
+    save_talk_sheet(sheet, path)
+    loaded = load_talk_sheet(path)
+    md = talk_sheet_to_markdown(loaded)
+    imported = parse_talk_sheet_markdown(md)
+    assert imported.title == "OPEN_T"
+    assert "OPEN_H1" in imported.exec_headline
+    for src, dest in zip(loaded.points, imported.points):
+        dest.still_path = src.still_path
+        dest.still_source = src.still_source
+    sentinels: list[str] = ["OPEN_T", "OPEN_H1", "OPEN_H2"]
+    for point_i, point in enumerate(imported.points):
+        assert point.image_title == f"P{point_i + 1}ST"
+        assert point.image_text == f"P{point_i + 1}SX"
+        sentinels.extend([point.image_title, point.image_text])
+        for card_i in range(3):
+            title, body = paired_card_copy(point, card_i)
+            assert title == f"P{point_i + 1}C{card_i + 1}T"
+            assert body == f"P{point_i + 1}C{card_i + 1}B"
+            sentinels.extend([title, body])
+
+    script = EditScript.empty()
+    attach_talk_sheet(script, imported)
+    script = enforce_pacing(script, 180.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, script.talk_sheet)
+
+    opened = script.scenes[0]
+    assert opened.role == "open"
+    assert opened.graphic.kicker == "OPEN_T"
+    assert "OPEN_H1" in opened.graphic.title
+    assert "P1C1T" not in opened.graphic.kicker
+    assert "P1C1B" not in opened.graphic.title
+
+    for point_i, point in enumerate(imported.points):
+        w0, w1 = point_windows(script)[point_i]
+        overlays = [
+            scene
+            for scene in script.scenes
+            if scene.role == "body"
+            and scene.layout is PictureTag.OVERLAY
+            and scene.start < w1
+            and scene.end > w0
+        ]
+        pips = [
+            scene
+            for scene in script.scenes
+            if scene.layout is PictureTag.PIP and scene.start < w1 and scene.end > w0
+        ]
+        assert len(overlays) >= 3
+        assert pips
+        for card_i in range(3):
+            gold, white = overlays[card_i].graphic.kicker, overlays[card_i].graphic.title
+            assert gold == f"P{point_i + 1}C{card_i + 1}T"
+            assert white == f"P{point_i + 1}C{card_i + 1}B"
+            chrome = render_overlay((1920, 1080), kicker=gold, headline=white)
+            assert chrome[:, :, 3].max() > 80
+            foreign = [s for s in sentinels if s not in {gold, white, "OPEN_T", "OPEN_H1", "OPEN_H2"}]
+            for other in (f"P{point_i + 1}C{k + 1}T" for k in range(3) if k != card_i):
+                assert other != gold
+            for other in (f"P{point_i + 1}C{k + 1}B" for k in range(3) if k != card_i):
+                assert other != white
+            del foreign
+        pip = pips[0]
+        assert pip.graphic.kicker == f"P{point_i + 1}ST"
+        assert pip.graphic.title == f"P{point_i + 1}SX"
+        for card_i in range(3):
+            assert pip.graphic.kicker != f"P{point_i + 1}C{card_i + 1}T"
+            assert pip.graphic.title != f"P{point_i + 1}C{card_i + 1}B"
+        pip_chrome = render_pip_type(
+            (1920, 1080),
+            kicker=pip.graphic.kicker,
+            sub=pip.graphic.title,
+        )
+        expected = render_overlay(
+            (1920, 1080),
+            kicker=f"P{point_i + 1}ST",
+            headline=f"P{point_i + 1}SX",
+            icon="bar_chart",
+        )
+        assert (pip_chrome == expected).all()
+
+
+def test_clip_helpers_match_measured_plate() -> None:
+    assert KICKER_CHAR_LIMIT == 40
+    assert HEADLINE_CHAR_LIMIT == 76
+    assert clip_plate_kicker("A" * 50) == "A" * 40
+    assert clip_plate_headline("B" * 90) == "B" * 76
+    long = "Humans must be in the loop for an attack, DoW Directive 3000.09 extra overflow"
+    chrome = render_overlay((1920, 1080), kicker="NOT AUTONOMOUS", headline=long)
+    from pipeline.layouts import overlay_rect, pip_rect
+
+    ox, oy, ow, _ = overlay_rect()
+    rgb = chrome[:, :, :3]
+    gold_xs = [
+        x
+        for y in range(oy, min(oy + 80, 1080))
+        for x in range(1920)
+        if abs(int(rgb[y, x, 0]) - 224) < 36 and abs(int(rgb[y, x, 1]) - 180) < 36
+    ]
+    assert gold_xs
+    assert max(gold_xs) < ox + ow - 4
+    pip_box = pip_rect()
+    alpha = chrome[:, :, 3]
+    ys, xs = (alpha > 80).nonzero()
+    assert int(xs.max()) < pip_box[0]
+    assert int(ys.max()) < pip_box[1]

@@ -318,11 +318,9 @@ def test_empty_still_title_renders_white_content_only() -> None:
         kicker="",
         headline=DRONE_CABLE,
         icon="bar_chart",
-        max_headline_lines=5,
+        max_headline_lines=2,
     )
-    clipped = render_overlay((1920, 1080), kicker="", headline=DRONE_CABLE, icon="bar_chart")
     assert np.array_equal(chrome, expected)
-    assert not np.array_equal(chrome, clipped)
     split = render_overlay(
         (1920, 1080),
         kicker="Look at this drone laying cable to keep comms with it's pilot.",
@@ -343,7 +341,7 @@ def test_filled_still_title_keeps_full_white_content() -> None:
         kicker="CABLE DRONE",
         headline=DRONE_CABLE,
         icon="bar_chart",
-        max_headline_lines=5,
+        max_headline_lines=2,
     )
     assert np.array_equal(chrome, expected)
     split_content = render_overlay(
