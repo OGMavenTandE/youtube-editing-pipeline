@@ -108,18 +108,20 @@ def apply_bookends(
             child.layout = PictureTag.NOTHING
         trimmed.append(child)
 
+    open_card = sheet.open_card
+    close_card = sheet.close_card
     open_scene = Scene(
         start=0.0,
         end=hold if duration > hold else duration,
         layout=PictureTag.LOWER_THIRD,
         role="open",
-        said=sheet.exec_headline,
+        said=open_card.headline,
         shown="open bookend",
         reason="bookend-open",
         graphic=GraphicCard(
-            kicker=sheet.title,
-            title=sheet.exec_headline,
-            icon=sheet.open_icon or "bar_chart",
+            kicker=open_card.kicker,
+            title=open_card.headline,
+            icon=open_card.icon or "bar_chart",
         ),
     )
     close_start = max(0.0, duration - hold)
@@ -128,13 +130,13 @@ def apply_bookends(
         end=duration,
         layout=PictureTag.LOWER_THIRD,
         role="close",
-        said=sheet.close_headline,
+        said=close_card.headline,
         shown="close bookend",
         reason="bookend-close",
         graphic=GraphicCard(
-            kicker=sheet.close_kicker or "WORK WITH ME",
-            title=sheet.close_headline,
-            icon=sheet.close_icon or "share",
+            kicker=close_card.kicker or "WORK WITH ME",
+            title=close_card.headline or "Independent AI T&E.\nVendor-agnostic.",
+            icon=close_card.icon or "share",
         ),
     )
 

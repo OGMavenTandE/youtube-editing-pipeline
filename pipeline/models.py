@@ -99,15 +99,60 @@ class HostIdentity(BaseModel):
     )
 
 
+class BookendCard(BaseModel):
+    """Dedicated open/close plate. Not an overlay|pip|nothing body tag."""
+
+    kicker: str = ""
+    headline: str = ""
+    icon: str = ""
+
+
 class TalkSheet(BaseModel):
-    """Job metadata for bookend cards. Not invented by the tagger."""
+    """Job metadata for bookend cards. Not invented by the tagger.
+
+    open_card is the overview plate (title kicker + two-line thesis).
+    close_card is the locked CTA. Neither is a body subpoint.
+    title / exec_headline / close_* are aliases kept for older job JSON.
+    """
 
     title: str = ""
     exec_headline: str = ""
+    open_card: BookendCard = Field(default_factory=BookendCard)
+    close_card: BookendCard = Field(
+        default_factory=lambda: BookendCard(
+            kicker="WORK WITH ME",
+            headline="Independent AI T&E.\nVendor-agnostic.",
+            icon="share",
+        )
+    )
     close_kicker: str = "WORK WITH ME"
     close_headline: str = "Independent AI T&E.\nVendor-agnostic."
     close_icon: str = "share"
     open_icon: str = "bar_chart"
+
+    @model_validator(mode="after")
+    def sync_bookend_aliases(self) -> "TalkSheet":
+        if not self.open_card.kicker.strip() and self.title.strip():
+            self.open_card.kicker = self.title.strip()
+        if not self.open_card.headline.strip() and self.exec_headline.strip():
+            self.open_card.headline = self.exec_headline.strip()
+        if not self.open_card.icon.strip() and self.open_icon.strip():
+            self.open_card.icon = self.open_icon.strip()
+        if not self.title.strip() and self.open_card.kicker.strip():
+            self.title = self.open_card.kicker
+        if not self.exec_headline.strip() and self.open_card.headline.strip():
+            self.exec_headline = self.open_card.headline
+        if not self.close_card.kicker.strip() and self.close_kicker.strip():
+            self.close_card.kicker = self.close_kicker.strip()
+        if not self.close_card.headline.strip() and self.close_headline.strip():
+            self.close_card.headline = self.close_headline.strip()
+        if not self.close_card.icon.strip() and self.close_icon.strip():
+            self.close_card.icon = self.close_icon.strip()
+        if not self.close_kicker.strip() and self.close_card.kicker.strip():
+            self.close_kicker = self.close_card.kicker
+        if not self.close_headline.strip() and self.close_card.headline.strip():
+            self.close_headline = self.close_card.headline
+        return self
 
 
 class MicroEventKind(str, Enum):

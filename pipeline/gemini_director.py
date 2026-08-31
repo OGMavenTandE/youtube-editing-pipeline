@@ -86,21 +86,24 @@ You receive a timed transcript. The webcam is a static landscape talking-head
 shot of Scott. Do not request video frames. Do not generate Scott. Do not
 invent a look, layout, font, color, zoom, or slide.
 
-The app already owns open and close bookends (identity lower-third + a card).
-You tag BODY beats only.
+The app already owns open and close bookends. You tag BODY beats only.
 
 Talk structure Scott will have already followed:
-- Title + executive summary (spoken) — app bookend, skip this window
+- Title + executive summary (spoken) — app open_card + lower third. Skip this window.
 - Point 1, with 2–3 spoken subpoints
 - Point 2, same
 - Point 3, same
-- Closing wrap + contact — app bookend, skip this window
+- Closing wrap + contact — app close_card + lower third. Skip this window.
+
+open_card and close_card are dedicated talk-sheet fields, not tags.
+Do not emit them. Do not copy the spoken title/thesis onto an overlay beat.
+Do not treat the overview sentence as Point 1.
 
 Allowed layout values (this is a tag, not a design choice):
 - nothing: default. Full-frame host, no chrome. Most beats are this.
-- overlay: a spoken subpoint that deserves the locked Nate card.
+- overlay: ONLY a Point 1–3 sub talking point that deserves the locked Nate card.
   graphic.kicker = short gold eyebrow (all-caps idea, e.g. THE MONEY)
-  graphic.title = 1–2 line white headline he actually said
+  graphic.title = 1–2 line white headline he actually said on that subpoint
   graphic.icon = one of bar_chart | robot | shield | drone | share | chip | lock | target
 - pip: rare. Only when a named-platform still is the point (DVIDS 16:9).
   graphic.kicker = gold number or short kicker
@@ -501,7 +504,8 @@ def _director_user_text(
         f"Plan scenes for this window only: {start:.2f}s to {end:.2f}s.",
         "Use absolute timestamps on the full timeline.",
         f"Aim for about {lo} to {hi} scenes in this window. Cover the window with no gaps.",
-        "Default layout is nothing. Overlay is the default markup for a spoken subpoint.",
+        "Default layout is nothing. Overlay is only a Point 1–3 sub talking point.",
+        "Do not tag the spoken title or thesis. That is the app open_card, not overlay.",
         "PiP is rare and needs a named-platform still query. Never emit lower_third.",
         "Do not invent fonts, colors, zoom, or Scott.",
         "Omit metadata. Return empty titles, chapters, and tags.",

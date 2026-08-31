@@ -142,8 +142,8 @@ The model may only tag a **body** beat `overlay` | `pip` | `nothing` and fill te
 
 The app forces bookends on the first and last ~10s (`BOOKEND_SECONDS`):
 
-- Open: overlay card (title + executive-summary headline from the talk sheet) plus the two-column identity / FIND ME lower third.
-- Close: CTA overlay (`WORK WITH ME` / Independent AI T&E. Vendor-agnostic.) plus the same identity bar. Never a PiP. No WRAP kicker.
+- Open: `open_card` (title kicker + two-line thesis from the talk sheet) plus the two-column identity / FIND ME lower third. Not a body tag. Not Point 1.
+- Close: locked `close_card` (`WORK WITH ME` / Independent AI T&E. Vendor-agnostic.) plus the same identity bar. Never a PiP. No WRAP kicker.
 
 Identity strings are config (`HOST_NAME`, `HOST_TITLE_LINE`, `HOST_AFFILIATIONS`, `HOST_MISSION`, `HOST_FIND_ME`). Talk-sheet copy is job metadata (`TALK_TITLE`, `TALK_EXEC_HEADLINE`).
 

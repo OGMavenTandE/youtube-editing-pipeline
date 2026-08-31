@@ -141,16 +141,25 @@ def scene_shows_slide(scene: Scene) -> bool:
 
 
 def resolve_talk_sheet(script: EditScript) -> TalkSheet:
+    """Fill bookend cards from job metadata. Never borrow a body overlay."""
     sheet = script.talk_sheet.model_copy(deep=True)
-    if not sheet.title.strip():
+    if not sheet.open_card.kicker.strip():
         titles = [title.strip() for title in script.metadata.titles if title.strip()]
         if titles:
             index = max(0, min(int(script.metadata.title_index or 0), len(titles) - 1))
-            sheet.title = titles[index]
-    if not sheet.close_kicker.strip():
-        sheet.close_kicker = "WORK WITH ME"
-    if not sheet.close_headline.strip():
-        sheet.close_headline = "Independent AI T&E.\nVendor-agnostic."
+            sheet.open_card.kicker = titles[index]
+            sheet.title = sheet.title.strip() or titles[index]
+    if not sheet.open_card.icon.strip():
+        sheet.open_card.icon = sheet.open_icon.strip() or "bar_chart"
+    if not sheet.close_card.kicker.strip():
+        sheet.close_card.kicker = "WORK WITH ME"
+    if not sheet.close_card.headline.strip():
+        sheet.close_card.headline = "Independent AI T&E.\nVendor-agnostic."
+    if not sheet.close_card.icon.strip():
+        sheet.close_card.icon = sheet.close_icon.strip() or "share"
+    sheet.close_kicker = sheet.close_card.kicker
+    sheet.close_headline = sheet.close_card.headline
+    sheet.close_icon = sheet.close_card.icon
     script.talk_sheet = sheet
     return sheet
 

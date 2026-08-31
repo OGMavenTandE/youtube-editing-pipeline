@@ -19,14 +19,9 @@ from pipeline.config import (
 )
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
-from pipeline.models import EditScript, SilenceTrimResult, TalkSheet
+from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
-from pipeline.shotlist import (
-    beats_from_script,
-    load_tagged_beats,
-    resolve_edit_script,
-    save_tagged_beats,
-)
+from pipeline.shotlist import beats_from_script, resolve_edit_script, save_tagged_beats
 from pipeline.stills import apply_stills
 from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
@@ -171,7 +166,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     reuse_saved_script = (
         not args.edit_script
         and not args.skip_gemini
-        and (script_path.is_file() or beats_path.is_file())
+        and script_path.is_file()
     )
     prefer_trim = bool(args.edit_script) or bool(args.skip_silence) or reuse_saved_script
     reused = resolve_working_cut(
@@ -217,17 +212,10 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         script = EditScript.empty()
         print("[2/5] Gemini skipped (empty edit script).")
     elif reuse_saved_script:
-        if beats_path.is_file() and not script_path.is_file():
-            script = EditScript.empty()
-            from pipeline.shotlist import apply_tagged_beats
-
-            apply_tagged_beats(script, load_tagged_beats(beats_path))
-            print(f"[2/5] Reusing tagged beats {beats_path.name}.")
-        else:
-            script = load_edit_script(script_path)
-            print(f"[2/5] Reusing saved edit script {script_path.name}.")
-            if beats_path.is_file():
-                print(f"      tagged beats {beats_path.name} (model skipped)")
+        script = load_edit_script(script_path)
+        print(f"[2/5] Reusing saved edit script {script_path.name}.")
+        if beats_path.is_file():
+            print(f"      tagged beats {beats_path.name} (model skipped)")
     else:
         print(f"[2/5] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
@@ -252,20 +240,14 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         print(f"      saved edit script {script_path.name} (before slides)")
 
     script.identity = identity_from_settings(settings)
-    if not script.talk_sheet.title.strip() or not script.talk_sheet.exec_headline.strip():
-        env_sheet = TalkSheet(
-            title=os.getenv("TALK_TITLE", script.talk_sheet.title),
-            exec_headline=os.getenv("TALK_EXEC_HEADLINE", script.talk_sheet.exec_headline),
-            close_kicker=script.talk_sheet.close_kicker,
-            close_headline=script.talk_sheet.close_headline,
-            close_icon=script.talk_sheet.close_icon,
-            open_icon=script.talk_sheet.open_icon,
-        )
-        if env_sheet.title.strip() or env_sheet.exec_headline.strip():
-            if env_sheet.title.strip():
-                script.talk_sheet.title = env_sheet.title
-            if env_sheet.exec_headline.strip():
-                script.talk_sheet.exec_headline = env_sheet.exec_headline
+    env_title = os.getenv("TALK_TITLE", "").strip()
+    env_thesis = os.getenv("TALK_EXEC_HEADLINE", "").strip()
+    if env_title and not script.talk_sheet.open_card.kicker.strip():
+        script.talk_sheet.open_card.kicker = env_title
+        script.talk_sheet.title = env_title
+    if env_thesis and not script.talk_sheet.open_card.headline.strip():
+        script.talk_sheet.open_card.headline = env_thesis
+        script.talk_sheet.exec_headline = env_thesis
     script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
     report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
     print(

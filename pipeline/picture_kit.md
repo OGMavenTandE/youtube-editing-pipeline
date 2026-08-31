@@ -4,11 +4,11 @@ Locked look. The app tags and composites. It does not invent a layout, font, col
 
 ## Talk structure
 
-1. Title + executive summary (spoken) over the open bookend
+1. Title + executive summary (spoken) over the open bookend (`open_card` + lower third)
 2. Point 1 (PiP only if a named-platform still exists) with 2–3 spoken subpoints as overlay cards
 3. Point 2, same
 4. Point 3, same
-5. Closing wrap (bookend again, never a PiP) with contact
+5. Closing wrap (`close_card` + lower third, never a PiP) with contact
 
 Most of the file is `nothing`: full-frame host, no chrome.
 
@@ -16,14 +16,14 @@ Most of the file is `nothing`: full-frame host, no chrome.
 
 The model may tag a **body** beat as `overlay` | `pip` | `nothing` and fill copy:
 
-- `overlay`: gold kicker, 2-line white headline, icon name
+- `overlay`: gold kicker, 2-line white headline, icon name. **Only** Point 1–3 sub talking points.
 - `pip`: left-type (gold number/kicker, white sub, optional quote) plus a still query
 - `nothing`: no copy
 
 It must not choose layout, font, colors, zoom, or `lower_third`.
 It must not generate Scott. Sparse: overlay is the default markup; PiP is rare; most beats are `nothing`.
 
-Lower thirds and bookend cards are forced by the app from the talk sheet + identity config.
+`open_card` (title kicker + two-line thesis) and `close_card` (locked CTA) are talk-sheet / job metadata. The app applies them with the lower third at open and close. They are not body tags. Do not take `open_card` from Point 1.
 
 ## Visual constants
 
@@ -52,9 +52,9 @@ Structural. First ~8–12s and last ~8–12s. Not a model choice. Never a PiP.
 
 Two chromes at once:
 
-1. Overlay card (same Nate plate).
-   - Open: gold kicker = video title; 2-line white headline = executive-summary highlight from the talk sheet.
-   - Close: default kicker `WORK WITH ME`, headline `Independent AI T&E.` / `Vendor-agnostic.`
+1. Dedicated bookend plate (same Nate chrome as body overlays, different field).
+   - `open_card`: gold kicker = video title; 2-line white headline = thesis from the talk sheet. Not Point 1.
+   - `close_card`: locked CTA, kicker `WORK WITH ME`, headline `Independent AI T&E.` / `Vendor-agnostic.`
 2. Lower third, ~220px, two columns, gold 4–6px top rule, side margin 48.
    - Left (locked identity, every video): name / title line / affiliations in gold / mission.
    - Right: `FIND ME` plus site, LinkedIn, aieval.org.

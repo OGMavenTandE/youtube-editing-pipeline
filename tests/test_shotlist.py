@@ -180,6 +180,8 @@ def test_director_prompt_is_tag_contract() -> None:
     assert "lower_third" in _DIRECTOR_PROMPT
     assert "Do not generate Scott" in _DIRECTOR_PROMPT
     assert "Never emit layout lower_third" in _DIRECTOR_PROMPT
+    assert "open_card" in _DIRECTOR_PROMPT
+    assert "Point 1–3 sub talking point" in _DIRECTOR_PROMPT or "Point 1-3" in _DIRECTOR_PROMPT
     assert "TAKEAWAY" in _DIRECTOR_PROMPT
     assert "FULL_FRAME" in _DIRECTOR_PROMPT
     assert "Every scene needs a graphic card" not in _DIRECTOR_PROMPT

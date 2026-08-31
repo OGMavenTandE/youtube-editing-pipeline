@@ -4,7 +4,15 @@ import numpy as np
 from PIL import Image
 
 from pipeline.layouts import GOLD, PictureTag, lower_third_rect, overlay_rect, pip_rect
-from pipeline.models import EditScript, GraphicCard, HostIdentity, PlannedScene, Scene, TalkSheet
+from pipeline.models import (
+    BookendCard,
+    EditScript,
+    GraphicCard,
+    HostIdentity,
+    PlannedScene,
+    Scene,
+    TalkSheet,
+)
 from pipeline.pacing import apply_bookends, enforce_pacing
 from pipeline.picture_kit import ICON_NAMES, draw_icon, load_inter, render_kit_fixtures, render_overlay
 from pipeline.config import Settings
@@ -86,6 +94,61 @@ def test_bookends_are_forced_and_stacked(tmp_path: Path) -> None:
     body = [scene for scene in script.scenes if scene.role == "body"]
     assert all(scene.layout is not PictureTag.LOWER_THIRD for scene in body)
     assert all(not scene.micro_events for scene in script.scenes)
+    point_one = [scene for scene in body if scene.layout is PictureTag.OVERLAY]
+    assert point_one
+    assert point_one[0].graphic.kicker == "THE MONEY"
+    assert script.scenes[0].graphic.kicker != "THE MONEY"
+
+
+def test_open_card_comes_from_talk_sheet_not_point_one() -> None:
+    settings = Settings(bookend_seconds=10)
+    script = EditScript(
+        scenes=[
+            Scene(
+                start=0,
+                end=30,
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="THE MONEY", title="$1.5B in Procurements. That's the Floor."),
+            )
+        ],
+        talk_sheet=TalkSheet(
+            open_card=BookendCard(
+                kicker="SKYNET IS COMING · PART 2",
+                headline="$1.5B is the floor.\nNot the program.",
+                icon="bar_chart",
+            )
+        ),
+    )
+    script = enforce_pacing(script, 60.0, settings)
+    opened = script.scenes[0]
+    assert opened.role == "open"
+    assert opened.graphic.kicker == "SKYNET IS COMING · PART 2"
+    assert "Not the program" in opened.graphic.title
+    assert opened.graphic.kicker != "THE MONEY"
+    body = [scene for scene in script.scenes if scene.role == "body" and scene.layout is PictureTag.OVERLAY]
+    assert body[0].graphic.kicker == "THE MONEY"
+
+
+def test_empty_open_card_does_not_steal_point_one() -> None:
+    settings = Settings(bookend_seconds=10)
+    script = EditScript(
+        scenes=[
+            Scene(
+                start=12,
+                end=24,
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="THE MONEY", title="$1.5B is the floor."),
+            )
+        ]
+    )
+    script = enforce_pacing(script, 60.0, settings)
+    opened = script.scenes[0]
+    assert opened.role == "open"
+    assert opened.graphic.kicker != "THE MONEY"
+    assert opened.graphic.title != "$1.5B is the floor."
+    closed = script.scenes[-1]
+    assert closed.role == "close"
+    assert closed.graphic.kicker == "WORK WITH ME"
 
 
 def test_empty_cut_is_bookends_plus_nothing() -> None:
