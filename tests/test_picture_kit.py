@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from pipeline.layouts import GOLD, PictureTag, lower_third_rect, overlay_rect, pip_rect
 from pipeline.models import (
@@ -14,7 +14,14 @@ from pipeline.models import (
     TalkSheet,
 )
 from pipeline.pacing import apply_bookends, enforce_pacing
-from pipeline.picture_kit import ICON_NAMES, draw_icon, load_inter, render_kit_fixtures, render_overlay
+from pipeline.picture_kit import (
+    ICON_NAMES,
+    draw_icon,
+    load_inter,
+    render_kit_fixtures,
+    render_overlay,
+    render_pip_type,
+)
 from pipeline.config import Settings
 from pipeline.shotlist import compose_mode, resolve_scene
 
@@ -195,8 +202,11 @@ def test_kit_fixtures_paint_three_chromes(tmp_path: Path) -> None:
     assert _near_gold(border)
     # Host window is a scaled frame, not a wipe of the still.
     inside = pip.getpixel((x + box_w // 2, y + box_h // 2))
-    still_bg = pip.getpixel((200, 200))
+    still_bg = pip.getpixel((1000, 400))
     assert inside != still_bg
+    px, py, _, _ = overlay_rect()
+    plate = pip.getpixel((px + 40, py + 40))
+    assert plate[0] < 40 and plate[1] < 40 and plate[2] < 40
 
     opened = Image.open(files["bookend_open"])
     closed = Image.open(files["bookend_close"])
@@ -213,3 +223,86 @@ def test_kit_fixtures_paint_three_chromes(tmp_path: Path) -> None:
     icons = [draw_icon(name, 72) for name in ICON_NAMES]
     assert all(icon.size == (72, 72) for icon in icons)
     assert any(_near_gold(px) for px in icons[0].getdata())
+
+
+def _composite_chrome(still: Image.Image, chrome: np.ndarray) -> Image.Image:
+    base = still.convert("RGBA")
+    base.alpha_composite(Image.fromarray(chrome))
+    return base.convert("RGB")
+
+
+def _opaque_bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
+    ys, xs = np.where(mask)
+    assert xs.size and ys.size
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
+def _rects_intersect(
+    a: tuple[int, int, int, int],
+    b: tuple[int, int, int, int],
+) -> bool:
+    ax0, ay0, aw, ah = a
+    bx0, by0, bw, bh = b
+    return not (ax0 + aw <= bx0 or bx0 + bw <= ax0 or ay0 + ah <= by0 or by0 + bh <= ay0)
+
+
+def test_long_pip_title_sits_on_dark_plate() -> None:
+    title = "Look at this drone laying cable to keep comms with it"
+    still = Image.new("RGB", (1920, 1080), (236, 238, 242))
+    draw = ImageDraw.Draw(still)
+    draw.ellipse((420, 80, 980, 520), fill=(255, 255, 255))
+    draw.ellipse((1100, 40, 1680, 460), fill=(250, 250, 252))
+    chrome = render_pip_type((1920, 1080), kicker=title, sub="", quote="")
+    alpha = chrome[:, :, 3]
+    plate = alpha > 80
+    x0, y0, x1, y1 = _opaque_bbox(plate)
+    pip_box = pip_rect()
+    assert 0 <= x0 <= x1 < 1920
+    assert 0 <= y0 <= y1 < 1080
+    assert not _rects_intersect((x0, y0, x1 - x0 + 1, y1 - y0 + 1), pip_box)
+    frame = _composite_chrome(still, chrome)
+    plate_crop = np.asarray(frame.crop((x0, y0, x1 + 1, y1 + 1)))
+    mean = plate_crop.mean(axis=(0, 1))
+    assert float(mean.mean()) < 90
+    gold_hits = sum(1 for px in frame.crop((x0, y0, x1 + 1, y1 + 1)).getdata() if _near_gold(px))
+    assert gold_hits > 40
+    bare = frame.getpixel((1600, 200))
+    assert bare[0] > 220 and bare[1] > 220 and bare[2] > 220
+
+
+def test_short_pip_title_is_left_plate_gold() -> None:
+    chrome = render_pip_type((1920, 1080), kicker="REAPER", sub="", quote="")
+    ox, oy, ow, _ = overlay_rect()
+    arr = chrome
+    plate = arr[oy : oy + 180, ox : ox + ow]
+    assert plate[:, :, 3].max() > 160
+    gold_hits = sum(1 for px in Image.fromarray(plate).getdata() if _near_gold(px[:3]))
+    assert gold_hits > 20
+    right = arr[oy : oy + 180, 1200:1900, 3]
+    assert int(right.max()) < 20
+
+
+def test_overlay_kicker_fits_inside_plate() -> None:
+    long_title = "LOOK AT THIS DRONE LAYING CABLE TO KEEP COMMS WITH IT'S PILOT. ADORABLE."
+    chrome = render_overlay(
+        (1920, 1080),
+        kicker=long_title,
+        headline="Humans must be in the loop for an attack, DoW Directive 3000.09",
+        icon="bar_chart",
+    )
+    ox, oy, ow, _ = overlay_rect()
+    gold_xs: list[int] = []
+    gold_ys: list[int] = []
+    rgb = chrome[:, :, :3]
+    for y in range(oy, min(oy + 260, 1080)):
+        for x in range(0, 1920):
+            if _near_gold(tuple(int(v) for v in rgb[y, x])):
+                gold_xs.append(x)
+                gold_ys.append(y)
+    assert gold_xs
+    assert max(gold_xs) < ox + ow - 8
+    assert min(gold_xs) >= ox
+    assert max(gold_ys) < 700
+    pip_box = pip_rect()
+    assert max(gold_xs) < pip_box[0]
+    assert max(gold_ys) < pip_box[1]

@@ -514,9 +514,150 @@ def test_pip_hold_grows_into_nothing_not_overlay() -> None:
     pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
     kept = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
     assert pip.end - pip.start + 1e-6 >= 8.0
+    assert pip.end - pip.start <= 8.05
     assert kept.start == 28
     assert kept.end == 36
     assert kept.graphic.title == "$1.5B is the floor."
+
+
+def test_pip_hold_does_not_swallow_long_nothing() -> None:
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=13,
+                role="body",
+                layout=PictureTag.PIP,
+                graphic=GraphicCard(kicker="MQ-9", title="Reaper", asset_path="/tmp/x.jpg"),
+            ),
+            Scene(start=13, end=63, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    enforce_pip_holds(script, 8.0)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    nothings = [scene for scene in script.scenes if scene.role == "body" and scene.layout is PictureTag.NOTHING]
+    assert pip.end - pip.start <= 8.05
+    assert pip.end - pip.start + 1e-6 >= 8.0
+    assert sum(scene.end - scene.start for scene in nothings) > 40
+
+
+def test_long_director_pip_is_capped_to_hold() -> None:
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=60,
+                role="body",
+                layout=PictureTag.PIP,
+                graphic=GraphicCard(kicker="MQ-9", title="Reaper", asset_path="/tmp/x.jpg"),
+            ),
+            Scene(start=60, end=110, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    enforce_pip_holds(script, 8.0)
+    pips = [scene for scene in script.scenes if scene.layout is PictureTag.PIP]
+    assert len(pips) == 1
+    assert pips[0].end - pips[0].start <= 8.05
+    assert pips[0].start == 10
+    leftover = next(
+        scene
+        for scene in script.scenes
+        if scene.role == "body" and scene.layout is PictureTag.NOTHING and scene.start >= 18
+    )
+    assert leftover.start == pips[0].end
+    assert leftover.layout is PictureTag.NOTHING
+
+
+def test_image_text_does_not_drive_overlay_kicker(tmp_path: Path) -> None:
+    still = tmp_path / "drone.jpg"
+    still.write_bytes(b"x")
+    image = "Look at this drone laying cable to keep comms with it"
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                still_path=str(still),
+                still_source="user",
+                image_text=image,
+                image_text_source="user",
+                titles=["DOW DIRECTIVE 3000.09", "", ""],
+                title_sources=["user", "empty", "empty"],
+                cards=["Humans must be in the loop for an attack, DoW Directive 3000.09", "", ""],
+                card_sources=["user", "empty", "empty"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.PIP,
+                graphic=GraphicCard(kicker="WRONG", title="x", asset_path=str(still)),
+            ),
+            Scene(
+                start=18,
+                end=28,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker=image, title="old body"),
+            ),
+            Scene(start=28, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    apply_user_point_locks(script, sheet)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert pip.graphic.kicker == image
+    assert overlay.graphic.kicker == "DOW DIRECTIVE 3000.09"
+    assert overlay.graphic.title.startswith("Humans must be in the loop")
+    assert "drone laying cable" not in overlay.graphic.kicker.casefold()
+
+
+def test_empty_overlay_title_comes_from_card_not_image_text() -> None:
+    image = "Look at this drone laying cable to keep comms with it"
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                image_text=image,
+                image_text_source="user",
+                cards=["Humans must be in the loop for an attack"],
+                card_sources=["user"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker=image, title="Humans must be in the loop for an attack"),
+            ),
+            Scene(start=18, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    apply_user_point_locks(script, sheet)
+    autofill_talk_sheet(sheet, script)
+    overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert "drone laying cable" not in overlay.graphic.kicker.casefold()
+    assert "drone laying cable" not in sheet.points[0].titles[0].casefold()
+    assert overlay.graphic.title.startswith("Humans must be in the loop")
+    words = overlay.graphic.kicker.split()
+    assert 1 <= len(words) <= 4
 
 
 def test_user_still_does_not_turn_whole_body_into_pip(tmp_path: Path) -> None:
@@ -541,6 +682,6 @@ def test_user_still_does_not_turn_whole_body_into_pip(tmp_path: Path) -> None:
     pips = [scene for scene in script.scenes if scene.layout is PictureTag.PIP]
     nothings = [scene for scene in script.scenes if scene.role == "body" and scene.layout is PictureTag.NOTHING]
     assert len(pips) == 1
-    assert 7.5 <= pips[0].end - pips[0].start <= 12
+    assert 7.5 <= pips[0].end - pips[0].start <= 8.05
     assert nothings
     assert sum(scene.end - scene.start for scene in nothings) > 40

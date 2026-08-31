@@ -112,8 +112,11 @@ def resolve_scene(scene: Scene) -> Scene:
         path = resolved_still_path(scene)
         if path is None:
             if overlay_copy_ok(scene.graphic):
+                from pipeline.talk_sheet import derive_kicker
+
                 scene.layout = PictureTag.OVERLAY
                 scene.asset_kind = "none"
+                scene.graphic.kicker = derive_kicker(scene.graphic.title, said=scene.said)
                 return scene
             return talking_head_scene(scene)
         scene.asset_ref = str(path)

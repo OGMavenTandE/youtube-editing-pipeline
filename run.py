@@ -295,6 +295,8 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         output_dir=settings.output_dir,
     )
     resolve_edit_script(script)
+    sanitize_script_kickers(script, script.talk_sheet)
+    enforce_pip_holds(script, settings.pip_hold_seconds)
 
     if args.skip_slides or skip_composite:
         print("[3/5] Chromium slides skipped (locked kit paints chrome).")
