@@ -151,7 +151,14 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         else (settings.output_dir / f"{input_path.stem}_final.mp4").resolve()
     )
     skip_composite = bool(getattr(args, "skip_composite", False))
-    prefer_trim = bool(args.edit_script) or bool(args.skip_silence)
+    script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
+    meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
+    reuse_saved_script = (
+        not args.edit_script
+        and not args.skip_gemini
+        and script_path.is_file()
+    )
+    prefer_trim = bool(args.edit_script) or bool(args.skip_silence) or reuse_saved_script
     reused = resolve_working_cut(
         input_path,
         settings,
@@ -194,6 +201,9 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     elif args.skip_gemini:
         script = EditScript.empty()
         print("[2/5] Gemini skipped (empty edit script).")
+    elif reuse_saved_script:
+        script = load_edit_script(script_path)
+        print(f"[2/5] Reusing saved edit script {script_path.name}.")
     else:
         print(f"[2/5] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
@@ -207,12 +217,15 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
             transcript_path=transcript_path,
             transcript_out=transcript_out,
         )
+        write_json(script_path, script.model_dump())
+        write_json(meta_path, script.metadata.model_dump())
         print(
             f"      scenes={len(script.scenes)}  "
             f"titles={len(script.metadata.titles)}  "
             f"chapters={len(script.metadata.chapters)}  "
             f"transcript={transcript_out.name}"
         )
+        print(f"      saved edit script {script_path.name} (before slides)")
 
     script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
     report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
@@ -241,9 +254,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         assets = render_slides(script, settings)
         print(f"      slides={len(assets)}  dir={settings.slides_dir}")
 
-    script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     write_json(script_path, script.model_dump())
-    meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
     title_index = resolve_title_index(
         getattr(args, "title_index", None),
         script.metadata,

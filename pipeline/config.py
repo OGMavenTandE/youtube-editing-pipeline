@@ -60,6 +60,7 @@ class Settings(BaseModel):
     work_dir: Path = REPO_ROOT / "work"
     slides_dir: Path = REPO_ROOT / "work" / "slides"
     scenes_dir: Path = REPO_ROOT / "work" / "scenes"
+    encode_concurrency: int = Field(default=2, ge=1, le=8)
 
     def ensure_dirs(self) -> None:
         self.input_dir.mkdir(parents=True, exist_ok=True)
@@ -124,6 +125,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         work_dir=Path(os.getenv("WORK_DIR", str(REPO_ROOT / "work"))),
         slides_dir=Path(os.getenv("SLIDES_DIR", str(REPO_ROOT / "work" / "slides"))),
         scenes_dir=Path(os.getenv("SCENES_DIR", str(REPO_ROOT / "work" / "scenes"))),
+        encode_concurrency=int(os.getenv("ENCODE_CONCURRENCY", "2")),
     )
 
 

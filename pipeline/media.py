@@ -45,6 +45,41 @@ def probe_media(path: Path, settings: Settings) -> dict[str, Any]:
     return payload
 
 
+def probe_video_stream(path: Path, settings: Settings) -> tuple[int, int, float]:
+    """Return width, height, fps from the first video stream. fps defaults to 30."""
+    info = probe_media(path, settings)
+    for stream in info.get("streams", []):
+        if stream.get("codec_type") != "video":
+            continue
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        fps = _parse_frame_rate(stream.get("avg_frame_rate") or stream.get("r_frame_rate"))
+        return width, height, fps
+    return 0, 0, 30.0
+
+
+def _parse_frame_rate(value: object) -> float:
+    text = str(value or "").strip()
+    if not text or text in {"0/0", "0"}:
+        return 30.0
+    if "/" in text:
+        num_s, den_s = text.split("/", 1)
+        try:
+            num = float(num_s)
+            den = float(den_s)
+        except ValueError:
+            return 30.0
+        if den == 0:
+            return 30.0
+        rate = num / den
+        return rate if rate > 1.0 else 30.0
+    try:
+        rate = float(text)
+    except ValueError:
+        return 30.0
+    return rate if rate > 1.0 else 30.0
+
+
 def probe_duration(path: Path, settings: Settings) -> float:
     info = probe_media(path, settings)
     duration = info.get("format", {}).get("duration")

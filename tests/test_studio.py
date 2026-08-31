@@ -571,6 +571,114 @@ def test_edit_script_composites_trimmed_file(monkeypatch) -> None:
     assert seen["video"] == trimmed.resolve()
 
 
+def test_edit_script_saved_before_slides(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-edit-script-before-slides")
+    work.mkdir(parents=True, exist_ok=True)
+    source = work / "fresh_talk.mp4"
+    _write_source_video(source, seconds=2)
+    settings = Settings(
+        work_dir=work,
+        output_dir=work,
+        slides_dir=work / "slides",
+        scenes_dir=work / "scenes",
+    )
+    script_path = work / "fresh_talk_edit_script.json"
+    if script_path.exists():
+        script_path.unlink()
+    order: list[str] = []
+
+    def fake_analyze(*_args, **_kwargs):
+        order.append("gemini")
+        return EditScript(
+            metadata=YouTubeMetadata(titles=["Saved before slides"]),
+            scenes=[],
+        )
+
+    def fake_slides(script, settings_obj):
+        del script
+        order.append("slides")
+        saved = settings_obj.output_dir / "fresh_talk_edit_script.json"
+        assert saved.is_file()
+        payload = saved.read_text(encoding="utf-8")
+        assert "Saved before slides" in payload
+        return []
+
+    def fake_render(video_path, script, output_path, settings_obj, **kwargs):
+        del video_path, script, settings_obj, kwargs
+        Path(output_path).write_bytes(b"final")
+        return Path(output_path)
+
+    monkeypatch.setattr("run.analyze_video", fake_analyze)
+    monkeypatch.setattr("run.render_slides", fake_slides)
+    monkeypatch.setattr("pipeline.compositor.render_video", fake_render)
+    args = Namespace(
+        input=str(source),
+        output=str(work / "fresh_talk_final.mp4"),
+        skip_silence=True,
+        skip_gemini=False,
+        edit_script=None,
+        transcript=None,
+        broll_dir=None,
+        auto_editor=False,
+        skip_slides=False,
+        skip_studio=True,
+        skip_composite=False,
+        title_index=None,
+    )
+    run_pipeline(args, settings)
+    assert order == ["gemini", "slides"]
+    assert script_path.is_file()
+    assert "Saved before slides" in script_path.read_text(encoding="utf-8")
+    assert (work / "fresh_talk_youtube_metadata.json").is_file()
+
+
+def test_edit_script_reused_skips_gemini(monkeypatch) -> None:
+    work = Path("/tmp/yt-pipe-edit-script-reuse")
+    work.mkdir(parents=True, exist_ok=True)
+    source = work / "reuse_talk.mp4"
+    _write_source_video(source, seconds=2)
+    settings = Settings(
+        work_dir=work,
+        output_dir=work,
+        slides_dir=work / "slides",
+        scenes_dir=work / "scenes",
+    )
+    script_path = work / "reuse_talk_edit_script.json"
+    write_json(
+        script_path,
+        EditScript(
+            metadata=YouTubeMetadata(titles=["Reused plan"]),
+            scenes=[],
+        ).model_dump(),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("Gemini should not run when edit script exists")
+
+    monkeypatch.setattr("run.analyze_video", boom)
+    monkeypatch.setattr(
+        "pipeline.compositor.render_video",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("composite ran")),
+    )
+    args = Namespace(
+        input=str(source),
+        output=str(work / "reuse_talk_final.mp4"),
+        skip_silence=True,
+        skip_gemini=False,
+        edit_script=None,
+        transcript=None,
+        broll_dir=None,
+        auto_editor=False,
+        skip_slides=True,
+        skip_studio=True,
+        skip_composite=True,
+        title_index=None,
+    )
+    result = run_pipeline(args, settings)
+    assert result == script_path.resolve()
+    assert "Reused plan" in script_path.read_text(encoding="utf-8")
+
+
 def _fake_one_thumb(title, webcam_path, dest, settings, duration=None, **kwargs):
     dest = dest.with_suffix(".jpg")
     dest.write_bytes(b"fake-thumb")
