@@ -109,6 +109,25 @@ def config_path() -> Path:
     return user_data_dir() / "app_config.json"
 
 
+def last_talk_sheet_path() -> Path:
+    return user_data_dir() / "talk_sheet.json"
+
+
+def documents_pipeline_dir() -> Path:
+    return Path.home() / "Documents" / "Youtube Pipeline"
+
+
+def default_stills_dir() -> Path:
+    preferred = documents_pipeline_dir() / "stills"
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred
+    except OSError:
+        fallback = install_root() / "work" / "stills"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def processed_ids_path() -> Path:
     return user_data_dir() / "processed_ids.json"
 

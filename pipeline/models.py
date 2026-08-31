@@ -13,6 +13,36 @@ ASSET_KINDS: tuple[AssetKind, ...] = ("none", "broll", "site", "card")
 BodyTag = Literal["overlay", "pip", "nothing"]
 BODY_TAGS: tuple[BodyTag, ...] = ("overlay", "pip", "nothing")
 BeatRole = Literal["body", "open", "close"]
+FieldSource = Literal["empty", "user", "auto"]
+FIELD_SOURCES: tuple[FieldSource, ...] = ("empty", "user", "auto")
+TALK_POINT_COUNT = 3
+TALK_CARDS_PER_POINT = 3
+
+
+def _coerce_field_source(value: object) -> FieldSource:
+    raw = str(value or "empty").strip().lower()
+    if raw in FIELD_SOURCES:
+        return raw  # type: ignore[return-value]
+    return "empty"
+
+
+def field_is_locked(source: FieldSource | str, value: object) -> bool:
+    """User-filled text or a user still cannot be overwritten later."""
+    return str(source or "").strip().lower() == "user" and bool(str(value or "").strip())
+
+
+def _pad_str_list(value: object, size: int) -> list[str]:
+    items = [str(item) for item in (value or [])]
+    while len(items) < size:
+        items.append("")
+    return items[:size]
+
+
+def _pad_source_list(value: object, size: int) -> list[FieldSource]:
+    items = [_coerce_field_source(item) for item in (value or [])]
+    while len(items) < size:
+        items.append("empty")
+    return items[:size]
 
 
 def _coerce_asset_kind(value: object) -> AssetKind:
@@ -107,16 +137,61 @@ class BookendCard(BaseModel):
     icon: str = ""
 
 
+class TalkPoint(BaseModel):
+    """One of three talk points. Cards are overlay copy. still_path is the PiP still."""
+
+    platform: str = ""
+    still_path: str = ""
+    cards: list[str] = Field(default_factory=lambda: ["", "", ""])
+    platform_source: FieldSource = "empty"
+    still_source: FieldSource = "empty"
+    card_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
+
+    @field_validator("platform_source", "still_source", mode="before")
+    @classmethod
+    def coerce_point_source(cls, value: object) -> FieldSource:
+        return _coerce_field_source(value)
+
+    @field_validator("cards", mode="before")
+    @classmethod
+    def pad_cards(cls, value: object) -> list[str]:
+        return _pad_str_list(value, TALK_CARDS_PER_POINT)
+
+    @field_validator("card_sources", mode="before")
+    @classmethod
+    def pad_card_sources(cls, value: object) -> list[FieldSource]:
+        return _pad_source_list(value, TALK_CARDS_PER_POINT)
+
+    def platform_locked(self) -> bool:
+        return field_is_locked(self.platform_source, self.platform)
+
+    def still_locked(self) -> bool:
+        return field_is_locked(self.still_source, self.still_path)
+
+    def card_locked(self, index: int) -> bool:
+        if index < 0 or index >= TALK_CARDS_PER_POINT:
+            return False
+        return field_is_locked(self.card_sources[index], self.cards[index])
+
+
+def empty_talk_points() -> list[TalkPoint]:
+    return [TalkPoint() for _ in range(TALK_POINT_COUNT)]
+
+
 class TalkSheet(BaseModel):
-    """Job metadata for bookend cards. Not invented by the tagger.
+    """Job metadata for bookend cards and Point 1–3 copy. Not invented by the tagger.
 
     open_card is the overview plate (title kicker + two-line thesis).
     close_card is the locked CTA. Neither is a body subpoint.
     title / exec_headline / close_* are aliases kept for older job JSON.
+    points[] holds platform, still_path, and up to three overlay cards each.
     """
 
     title: str = ""
     exec_headline: str = ""
+    exec_notes: str = Field(default="", description="Spoken exec notes. Not painted.")
+    title_source: FieldSource = "empty"
+    exec_headline_source: FieldSource = "empty"
     open_card: BookendCard = Field(default_factory=BookendCard)
     close_card: BookendCard = Field(
         default_factory=lambda: BookendCard(
@@ -129,6 +204,49 @@ class TalkSheet(BaseModel):
     close_headline: str = "Independent AI T&E.\nVendor-agnostic."
     close_icon: str = "share"
     open_icon: str = "bar_chart"
+    points: list[TalkPoint] = Field(default_factory=empty_talk_points)
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_sources(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if "title_source" not in payload and str(payload.get("title") or "").strip():
+            payload["title_source"] = "user"
+        if "exec_headline_source" not in payload and str(payload.get("exec_headline") or "").strip():
+            payload["exec_headline_source"] = "user"
+        points = payload.get("points")
+        if isinstance(points, list):
+            inferred: list[object] = []
+            for item in points:
+                if not isinstance(item, dict):
+                    inferred.append(item)
+                    continue
+                row = dict(item)
+                if "platform_source" not in row and str(row.get("platform") or "").strip():
+                    row["platform_source"] = "user"
+                if "still_source" not in row and str(row.get("still_path") or "").strip():
+                    row["still_source"] = "user"
+                cards = _pad_str_list(row.get("cards"), TALK_CARDS_PER_POINT)
+                if "card_sources" not in row:
+                    row["card_sources"] = ["user" if card.strip() else "empty" for card in cards]
+                inferred.append(row)
+            payload["points"] = inferred
+        return payload
+
+    @field_validator("title_source", "exec_headline_source", mode="before")
+    @classmethod
+    def coerce_sheet_source(cls, value: object) -> FieldSource:
+        return _coerce_field_source(value)
+
+    @field_validator("points", mode="before")
+    @classmethod
+    def pad_points(cls, value: object) -> list[object]:
+        items = list(value or [])
+        while len(items) < TALK_POINT_COUNT:
+            items.append({})
+        return items[:TALK_POINT_COUNT]
 
     @model_validator(mode="after")
     def sync_bookend_aliases(self) -> "TalkSheet":
@@ -152,7 +270,31 @@ class TalkSheet(BaseModel):
             self.close_kicker = self.close_card.kicker
         if not self.close_headline.strip() and self.close_card.headline.strip():
             self.close_headline = self.close_card.headline
+        if len(self.points) < TALK_POINT_COUNT:
+            self.points.extend(TalkPoint() for _ in range(TALK_POINT_COUNT - len(self.points)))
+        self.points = self.points[:TALK_POINT_COUNT]
         return self
+
+    def title_locked(self) -> bool:
+        return field_is_locked(self.title_source, self.title)
+
+    def headline_locked(self) -> bool:
+        return field_is_locked(self.exec_headline_source, self.exec_headline)
+
+    def headline_lines(self) -> tuple[str, str]:
+        text = self.exec_headline.replace("\r\n", "\n")
+        if "\n" in text:
+            first, rest = text.split("\n", 1)
+            return first.strip(), rest.strip()
+        return text.strip(), ""
+
+    def set_headline_lines(self, line1: str, line2: str, *, source: FieldSource | None = None) -> None:
+        parts = [line1.strip(), line2.strip()]
+        self.exec_headline = "\n".join(part for part in parts if part)
+        if source is not None:
+            self.exec_headline_source = source
+        if self.exec_headline.strip():
+            self.open_card.headline = self.exec_headline
 
 
 class MicroEventKind(str, Enum):

@@ -1,16 +1,21 @@
-"""Main status window: watcher controls, short log, optional title pick."""
+"""Main status window: talk-sheet form, watcher controls, short log."""
 
 from __future__ import annotations
 
 import webbrowser
 from collections import deque
+from pathlib import Path
 from typing import Callable
 
 import customtkinter as ctk
 
 from .config_store import AppConfig, load_config
+from .paths import last_talk_sheet_path
+from .talk_sheet_form import TalkSheetForm
 from .wizard import open_wizard_window
-from .worker import JobResult, JobStatus, PipelineWorker
+from .worker import JobResult, JobStatus, PendingTalkJob, PipelineWorker
+from pipeline.models import TalkSheet
+from pipeline.talk_sheet import discover_talk_sheet, persist_talk_sheet
 
 MAX_LOG_LINES = 50
 
@@ -28,35 +33,40 @@ class MainView(ctk.CTkFrame):
         self._on_quit = on_quit
         self._log_lines: deque[str] = deque(maxlen=MAX_LOG_LINES)
         self._pending_result: JobResult | None = None
+        self._pending_talk: PendingTalkJob | None = None
         self._build()
         self.refresh_job()
+        self._load_last_sheet()
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=1)
 
         header = ctk.CTkLabel(self, text="YouTube Pipeline", font=ctk.CTkFont(size=22, weight="bold"))
-        header.grid(row=0, column=0, sticky="w", padx=24, pady=(20, 4))
+        header.grid(row=0, column=0, sticky="w", padx=24, pady=(16, 4))
 
         self.status_var = ctk.StringVar(value="Idle")
         ctk.CTkLabel(self, textvariable=self.status_var, font=ctk.CTkFont(size=16)).grid(
-            row=1, column=0, sticky="w", padx=24, pady=(0, 8)
+            row=1, column=0, sticky="w", padx=24, pady=(0, 4)
         )
 
         self.job_var = ctk.StringVar(value="No jobs yet.")
         job_row = ctk.CTkFrame(self, fg_color="transparent")
-        job_row.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 8))
-        ctk.CTkLabel(job_row, textvariable=self.job_var, wraplength=480, justify="left").pack(
+        job_row.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 4))
+        ctk.CTkLabel(job_row, textvariable=self.job_var, wraplength=520, justify="left").pack(
             side="left", fill="x", expand=True
         )
         ctk.CTkButton(job_row, text="Open outbox", width=120, command=self._open_outbox).pack(side="right")
 
-        self.log_box = ctk.CTkTextbox(self, height=220, wrap="word")
-        self.log_box.grid(row=3, column=0, sticky="nsew", padx=24, pady=8)
+        self.form = TalkSheetForm(self)
+        self.form.grid(row=3, column=0, sticky="nsew", padx=16, pady=4)
+
+        self.log_box = ctk.CTkTextbox(self, height=90, wrap="word")
+        self.log_box.grid(row=4, column=0, sticky="ew", padx=24, pady=4)
         self.log_box.configure(state="disabled")
 
         self.title_frame = ctk.CTkFrame(self)
-        self.title_frame.grid(row=4, column=0, sticky="ew", padx=24, pady=8)
+        self.title_frame.grid(row=5, column=0, sticky="ew", padx=24, pady=4)
         self.title_frame.grid_remove()
         ctk.CTkLabel(self.title_frame, text="Pick a title (optional), then re-upload.").pack(
             anchor="w", padx=12, pady=(10, 4)
@@ -73,10 +83,12 @@ class MainView(ctk.CTkFrame):
         ctk.CTkButton(title_actions, text="Skip", command=self._hide_titles).pack(side="left")
 
         actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=5, column=0, sticky="ew", padx=24, pady=(4, 20))
+        actions.grid(row=6, column=0, sticky="ew", padx=24, pady=(4, 16))
         self.pause_btn = ctk.CTkButton(actions, text="Pause watching", command=self._toggle_pause)
         self.pause_btn.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(actions, text="Run once now", command=self._run_once).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(actions, text="Save", width=90, command=self._save_sheet).pack(side="left", padx=(0, 8))
+        self.run_btn = ctk.CTkButton(actions, text="Run / Continue job", command=self._run_or_continue)
+        self.run_btn.pack(side="left", padx=(0, 8))
         ctk.CTkButton(actions, text="Settings", command=self._open_settings).pack(side="left", padx=(0, 8))
         ctk.CTkButton(actions, text="Quit", fg_color="#8a2b2b", command=self._on_quit).pack(side="right")
 
@@ -84,6 +96,10 @@ class MainView(ctk.CTkFrame):
         suffix = f" — {detail}" if detail else ""
         self.status_var.set(f"{status.value}{suffix}")
         self.pause_btn.configure(text="Resume watching" if self.worker.is_paused() else "Pause watching")
+        if status == JobStatus.TALK_SHEET:
+            self.run_btn.configure(text="Run / Continue job")
+        else:
+            self.run_btn.configure(text="Run / Continue job")
 
     def append_log(self, line: str) -> None:
         self._log_lines.append(line)
@@ -95,13 +111,28 @@ class MainView(ctk.CTkFrame):
 
     def refresh_job(self) -> None:
         config = load_config()
+        if self._pending_talk is not None:
+            self.job_var.set(f"Waiting on talk sheet: {self._pending_talk.name}")
+            return
         if not config.last_job_name:
             self.job_var.set("No jobs yet.")
             return
         when = config.last_job_finished_at or ""
         self.job_var.set(f"Last job: {config.last_job_name}  {when}")
 
+    def show_talk_sheet(self, pending: PendingTalkJob) -> None:
+        self._pending_talk = pending
+        sheet, _found = discover_talk_sheet(
+            video_path=Path(pending.video_path),
+            last_used=last_talk_sheet_path(),
+        )
+        self.form.load_sheet(sheet)
+        self.refresh_job()
+        self.append_log(f"Fill the talk sheet for {pending.name}, then Run. Empty fields auto-fill.")
+
     def show_title_pick(self, result: JobResult) -> None:
+        self._pending_talk = None
+        self.refresh_job()
         if result.error or result.skipped or not result.titles:
             return
         self._pending_result = result
@@ -155,9 +186,35 @@ class MainView(ctk.CTkFrame):
         self.worker.set_paused(not self.worker.is_paused())
         self.pause_btn.configure(text="Resume watching" if self.worker.is_paused() else "Pause watching")
 
-    def _run_once(self) -> None:
+    def _collect_and_save(self) -> TalkSheet:
+        sheet = self.form.collect_sheet()
+        persist_talk_sheet(sheet, last_used=last_talk_sheet_path())
+        if self._pending_talk is not None:
+            persist_talk_sheet(sheet, video_path=Path(self._pending_talk.video_path))
+        return sheet
+
+    def _save_sheet(self) -> None:
+        self._collect_and_save()
+        self.append_log("Talk sheet saved.")
+
+    def _run_or_continue(self) -> None:
+        sheet = self._collect_and_save()
+        if self.worker.is_waiting_talk_sheet() or self._pending_talk is not None:
+            self.append_log("Continuing job with talk sheet.")
+            self.worker.continue_talk_sheet(sheet)
+            self._pending_talk = None
+            self.refresh_job()
+            return
         self.append_log("Run once requested.")
         self.worker.run_once()
+
+    def _run_once(self) -> None:
+        self._run_or_continue()
+
+    def _load_last_sheet(self) -> None:
+        sheet, found = discover_talk_sheet(last_used=last_talk_sheet_path())
+        if found is not None:
+            self.form.load_sheet(sheet)
 
     def _open_settings(self) -> None:
         chooser = ctk.CTkToplevel(self.winfo_toplevel())

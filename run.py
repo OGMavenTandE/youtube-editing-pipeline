@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -23,6 +22,14 @@ from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
 from pipeline.shotlist import beats_from_script, resolve_edit_script, save_tagged_beats
 from pipeline.stills import apply_stills
+from pipeline.talk_sheet import (
+    apply_env_talk_aliases,
+    apply_user_point_locks,
+    attach_talk_sheet,
+    autofill_talk_sheet,
+    discover_talk_sheet,
+    persist_talk_sheet,
+)
 from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
 from pipeline.studio import resolve_title_index, write_studio_package
@@ -81,7 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--broll-dir",
         default=None,
-        help="Directory of local B-roll videos matched against cue/graphic queries.",
+        help="Directory of local B-roll videos and PiP stills (DVIDS / talk-sheet copies).",
+    )
+    parser.add_argument(
+        "--talk-sheet",
+        default=None,
+        help=(
+            "JSON talk sheet (<stem>_talk_sheet.json). User-filled title, "
+            "overview, point cards, and stills are locked. Empty slots auto-fill."
+        ),
     )
     parser.add_argument(
         "--auto-editor",
@@ -240,15 +255,16 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         print(f"      saved edit script {script_path.name} (before slides)")
 
     script.identity = identity_from_settings(settings)
-    env_title = os.getenv("TALK_TITLE", "").strip()
-    env_thesis = os.getenv("TALK_EXEC_HEADLINE", "").strip()
-    if env_title and not script.talk_sheet.open_card.kicker.strip():
-        script.talk_sheet.open_card.kicker = env_title
-        script.talk_sheet.title = env_title
-    if env_thesis and not script.talk_sheet.open_card.headline.strip():
-        script.talk_sheet.open_card.headline = env_thesis
-        script.talk_sheet.exec_headline = env_thesis
+    explicit_sheet = Path(args.talk_sheet).expanduser() if getattr(args, "talk_sheet", None) else None
+    talk_sheet, _sheet_path = discover_talk_sheet(
+        explicit=explicit_sheet,
+        video_path=input_path,
+        output_dir=settings.output_dir,
+    )
+    apply_env_talk_aliases(talk_sheet)
+    attach_talk_sheet(script, talk_sheet)
     script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
+    apply_user_point_locks(script, script.talk_sheet)
     report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
     print(
         f"      kit beats={report.scene_count} "
@@ -268,6 +284,12 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     if broll_dir is not None:
         apply_local_broll(script, broll_dir)
         apply_stills(script, broll_dir)
+    autofill_talk_sheet(script.talk_sheet, script, broll_dir)
+    persist_talk_sheet(
+        script.talk_sheet,
+        video_path=input_path,
+        output_dir=settings.output_dir,
+    )
     resolve_edit_script(script)
 
     if args.skip_slides or skip_composite:

@@ -30,7 +30,7 @@ from pipeline.hidden_process import install_hidden_subprocess
 from .config_store import AppConfig, ensure_user_data, load_config
 from .paths import install_root
 from .tray import TrayController
-from .worker import JobResult, JobStatus, PipelineWorker, prepare_runtime_env
+from .worker import JobResult, JobStatus, PendingTalkJob, PipelineWorker, prepare_runtime_env
 from .wizard import WizardView
 
 install_hidden_subprocess()
@@ -57,8 +57,8 @@ class DesktopApp:
         ctk.set_default_color_theme("blue")
         self.root = ctk.CTk()
         self.root.title("YouTube Pipeline")
-        self.root.geometry("760x620")
-        self.root.minsize(680, 520)
+        self.root.geometry("860x760")
+        self.root.minsize(720, 600)
         self._main = None
         self._wizard = None
         self._quitting = False
@@ -67,6 +67,7 @@ class DesktopApp:
             log=self._ui_log,
             status=self._ui_status,
             on_job_done=self._ui_job_done,
+            on_talk_sheet=self._ui_talk_sheet,
         )
         self.tray = TrayController(
             on_show=self.show,
@@ -127,6 +128,14 @@ class DesktopApp:
             if self._main:
                 self._main.refresh_job()
                 self._main.show_title_pick(result)
+            self.show()
+
+        self.root.after(0, apply)
+
+    def _ui_talk_sheet(self, pending: PendingTalkJob) -> None:
+        def apply() -> None:
+            if self._main:
+                self._main.show_talk_sheet(pending)
             self.show()
 
         self.root.after(0, apply)

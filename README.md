@@ -126,11 +126,15 @@ Double-click `youtube-pipeline.exe` (or run `python desktop/app.py`). The first 
 
 ### After setup
 
-The main window plus a tray icon stay running. Status is Idle / Watching / Downloading / Processing / Uploading / Error. Close hides to the tray. Quit is in the tray menu (and on the window). Pause watching or Run once now from either place.
+The main window plus a tray icon stay running. Status is Idle / Watching / Downloading / Talk sheet / Processing / Uploading / Error. Close hides to the tray. Quit is in the tray menu (and on the window). Pause watching or Run once now from either place.
 
-Record on the phone, drop a landscape MP4 in the Drive inbox, and later open the outbox folder from the app. After a successful run you can pick titles 1–5. That calls the existing `--repack-studio --title-index` path and re-uploads the Studio folder. It is one screen, not the Streamlit reviewer.
+The main window is the talk-sheet form: open title + two-line overview, Point 1–3 platform query / one PiP still / two or three overlay cards, and a locked close + identity preview. Paste or load `Documents\\Youtube Pipeline\\talk_sheet.md`. Save writes JSON next to the video stem and a last-used copy in `%APPDATA%\\YouTubePipeline\\`. Empty fields stay empty until Run; the kit/director fills those only. User text and a browsed still are locked.
 
-`--broll-dir` is still optional and local. Settings can reopen the Gemini key, Drive sign-in, folders, and startup screens.
+When a Drive inbox video is ready, encode pauses until Run / Continue job. Empty form + Run is a full auto-fill job. The window comes to the front. The pipeline does not start behind the form, and a prefilled last-used sheet does not skip the wait. Browsed stills are copied into `Documents\\Youtube Pipeline\\stills` (or the work stills dir) as `pointN_<platform>.jpg` and passed as `--broll-dir`.
+
+Record on the phone, drop a landscape MP4 in the Drive inbox, fill or skip the form, then open the outbox folder from the app. After a successful run you can pick titles 1–5. That calls the existing `--repack-studio --title-index` path and re-uploads the Studio folder. It is one screen, not the Streamlit reviewer.
+
+`--broll-dir` is the job stills folder. Settings can reopen the Gemini key, Drive sign-in, folders, and startup screens.
 
 The CLI is unchanged: `python run.py --input …` still works.
 
@@ -145,7 +149,7 @@ The app forces bookends on the first and last ~10s (`BOOKEND_SECONDS`):
 - Open: `open_card` (title kicker + two-line thesis from the talk sheet) plus the two-column identity / FIND ME lower third. Not a body tag. Not Point 1.
 - Close: locked `close_card` (`WORK WITH ME` / Independent AI T&E. Vendor-agnostic.) plus the same identity bar. Never a PiP. No WRAP kicker.
 
-Identity strings are config (`HOST_NAME`, `HOST_TITLE_LINE`, `HOST_AFFILIATIONS`, `HOST_MISSION`, `HOST_FIND_ME`). Talk-sheet copy is job metadata (`TALK_TITLE`, `TALK_EXEC_HEADLINE`).
+Identity strings are config (`HOST_NAME`, `HOST_TITLE_LINE`, `HOST_AFFILIATIONS`, `HOST_MISSION`, `HOST_FIND_ME`). Talk-sheet copy is job metadata (`TALK_TITLE`, `TALK_EXEC_HEADLINE`, or `--talk-sheet` / `<stem>_talk_sheet.json`). User-filled fields carry a `user` source flag so Gemini and DVIDS cannot clobber them.
 
 Tagged beats are written to `output/<stem>_tagged_beats.json` before encode so a retry skips the model.
 
