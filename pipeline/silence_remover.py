@@ -11,6 +11,13 @@ from pipeline.hidden_process import run_hidden
 from pipeline.media import MediaError, concat_keep_ranges, extract_audio, probe_duration
 from pipeline.models import SilenceCutMap, SilenceTrimResult, TimeRange
 
+# pydub's min_silence_len is the RMS window, not just a duration filter.
+# A 0.7s window of breath plus a quiet /s/ or /ɪ/ still looks silent, so the
+# cut lands late and eats Skynet / it / strategic. Measure energy on a short
+# window, fold rhythm gaps afterward, then pad the remaining keep edges.
+DETECT_WINDOW_MS = 100
+ISOLATED_FILLER_MAX_S = 0.35
+
 
 def remove_silence(
     input_path: Path,
@@ -19,11 +26,11 @@ def remove_silence(
     output_path: Path | None = None,
     use_auto_editor: bool = False,
 ) -> SilenceTrimResult:
-    """Strip pauses longer than 0.7s, leaving 0.15s pad on each keep edge.
+    """Strip dead air longer than 1.0s, leaving 0.30s pad on each keep edge.
 
     pydub energy detection plus ffmpeg concat is the source of truth so the
     cut map matches the rendered file. auto-editor is opt-in and more
-    aggressive (it can cut gaps shorter than 0.7s).
+    aggressive (it can cut gaps shorter than 1.0s).
     """
     require_ffmpeg(settings)
     input_path = input_path.resolve()
@@ -51,7 +58,7 @@ def remove_silence(
 
 
 def detect_keep_ranges(input_path: Path, settings: Settings) -> list[TimeRange]:
-    """Speech islands on the original timeline. Gaps under 0.7s stay intact."""
+    """Speech islands on the original timeline. Gaps under 1.0s stay intact."""
     wav_path = settings.work_dir / f"{input_path.stem}_detect.wav"
     settings.work_dir.mkdir(parents=True, exist_ok=True)
     extract_audio(input_path, wav_path, settings)
@@ -78,19 +85,30 @@ def compute_keep_ranges(
     """Return padded, merged speech ranges in seconds.
 
     ``min_silence_ms`` is the shortest gap that may be removed. Shorter gaps
-    are treated as speech rhythm and are not split.
+    are treated as speech rhythm and are not split. Detection uses a short
+    energy window so a pre-word breath does not swallow the next onset.
     """
+    duration_ms = len(audio)
+    duration_s = duration_ms / 1000.0
+    min_silence_s = min_silence_ms / 1000.0
     raw = pydub_silence.detect_nonsilent(
         audio,
-        min_silence_len=max(min_silence_ms, 1),
+        min_silence_len=max(DETECT_WINDOW_MS, 1),
         silence_thresh=threshold_db,
     )
-    duration_ms = len(audio)
+    islands = [TimeRange(start=s / 1000.0, end=e / 1000.0) for s, e in raw]
+    folded = _fold_short_gaps(islands, min_silence_s, duration_s)
+    cleaned = _drop_isolated_fillers(
+        folded,
+        max_duration=ISOLATED_FILLER_MAX_S,
+        min_silence=min_silence_s,
+        duration=duration_s,
+    )
     padded: list[tuple[int, int]] = []
-    for start_ms, end_ms in raw:
-        padded.append(
-            (max(0, start_ms - padding_ms), min(duration_ms, end_ms + padding_ms))
-        )
+    for span in cleaned:
+        start_ms = max(0, int(round(span.start * 1000)) - padding_ms)
+        end_ms = min(duration_ms, int(round(span.end * 1000)) + padding_ms)
+        padded.append((start_ms, end_ms))
     return [TimeRange(start=s / 1000.0, end=e / 1000.0) for s, e in _merge_ms(padded)]
 
 
@@ -215,3 +233,32 @@ def _fold_short_gaps(
     if folded[-1].end < duration and (duration - folded[-1].end) < min_silence:
         folded[-1] = TimeRange(start=folded[-1].start, end=duration)
     return folded
+
+
+def _drop_isolated_fillers(
+    kept: list[TimeRange],
+    *,
+    max_duration: float,
+    min_silence: float,
+    duration: float,
+) -> list[TimeRange]:
+    """Drop short islands with removable silence on both sides (uh / um).
+
+    Runs after gap folding so a real word after a pause stays attached to
+    the following speech and is not treated as filler.
+    """
+    if not kept:
+        return []
+    kept_out: list[TimeRange] = []
+    for index, span in enumerate(kept):
+        if span.duration >= max_duration:
+            kept_out.append(span)
+            continue
+        gap_before = span.start if index == 0 else span.start - kept[index - 1].end
+        gap_after = (
+            duration - span.end if index == len(kept) - 1 else kept[index + 1].start - span.end
+        )
+        if gap_before >= min_silence and gap_after >= min_silence:
+            continue
+        kept_out.append(span)
+    return kept_out

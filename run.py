@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Optional tighter silence pass via auto-editor. Default is pydub + "
-            "ffmpeg (pauses > 0.7s only)."
+            "ffmpeg (pauses > 1.0s only)."
         ),
     )
     parser.add_argument(
