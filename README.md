@@ -1,12 +1,12 @@
 # youtube-editing-pipeline
 
-Local pipeline for landscape talking-head webcam footage: trim dead air, let Gemini pick scene layouts and YouTube copy, generate presentation slides, composite you full-screen or over those slides, then export an MP4 plus a YouTube Studio package.
+Local pipeline for landscape talking-head webcam footage: trim dead air, let Gemini tag sparse body beats, paint a locked Scott Mastin picture kit (overlay / pip / nothing, plus app-forced bookends), then export an MP4 plus a YouTube Studio package.
 
 ```bash
 python run.py --input raw_video.mp4
 ```
 
-Input is always a landscape webcam recording of you. B-roll is generated 1920x1080 slides, plus optional local video files from `--broll-dir`. Filename/keyword match only. No stock-footage APIs.
+Input is always a landscape webcam recording of Scott. Chrome is the locked kit in `pipeline/picture_kit.md`. PiP stills are DVIDS 16:9 named-platform files from `--broll-dir`. No stock-footage APIs. Chromium slides are not the look.
 
 ## Setup
 
@@ -134,23 +134,20 @@ Record on the phone, drop a landscape MP4 in the Drive inbox, and later open the
 
 The CLI is unchanged: `python run.py --input …` still works.
 
-## Layouts and pacing
+## Picture kit
 
-A scene is a short beat, not the whole 20-minute file. The director plus a local pacing guard target **50-80 layout scenes** on a 20-minute trimmed cut.
+Locked look. Spec: `pipeline/picture_kit.md`. One font (Inter, bundled). Two colors: white `#FFFFFF` and gold `#E0B44A`. Dark plate rgb(8,10,14) at ~200 alpha. Host is always the real camera.
 
-Heavy change (one per scene):
+The model may only tag a **body** beat `overlay` | `pip` | `nothing` and fill template copy. It does not choose layout, font, colors, zoom, or generate Scott. Sparse: overlay is the default markup; PiP is rare; most beats are nothing.
 
-- `FULL_FRAME`: you fill the 1920x1080 frame.
-- `PIP_BOTTOM_RIGHT`: a slide (or matched local B-roll) fills the frame; you sit in a rounded lower-right bubble at about 25% width.
-- `SPLIT_TOP`: you occupy the top two-thirds; a graphic occupies the bottom third.
+The app forces bookends on the first and last ~10s (`BOOKEND_SECONDS`):
 
-Hold times: 8-15s in the first minute (target ~12s), then 15-25s (target ~20s). Same layout cannot run three times in a row when the scene has a real graphic. Order is content-driven, not a fixed A-B-C loop.
+- Open: `open_card` (title kicker + two-line thesis from the talk sheet) plus the two-column identity / FIND ME lower third. Not a body tag. Not Point 1.
+- Close: locked `close_card` (`WORK WITH ME` / Independent AI T&E. Vendor-agnostic.) plus the same identity bar. Never a PiP. No WRAP kicker.
 
-Pacing fills that close timeline gaps stay `FULL_FRAME`. They inherit the nearest real graphic when one exists. They do not invent empty PIP/SPLIT cards.
+Identity strings are config (`HOST_NAME`, `HOST_TITLE_LINE`, `HOST_AFFILIATIONS`, `HOST_MISSION`, `HOST_FIND_ME`). Talk-sheet copy is job metadata (`TALK_TITLE`, `TALK_EXEC_HEADLINE`).
 
-Light change (inside a hold, every ~5-7s): punch-in zoom (~1.15x), a short text takeaway, or a cut at the scene edge. These are not layout swaps.
-
-If Gemini returns too few scenes, `pipeline/pacing.py` splits long holds and fills the timeline so the band still holds.
+Tagged beats are written to `output/<stem>_tagged_beats.json` before encode so a retry skips the model.
 
 If `talking_head_cuts` is non-empty on the edit script, those keep-ranges are applied on the trimmed timeline before composite and scene timestamps are remapped. An empty list is ignored.
 
@@ -163,10 +160,10 @@ Each scene encodes to `work/scenes/<stem>/`. If that file already exists and its
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
 1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map that matches the file handed to the director. `--auto-editor` is an optional tighter pass; its cut map uses the rendered duration.
-2. `pipeline/gemini_director.py` — two Gemini 3.6 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Scene windows are text-only and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Micro-resets stay local in `pacing.py`.
-3. `pipeline/broll/slides.py` — Playwright Chromium screenshots of HTML templates. PIP slides keep a dark lower-right pocket for the webcam bubble. SPLIT and lower-third PNGs use a transparent top. Unique `slide_id`s render once into `work/slides/`.
-4. `pipeline/broll/local.py` — optional `--broll-dir` matcher. Local video files become `BrollAsset` clips for PIP, SPLIT, or FULL_FRAME when the filename matches a query.
-5. `pipeline/compositor.py` — MoviePy 2 encodes each scene on a 1920x1080 canvas to `work/scenes/`, then ffmpeg concat + loudnorm. `FULL_FRAME` is cover-cropped webcam (or a matched B-roll cutaway). `PIP_BOTTOM_RIGHT` is the slide or B-roll plus a rounded 16:9 webcam bubble in the lower right. `SPLIT_TOP` is webcam in the top two-thirds with the graphic over the bottom band. Punch-ins zoom only the webcam layer. Lower-third PNGs win over the PIL fallback. Hard cuts only.
+2. `pipeline/gemini_director.py` — two Gemini 3.6 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Body tags are text-only (`overlay` | `pip` | `nothing`) and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Bookends are applied in `pacing.py`.
+3. `pipeline/picture_kit.py` — PIL renderer for overlay, PiP type, and bookend chrome. Inter from `pipeline/fonts/`.
+4. `pipeline/stills.py` — DVIDS 16:9 still matcher for PiP. Banana is a stub that may fill the image slot only.
+5. `pipeline/compositor.py` — ffmpeg `filter_complex` first (MoviePy fallback) on a 1920x1080 canvas. `nothing` is full-frame host. `overlay` and bookends overlay kit PNGs. `pip` scales the entire talking-head frame into a 560x315 window (not a face crop) over a still. No punch-in zoom. Hard cuts only.
 6. `pipeline/studio.py` — after the MP4, write `output/<stem>_studio/`. Copy or hardlink the video (no second encode). Reuses `normalize_youtube_metadata()` for titles, chapters, and tags. Paste files: `titles.txt`, `description.txt`, `tags.txt`, `captions.srt` / `captions.vtt`, and thumbnail candidates. JSON metadata stays the pipeline source of truth, including `title_index`. No YouTube Data API upload.
 7. `pipeline/ui.py` — Streamlit review page. Pick a finished Studio folder, a title, description, chapters, and a thumbnail candidate, then call `write_studio_package()`. `python run.py --repack-studio` is the same rewrite without opening the UI. Not a scene editor and not a pipeline runner.
 8. `pipeline/drive_io.py` plus `desktop/` — Windows CustomTkinter tray app. Drive API resumable download/upload, claim-by-file-id, move inbox → done, processed-id store. Calls `run.py` / `repack_studio` on a worker thread. No YouTube Data API.

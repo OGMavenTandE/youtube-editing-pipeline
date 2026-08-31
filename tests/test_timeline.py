@@ -1,5 +1,5 @@
 from pipeline.models import EditScript, GraphicCard, Scene, SilenceCutMap, TimeRange
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.timeline import remap_edit_script
 
 
@@ -12,8 +12,8 @@ def test_remap_edit_script_applies_keep_ranges() -> None:
     )
     script = EditScript(
         scenes=[
-            Scene(start=0, end=2, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="A")),
-            Scene(start=4, end=6, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="B")),
+            Scene(start=0, end=2, layout=PictureTag.NOTHING, graphic=GraphicCard(title="A")),
+            Scene(start=4, end=6, layout=PictureTag.NOTHING, graphic=GraphicCard(title="B")),
         ]
     )
     remapped = remap_edit_script(script, cut_map)

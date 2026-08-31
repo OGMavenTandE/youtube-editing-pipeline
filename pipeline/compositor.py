@@ -19,27 +19,24 @@ from pipeline.encoder import (
     software_encoder,
 )
 from pipeline.layouts import (
-    BORDER_COLOR,
     DARK_RGB,
-    LayoutKind,
+    GOLD,
+    PIP_BORDER,
+    PIP_RADIUS,
+    PictureTag,
+    contain_scale,
     cover_scale,
     pip_rect,
     split_webcam_rect,
 )
 from pipeline.media import MediaError, concat_scene_files, probe_duration
-from pipeline.models import (
-    EditScript,
-    LowerThird,
-    MicroEvent,
-    OverlayCallout,
-    Scene,
-)
+from pipeline.models import EditScript, Scene
+from pipeline.picture_kit import render_bookend, render_overlay, render_pip_type
 from pipeline.shotlist import (
     compose_mode,
     resolve_edit_script,
     resolve_scene,
-    resolved_media_path,
-    scene_has_visual,
+    resolved_still_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,8 +51,8 @@ _FONT_CANDIDATES = (
 )
 
 _DARK = DARK_RGB
-_BORDER_COLOR = BORDER_COLOR
-_ACCENT = (56, 189, 248)
+_BORDER_COLOR = (*GOLD, 255)
+_ACCENT = GOLD
 
 
 class CompositorError(RuntimeError):
@@ -71,13 +68,14 @@ def scene_fingerprint(scene: Scene, settings: Settings) -> str:
         "start": round(scene.start, 3),
         "end": round(scene.end, 3),
         "layout": scene.layout.value,
+        "role": scene.role,
         "said": scene.said,
         "shown": scene.shown,
         "asset_kind": scene.asset_kind,
         "asset_ref": scene.asset_ref,
         "graphic": scene.graphic.model_dump(),
-        "micro": [event.model_dump() for event in scene.micro_events],
-        "canvas": [settings.output_width, settings.output_height, settings.pip_scale],
+        "canvas": [settings.output_width, settings.output_height],
+        "kit": "v1",
     }
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
@@ -299,13 +297,11 @@ def _encode_one_scene(
     # reader (proc=None). The audio reader has no initialize() recovery, so
     # reusing one VideoFileClip then raises None.stdout on the next scene.
     with VideoFileClip(str(video_path)) as a_roll:
-        piece = _compose_scene(a_roll, scene, settings, canvas, stills)
+        piece = _compose_scene(a_roll, script, scene, settings, canvas, stills)
         if piece is None:
             raise CompositorError(f"Scene {scene.start:.2f}-{scene.end:.2f} produced no clip")
         hold = float(piece.duration or scene.duration)
         layers: list[object] = [piece]
-        for overlay in _scene_overlay_clips(script, scene, canvas):
-            layers.append(overlay)
         final = CompositeVideoClip(layers, size=canvas).with_duration(hold)
         start = max(0.0, min(scene.start, float(a_roll.duration or 0)))
         end = max(start, min(scene.end, float(a_roll.duration or 0)))
@@ -355,7 +351,7 @@ def _render_in_memory(
         for scene in scenes:
             resolve_scene(scene)
         pieces = [
-            _compose_scene(base, scene, settings, canvas, stills) for scene in scenes
+            _compose_scene(base, script, scene, settings, canvas, stills) for scene in scenes
         ]
         pieces = [piece for piece in pieces if piece is not None]
         if not pieces:
@@ -364,12 +360,7 @@ def _render_in_memory(
         composed = composed.with_duration(sum(float(piece.duration or 0) for piece in pieces))
 
         overlay_layers: list[object] = [composed]
-        for overlay in _lower_third_overlays(script, canvas, timeline):
-            overlay_layers.append(overlay)
-        for callout in script.collected_text_overlays():
-            layer = _callout_clip(callout, canvas, timeline)
-            if layer is not None:
-                overlay_layers.append(layer)
+        del timeline
 
         final = CompositeVideoClip(overlay_layers, size=canvas)
         final = final.with_duration(composed.duration)
@@ -389,11 +380,12 @@ def _render_in_memory(
 def _scenes_or_full(script: EditScript, duration: float) -> list[Scene]:
     if script.scenes:
         return script.scenes
-    return [Scene(start=0.0, end=duration, layout=LayoutKind.FULL_FRAME)]
+    return [Scene(start=0.0, end=duration, layout=PictureTag.NOTHING)]
 
 
 def _compose_scene(
     a_roll: VideoFileClip,
+    script: EditScript,
     scene: Scene,
     settings: Settings,
     canvas: tuple[int, int],
@@ -406,58 +398,32 @@ def _compose_scene(
     if hold < 0.04:
         return None
     webcam = a_roll.subclipped(start, end).without_audio()
-    width, height = canvas
     bg = ColorClip(size=canvas, color=_DARK).with_duration(hold)
     layers: list[object] = [bg]
-    media = resolved_media_path(scene)
-    graphic_path = str(media) if media is not None else ""
-    if scene.asset_kind == "card" and scene.graphic.asset_path:
-        graphic_path = scene.graphic.asset_path
+    still = resolved_still_path(scene)
     graphic = (
-        _graphic_clip(graphic_path, canvas, hold, stills)
-        if scene_has_visual(scene)
-        else None
+        _graphic_clip(str(still), canvas, hold, stills) if still is not None else None
     )
 
     mode = compose_mode(scene)
-    # none, or a missing broll/site file, is talking-head only. No empty slide.
-    if graphic is None or mode == "talking_head":
-        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, None))
-    elif mode == "cutaway":
-        # DVIDS / local b-roll covers the face. Host audio is muxed separately.
-        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, graphic))
-    elif scene.layout is LayoutKind.PIP_BOTTOM_RIGHT:
-        layers.extend(
-            _pip_layers(webcam, scene, settings, canvas, hold, start, graphic)
-        )
-    elif scene.layout is LayoutKind.SPLIT_TOP:
-        layers.extend(
-            _split_layers(webcam, scene, settings, canvas, hold, start, graphic)
-        )
+    if mode == "pip" and graphic is not None:
+        layers.extend(_pip_layers(webcam, scene, settings, canvas, hold, graphic))
     else:
-        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, graphic))
+        layers.extend(_full_frame_layers(webcam, canvas, hold))
+        chrome = _kit_chrome_clip(script, scene, canvas, hold)
+        if chrome is not None:
+            layers.append(chrome)
 
     return CompositeVideoClip(layers, size=canvas).with_duration(hold)
 
 
 def _full_frame_layers(
     webcam: VideoFileClip,
-    scene: Scene,
     canvas: tuple[int, int],
     hold: float,
-    scene_start: float,
-    graphic: object | None = None,
 ) -> list[object]:
     width, height = canvas
-    if graphic is not None and (
-        _is_video_asset(scene.graphic.asset_path) or compose_mode(scene) == "cutaway"
-    ):
-        return [graphic]
-    layers = [_cover(webcam, width, height).with_duration(hold)]
-    layers.extend(
-        _punch_layers(webcam, scene, scene_start, hold, dest=(0, 0, width, height))
-    )
-    return layers
+    return [_cover(webcam, width, height).with_duration(hold)]
 
 
 def _pip_layers(
@@ -466,85 +432,44 @@ def _pip_layers(
     settings: Settings,
     canvas: tuple[int, int],
     hold: float,
-    scene_start: float,
-    graphic: object | None,
+    graphic: object,
 ) -> list[object]:
+    del settings
     width, height = canvas
-    x, y, box_w, box_h = pip_rect(width, height, settings.pip_scale)
-    layers: list[object] = []
-    if graphic is not None:
-        layers.append(graphic)
-    radius = max(16, box_h // 6)
+    x, y, box_w, box_h = pip_rect(width, height)
+    radius = max(8, int(round(PIP_RADIUS * (height / 1080))))
+    layers: list[object] = [graphic]
     border = _rounded_border_clip(box_w, box_h, radius).with_duration(hold).with_position((x, y))
     layers.append(border)
-    cam = _rounded_webcam(webcam, box_w, box_h, radius, zoom=1.0).with_duration(hold)
+    cam = _rounded_webcam(webcam, box_w, box_h, radius, zoom=1.0, crop=False).with_duration(hold)
     layers.append(cam.with_position((x, y)))
-    for punch in _punch_layers(
-        webcam, scene, scene_start, hold, dest=(x, y, box_w, box_h), radius=radius
-    ):
-        layers.append(punch)
+    chrome = ImageClip(render_pip_type(canvas, kicker=scene.graphic.kicker, sub=scene.graphic.title, quote=scene.graphic.quote))
+    layers.append(chrome.with_duration(hold).with_position((0, 0)))
     return layers
 
 
-def _split_layers(
-    webcam: VideoFileClip,
-    scene: Scene,
-    settings: Settings,
-    canvas: tuple[int, int],
-    hold: float,
-    scene_start: float,
-    graphic: object | None,
-) -> list[object]:
-    width, height = canvas
-    x, y, box_w, box_h = split_webcam_rect(width, height, settings.split_top_ratio)
-    layers: list[object] = [
-        _cover(webcam, box_w, box_h).with_duration(hold).with_position((x, y))
-    ]
-    layers.extend(
-        _punch_layers(webcam, scene, scene_start, hold, dest=(x, y, box_w, box_h))
-    )
-    if graphic is not None:
-        layers.append(graphic)
-    return layers
-
-
-def _punch_layers(
-    webcam: VideoFileClip,
-    scene: Scene,
-    scene_start: float,
-    hold: float,
-    dest: tuple[int, int, int, int],
-    radius: int | None = None,
-) -> list[object]:
-    x, y, box_w, box_h = dest
-    layers: list[object] = []
-    for event in scene.micro_events:
-        if event.kind != "punch_in":
-            continue
-        window = _relative_window(event, scene_start, hold)
-        if window is None:
-            continue
-        rel_start, rel_end = window
-        zoom = max(1.05, float(event.scale or 1.15))
-        src = webcam.subclipped(rel_start, rel_end)
-        if radius is not None:
-            piece = _rounded_webcam(src, box_w, box_h, radius, zoom=zoom)
-        else:
-            piece = _cover(src, box_w, box_h, zoom=zoom)
-        layers.append(
-            piece.with_start(rel_start).with_duration(rel_end - rel_start).with_position((x, y))
+def _kit_chrome_clip(
+    script: EditScript, scene: Scene, canvas: tuple[int, int], hold: float
+) -> ImageClip | None:
+    mode = compose_mode(scene)
+    if mode == "bookend":
+        image = render_bookend(
+            canvas,
+            identity=script.identity,
+            kicker=scene.graphic.kicker,
+            headline=scene.graphic.title,
+            icon=scene.graphic.icon or ("share" if scene.role == "close" else "bar_chart"),
         )
-    return layers
-
-
-def _relative_window(
-    event: MicroEvent, scene_start: float, hold: float
-) -> tuple[float, float] | None:
-    start = max(0.0, event.start - scene_start)
-    end = min(hold, event.end - scene_start)
-    if end - start < 0.2:
+    elif mode == "overlay":
+        image = render_overlay(
+            canvas,
+            kicker=scene.graphic.kicker,
+            headline=scene.graphic.title,
+            icon=scene.graphic.icon or "bar_chart",
+        )
+    else:
         return None
-    return start, end
+    return ImageClip(image).with_duration(hold).with_position((0, 0))
 
 
 def _cover(clip: VideoFileClip, dest_w: int, dest_h: int, zoom: float = 1.0) -> VideoFileClip:
@@ -560,14 +485,38 @@ def _cover(clip: VideoFileClip, dest_w: int, dest_h: int, zoom: float = 1.0) -> 
     return resized.cropped(x1=x1, y1=y1, width=dest_w, height=dest_h)
 
 
+def _fit(clip: VideoFileClip, dest_w: int, dest_h: int) -> VideoFileClip:
+    """Scale the entire talking-head frame into dest. Letterbox. Never face-crop."""
+    src_w, src_h = int(clip.w), int(clip.h)
+    factor = contain_scale(src_w, src_h, dest_w, dest_h)
+    new_w = max(2, int(round(src_w * factor)))
+    new_h = max(2, int(round(src_h * factor)))
+    if new_w % 2:
+        new_w += 1
+    if new_h % 2:
+        new_h += 1
+    resized = clip.resized(new_size=(new_w, new_h))
+    if new_w == dest_w and new_h == dest_h:
+        return resized
+    bg = ColorClip(size=(dest_w, dest_h), color=_DARK).with_duration(clip.duration or 1)
+    x = max(0, (dest_w - new_w) // 2)
+    y = max(0, (dest_h - new_h) // 2)
+    return CompositeVideoClip(
+        [bg, resized.with_position((x, y))], size=(dest_w, dest_h)
+    ).with_duration(clip.duration or 1)
+
+
 def _rounded_webcam(
     webcam: VideoFileClip,
     box_w: int,
     box_h: int,
     radius: int,
     zoom: float,
+    *,
+    crop: bool = True,
 ) -> VideoFileClip:
-    cam = _cover(webcam, box_w, box_h, zoom=zoom)
+    del zoom
+    cam = _cover(webcam, box_w, box_h) if crop else _fit(webcam, box_w, box_h)
     mask = ImageClip(_rounded_mask(box_w, box_h, radius), is_mask=True).with_duration(
         cam.duration or 1
     )
@@ -588,7 +537,7 @@ def _rounded_border_clip(width: int, height: int, radius: int) -> ImageClip:
         (0, 0, width - 1, height - 1),
         radius=radius,
         outline=_BORDER_COLOR,
-        width=max(3, height // 70),
+        width=max(PIP_BORDER, height // 100),
     )
     return ImageClip(np.array(img))
 

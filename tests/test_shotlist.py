@@ -3,12 +3,13 @@ from pathlib import Path
 from pipeline.broll.slides import collect_slide_jobs, stamp_slide_paths
 from pipeline.gemini_director import _DIRECTOR_PROMPT, parse_edit_script, plan_from_transcript
 from pipeline.config import Settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.models import EditScript, GraphicCard, PlannedScene, Scene, TimedTranscript
 from pipeline.shotlist import (
     card_is_dense,
     compose_mode,
     local_asset_path,
+    overlay_copy_ok,
     resolve_edit_script,
     resolve_scene,
     scene_has_visual,
@@ -16,27 +17,26 @@ from pipeline.shotlist import (
 )
 
 
-def _dense_card(**kwargs: object) -> GraphicCard:
+def _card(**kwargs: object) -> GraphicCard:
     defaults = {
-        "kicker": "Policy",
-        "title": "The number that matters",
-        "bullets": ["Cut the pause", "Keep the point"],
+        "kicker": "THE MONEY",
+        "title": "$1.5B is the floor.",
+        "icon": "bar_chart",
     }
     defaults.update(kwargs)
     return GraphicCard(**defaults)  # type: ignore[arg-type]
 
 
-def test_scene_shot_list_defaults_to_none() -> None:
+def test_scene_defaults_to_nothing() -> None:
     scene = Scene(start=0, end=10)
     assert scene.said == ""
-    assert scene.shown == ""
-    assert scene.asset_kind == "none"
-    assert scene.asset_ref is None
+    assert scene.layout is PictureTag.NOTHING
+    assert scene.role == "body"
     assert not scene_has_visual(scene)
     assert not scene_shows_slide(scene)
 
 
-def test_parse_edit_script_reads_shot_list_fields() -> None:
+def test_parse_edit_script_reads_overlay_copy() -> None:
     script = parse_edit_script(
         """
         {
@@ -45,14 +45,12 @@ def test_parse_edit_script_reads_shot_list_fields() -> None:
               "start": 0,
               "end": 12,
               "said": "Here is the rule.",
-              "shown": "dense card on the claim",
-              "asset_kind": "card",
-              "asset_ref": null,
-              "layout": "PIP_BOTTOM_RIGHT",
+              "shown": "overlay card",
+              "layout": "overlay",
               "graphic": {
-                "kicker": "Rule",
+                "kicker": "THE RULE",
                 "title": "No empty slides",
-                "bullets": ["Name the artifact", "Or stay on camera"]
+                "icon": "shield"
               }
             }
           ]
@@ -61,180 +59,146 @@ def test_parse_edit_script_reads_shot_list_fields() -> None:
     )
     scene = script.scenes[0]
     assert scene.said == "Here is the rule."
-    assert scene.shown == "dense card on the claim"
-    assert scene.asset_kind == "card"
+    assert scene.layout is PictureTag.OVERLAY
+    assert overlay_copy_ok(scene.graphic)
     assert scene_has_visual(scene)
-    assert scene_shows_slide(scene)
+    assert not scene_shows_slide(scene)
 
 
 def test_none_clears_leftover_slide_path() -> None:
     scene = Scene(
         start=0,
         end=4,
-        asset_kind="none",
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        layout=PictureTag.NOTHING,
         graphic=GraphicCard(title="Leftover", asset_path="/tmp/invented.png"),
     )
     resolve_scene(scene)
     assert scene.graphic.asset_path == ""
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
 
 
 def test_unknown_asset_kind_coerces_to_none() -> None:
-    scene = Scene(start=0, end=4, asset_kind="slide", layout=LayoutKind.PIP_BOTTOM_RIGHT)
+    scene = Scene(start=0, end=4, asset_kind="slide", layout=PictureTag.PIP)
     assert scene.asset_kind == "none"
     resolve_scene(scene)
-    assert scene.asset_kind == "none"
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
 
 
-def test_title_only_card_is_not_dense() -> None:
+def test_title_only_card_is_not_overlay() -> None:
     thin = GraphicCard(title="Just a title")
     assert not card_is_dense(thin)
-    assert card_is_dense(_dense_card())
+    assert card_is_dense(_card())
 
 
-def test_title_only_card_resolves_to_talking_head() -> None:
+def test_title_only_overlay_resolves_to_nothing() -> None:
     scene = Scene(
         start=0,
         end=8,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="card",
+        layout=PictureTag.OVERLAY,
         said="Let me explain.",
-        shown="empty title slide",
-        graphic=GraphicCard(title="Talking points", slide_id="thin"),
+        graphic=GraphicCard(title="Talking points"),
     )
     resolve_scene(scene)
-    assert scene.asset_kind == "none"
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
     assert scene.graphic.asset_path == ""
     assert not scene_has_visual(scene)
-    assert not scene_shows_slide(scene)
 
 
-def test_missing_broll_file_is_none_not_invented_slide() -> None:
+def test_missing_pip_still_becomes_overlay_or_nothing() -> None:
     scene = Scene(
         start=0,
         end=8,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="broll",
-        asset_ref="broll/does-not-exist.mp4",
-        graphic=GraphicCard(title="Invented"),
+        layout=PictureTag.PIP,
+        asset_ref="broll/does-not-exist.jpg",
+        graphic=_card(still_query="MQ-9 Reaper"),
     )
     resolve_scene(scene)
-    assert scene.asset_kind == "none"
-    assert scene.layout is LayoutKind.FULL_FRAME
-    assert scene.graphic.asset_path == ""
+    assert scene.layout is PictureTag.OVERLAY
+    assert compose_mode(scene) == "overlay"
 
 
-def test_missing_site_url_is_none(tmp_path: Path) -> None:
+def test_missing_site_url_is_nothing() -> None:
     scene = Scene(
         start=0,
         end=8,
-        layout=LayoutKind.SPLIT_TOP,
+        layout=PictureTag.PIP,
         asset_kind="site",
         asset_ref="https://example.com/product",
-        graphic=GraphicCard(title="Example"),
+        graphic=GraphicCard(title="Example", still_query="example"),
     )
     resolve_scene(scene)
-    assert scene.asset_kind == "none"
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
     assert local_asset_path("https://example.com/product") is None
-    assert not scene_has_visual(scene)
-    assert compose_mode(scene) == "talking_head"
+    assert compose_mode(scene) == "nothing"
 
 
-def test_local_broll_path_is_kept(tmp_path: Path) -> None:
-    clip = tmp_path / "shop-floor.mp4"
-    clip.write_bytes(b"not-empty")
+def test_local_still_keeps_pip(tmp_path: Path) -> None:
+    still = tmp_path / "mq9-reaper.jpg"
+    still.write_bytes(b"not-empty")
     scene = Scene(
         start=0,
         end=8,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="broll",
-        asset_ref=str(clip),
-        graphic=GraphicCard(title="Shop floor"),
+        layout=PictureTag.PIP,
+        asset_ref=str(still),
+        graphic=GraphicCard(kicker="$1.5B", title="in procurements", still_query="MQ-9"),
     )
     resolve_scene(scene)
-    assert scene.asset_kind == "broll"
-    assert scene.layout is LayoutKind.FULL_FRAME
-    assert scene.asset_ref == str(clip.resolve())
-    assert scene.graphic.asset_path == str(clip.resolve())
-    assert scene_has_visual(scene)
-    assert compose_mode(scene) == "cutaway"
+    assert scene.layout is PictureTag.PIP
+    assert scene.asset_ref == str(still.resolve())
+    assert compose_mode(scene) == "pip"
     assert not scene_shows_slide(scene)
 
 
-def test_none_scene_does_not_collect_a_slide(tmp_path: Path) -> None:
+def test_nothing_scene_does_not_collect_a_slide(tmp_path: Path) -> None:
     script = EditScript(
         scenes=[
             Scene(
                 start=0,
                 end=12,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="none",
-                graphic=GraphicCard(title="Empty card", bullets=["Nope"], slide_id="empty"),
+                layout=PictureTag.NOTHING,
+                graphic=GraphicCard(title="Empty card", slide_id="empty"),
             ),
             Scene(
                 start=12,
                 end=24,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
-                graphic=_dense_card(slide_id="real_card"),
+                layout=PictureTag.OVERLAY,
+                graphic=_card(slide_id="real_card"),
             ),
         ]
     )
     resolve_edit_script(script)
     jobs = collect_slide_jobs(script, tmp_path)
-    variants = {job.slide_id for job in jobs}
-    assert "empty" not in variants
-    assert "real_card" in variants
+    assert jobs == []
     stamp_slide_paths(script, tmp_path)
     assert script.scenes[0].graphic.asset_path == ""
-    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
-    assert script.scenes[1].graphic.asset_path.endswith("real_card_pip.png")
+    assert script.scenes[0].layout is PictureTag.NOTHING
 
 
-def test_director_prompt_is_talking_head_first() -> None:
-    assert "said:" in _DIRECTOR_PROMPT
-    assert "shown:" in _DIRECTOR_PROMPT
-    assert "asset_kind" in _DIRECTOR_PROMPT
-    assert "cutaway" in _DIRECTOR_PROMPT
-    assert "none" in _DIRECTOR_PROMPT
-    assert "Do not invent a browser" in _DIRECTOR_PROMPT
-    assert "Jack mockup" in _DIRECTOR_PROMPT
-    assert "Never use the same layout three times" not in _DIRECTOR_PROMPT
+def test_director_prompt_is_tag_contract() -> None:
+    assert "overlay" in _DIRECTOR_PROMPT
+    assert "nothing" in _DIRECTOR_PROMPT
+    assert "lower_third" in _DIRECTOR_PROMPT
+    assert "Do not generate Scott" in _DIRECTOR_PROMPT
+    assert "Never emit layout lower_third" in _DIRECTOR_PROMPT
+    assert "open_card" in _DIRECTOR_PROMPT
+    assert "Point 1–3 sub talking point" in _DIRECTOR_PROMPT or "Point 1-3" in _DIRECTOR_PROMPT
+    assert "TAKEAWAY" in _DIRECTOR_PROMPT
+    assert "FULL_FRAME" in _DIRECTOR_PROMPT
     assert "Every scene needs a graphic card" not in _DIRECTOR_PROMPT
 
 
-def test_card_is_the_only_additive_graphic() -> None:
+def test_overlay_is_the_additive_card() -> None:
     card = Scene(
         start=0,
         end=8,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="card",
-        graphic=_dense_card(),
+        layout=PictureTag.OVERLAY,
+        graphic=_card(),
     )
-    assert compose_mode(card) == "card"
-    assert scene_shows_slide(card)
+    assert compose_mode(card) == "overlay"
+    assert not scene_shows_slide(card)
 
 
-def test_site_without_file_is_not_a_fake_browser() -> None:
-    scene = Scene(
-        start=0,
-        end=8,
-        asset_kind="site",
-        asset_ref="https://example.com",
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        graphic=GraphicCard(title="Example.com"),
-    )
-    resolve_scene(scene)
-    assert scene.asset_kind == "none"
-    assert compose_mode(scene) == "talking_head"
-    assert not scene_shows_slide(scene)
-
-
-def test_plan_from_transcript_cannot_emit_slide_without_asset(monkeypatch) -> None:
+def test_plan_from_transcript_cannot_emit_slide_without_copy(monkeypatch) -> None:
     def fake_generate(client, *, model, contents, schema, temperature=0.4):
         del client, model, contents, temperature
         if schema.__name__ == "_PackagingSchema":
@@ -253,20 +217,17 @@ def test_plan_from_transcript_cannot_emit_slide_without_asset(monkeypatch) -> No
                 {
                     "start": 0,
                     "end": 20,
-                    "layout": "PIP_BOTTOM_RIGHT",
-                    "reason": "variety",
+                    "layout": "overlay",
+                    "reason": "thin",
                     "said": "Hello there.",
-                    "shown": "empty title card",
-                    "asset_kind": "card",
-                    "graphic": {"title": "Hello", "slide_id": "thin"},
+                    "graphic": {"title": "Hello"},
                 },
                 {
                     "start": 20,
                     "end": 50,
-                    "layout": "SPLIT_TOP",
-                    "reason": "still empty",
-                    "asset_kind": "none",
-                    "graphic": {"title": "Aside"},
+                    "layout": "lower_third",
+                    "reason": "model tried a bookend",
+                    "graphic": {"title": "Wrap"},
                 },
             ],
             "metadata": {},
@@ -278,27 +239,20 @@ def test_plan_from_transcript_cannot_emit_slide_without_asset(monkeypatch) -> No
     script = plan_from_transcript(transcript, 50.0, settings, fallback_title="Talk", client=object())
     assert script.scenes
     for scene in script.scenes:
-        if scene.asset_kind == "none":
-            assert scene.layout is LayoutKind.FULL_FRAME
-            assert not scene_shows_slide(scene)
-            assert scene.graphic.asset_path == ""
-        else:
-            assert scene.asset_kind in {"card", "broll", "site"}
-            assert scene_has_visual(scene)
-    assert all(scene.asset_kind == "none" for scene in script.scenes)
+        assert scene.layout in {PictureTag.NOTHING, PictureTag.OVERLAY, PictureTag.PIP}
+        assert scene.layout is not PictureTag.LOWER_THIRD
 
 
-def test_planned_scene_carries_shot_list() -> None:
+def test_planned_scene_carries_overlay_copy() -> None:
     planned = PlannedScene(
         start=0,
         end=10,
         said="We ship Friday.",
-        shown="dense card",
-        asset_kind="card",
-        graphic=_dense_card(),
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        shown="overlay card",
+        graphic=_card(),
+        layout=PictureTag.OVERLAY,
     )
     scene = planned.to_scene()
     assert scene.said == "We ship Friday."
-    assert scene.asset_kind == "card"
+    assert scene.layout is PictureTag.OVERLAY
     assert scene_has_visual(scene)

@@ -22,8 +22,8 @@ from pipeline.ffmpeg_scene import (
 from pipeline.shotlist import resolve_scene
 from pipeline.encoder import nvenc_encoder, software_encoder
 from pipeline.hwaccel import HwDecode
-from pipeline.layouts import LayoutKind, pip_rect, split_webcam_rect
-from pipeline.models import EditScript, GraphicCard, MicroEvent, Scene
+from pipeline.layouts import PictureTag, pip_rect
+from pipeline.models import EditScript, GraphicCard, Scene
 
 
 def _settings(tmp_path: Path, *, concurrency: int = 2) -> Settings:
@@ -38,16 +38,12 @@ def _settings(tmp_path: Path, *, concurrency: int = 2) -> Settings:
     )
 
 
-def _scene(layout: LayoutKind, *, graphic: str = "", punch: bool = False) -> Scene:
-    events = []
-    if punch:
-        events.append(MicroEvent(start=0.4, end=0.9, kind="punch_in", scale=1.15))
+def _scene(layout: PictureTag, *, graphic: str = "", kicker: str = "THE MONEY") -> Scene:
     return Scene(
         start=0.0,
         end=1.0,
         layout=layout,
-        graphic=GraphicCard(title="Card", asset_path=graphic),
-        micro_events=events,
+        graphic=GraphicCard(kicker=kicker, title="Card", asset_path=graphic),
     )
 
 
@@ -86,33 +82,35 @@ def test_none_leftover_slide_is_not_an_ffmpeg_graphic(tmp_path: Path) -> None:
     scene = Scene(
         start=0,
         end=1,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="none",
+        layout=PictureTag.NOTHING,
         graphic=GraphicCard(title="Empty", asset_path=str(leftover)),
     )
     resolve_scene(scene)
     assert _graphic_path(scene) is None
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
 
 
-def test_broll_file_is_ffmpeg_full_frame_cutaway(tmp_path: Path) -> None:
-    clip = tmp_path / "dvids.mp4"
-    clip.write_bytes(b"vid")
+def test_pip_still_is_ffmpeg_graphic(tmp_path: Path) -> None:
+    still = tmp_path / "dvids.jpg"
+    still.write_bytes(b"jpg")
     scene = Scene(
         start=0,
         end=1,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="broll",
-        asset_ref=str(clip),
-        graphic=GraphicCard(title="DVIDS"),
+        layout=PictureTag.PIP,
+        asset_ref=str(still),
+        graphic=GraphicCard(kicker="$1.5B", title="in procurements", still_query="DVIDS"),
     )
     resolve_scene(scene)
     graphic = _graphic_path(scene)
     assert graphic is not None
-    assert graphic == clip.resolve()
-    assert scene.layout is LayoutKind.FULL_FRAME
-    graph = _graph(tmp_path, scene, graphic=graphic)
-    assert graph.layout is LayoutKind.FULL_FRAME
+    assert graphic == still.resolve()
+    assert scene.layout is PictureTag.PIP
+    mask = tmp_path / "mask.png"
+    border = tmp_path / "border.png"
+    mask.write_bytes(b"m")
+    border.write_bytes(b"b")
+    graph = _graph(tmp_path, scene, graphic=graphic, mask=mask, border=border)
+    assert graph.layout is PictureTag.PIP
     assert "[1:v]" in graph.filter_complex
 
 
@@ -125,63 +123,61 @@ def test_cover_filter_scales_then_crops() -> None:
     assert "crop=1920:1080" in zoomed
 
 
-def test_full_frame_graph_cover_and_punch(tmp_path: Path) -> None:
-    scene = _scene(LayoutKind.FULL_FRAME, punch=True)
+def test_nothing_graph_covers_host(tmp_path: Path) -> None:
+    scene = _scene(PictureTag.NOTHING)
     graph = _graph(tmp_path, scene)
-    assert graph.layout is LayoutKind.FULL_FRAME
+    assert graph.layout is PictureTag.NOTHING
     assert not graph.uses_gpu_filters
     assert "crop=1920:1080" in graph.filter_complex
-    assert "overlay=0:0:enable='between(t,0.400,0.900)'" in graph.filter_complex
+    assert "punch" not in graph.filter_complex
     assert graph.inputs[0].args[:2] == ("-ss", "0.000")
     assert graph.video_map == "vout"
 
 
-def test_pip_graph_mask_border_and_overlay(tmp_path: Path) -> None:
+def test_pip_graph_mask_border_and_fit(tmp_path: Path) -> None:
     slide = tmp_path / "slide.png"
     slide.write_bytes(b"png")
     mask = tmp_path / "mask.png"
     border = tmp_path / "border.png"
     mask.write_bytes(b"m")
     border.write_bytes(b"b")
-    scene = _scene(LayoutKind.PIP_BOTTOM_RIGHT, graphic=str(slide))
+    scene = _scene(PictureTag.PIP, graphic=str(slide))
     graph = _graph(tmp_path, scene, graphic=slide, mask=mask, border=border)
-    x, y, box_w, box_h = pip_rect(1920, 1080, 0.25)
+    x, y, box_w, box_h = pip_rect(1920, 1080)
     assert "alphamerge" in graph.filter_complex
-    assert f"crop={box_w}:{box_h}" in graph.filter_complex
+    assert f"force_original_aspect_ratio=decrease" in graph.filter_complex
+    assert f"pad={box_w}:{box_h}" in graph.filter_complex
     assert f"overlay={x}:{y}" in graph.filter_complex
     assert str(mask) in {item.path for item in graph.inputs}
     assert str(border) in {item.path for item in graph.inputs}
-    punched = _scene(LayoutKind.PIP_BOTTOM_RIGHT, graphic=str(slide), punch=True)
-    punch_graph = _graph(tmp_path, punched, graphic=slide, mask=mask, border=border)
-    assert "split=2[mask0][mask1]" in punch_graph.filter_complex
-    assert "[mask1]alphamerge" in punch_graph.filter_complex
 
 
-def test_split_graph_top_band(tmp_path: Path) -> None:
-    slide = tmp_path / "split.png"
-    slide.write_bytes(b"png")
-    scene = _scene(LayoutKind.SPLIT_TOP, graphic=str(slide))
-    graph = _graph(tmp_path, scene, graphic=slide)
-    _x, _y, box_w, box_h = split_webcam_rect(1920, 1080, 2.0 / 3.0)
-    assert box_w == 1920
-    assert box_h == 720
-    assert f"crop={box_w}:{box_h}" in graph.filter_complex
+def test_overlay_graph_is_full_frame_plus_png(tmp_path: Path) -> None:
+    scene = _scene(PictureTag.OVERLAY)
+    overlay = tmp_path / "kit.png"
+    overlay.write_bytes(b"png")
+    graph = _graph(
+        tmp_path,
+        scene,
+        overlays=(OverlayLayer(overlay, 0, 0, 0.0, 1.0),),
+    )
+    assert "crop=1920:1080" in graph.filter_complex
     assert "overlay=0:0" in graph.filter_complex
-    assert "[1:v]scale=1920:1080" in graph.filter_complex
+    assert "[1:v]scale=1920:1080" not in graph.filter_complex
 
 
-def test_gpu_graph_only_for_plain_full_frame(tmp_path: Path) -> None:
-    scene = _scene(LayoutKind.FULL_FRAME)
+def test_gpu_graph_only_for_plain_nothing(tmp_path: Path) -> None:
+    scene = _scene(PictureTag.NOTHING)
     assert gpu_filters_suitable(scene)
     graph = _graph(tmp_path, scene, use_gpu_filters=True)
     assert graph.uses_gpu_filters
     assert "scale_cuda=1920:1080" in graph.filter_complex
-    punched = _scene(LayoutKind.FULL_FRAME, punch=True)
-    assert not gpu_filters_suitable(punched)
+    chrome = _scene(PictureTag.OVERLAY)
+    assert not gpu_filters_suitable(chrome)
 
 
 def test_command_uses_hidden_style_and_encoder(tmp_path: Path) -> None:
-    scene = _scene(LayoutKind.FULL_FRAME)
+    scene = _scene(PictureTag.NOTHING)
     graph = _graph(tmp_path, scene)
     dest = tmp_path / "out.mp4"
     cmd = build_ffmpeg_command(
@@ -214,7 +210,7 @@ def test_ffmpeg_success_skips_moviepy(monkeypatch, tmp_path: Path, capsys) -> No
     settings = _settings(tmp_path)
     video = tmp_path / "src.mp4"
     video.write_bytes(b"vid")
-    scenes = [_scene(LayoutKind.FULL_FRAME), _scene(LayoutKind.SPLIT_TOP)]
+    scenes = [_scene(PictureTag.NOTHING), _scene(PictureTag.OVERLAY)]
     script = EditScript(scenes=scenes)
     moviepy_calls = {"n": 0}
 
@@ -252,7 +248,7 @@ def test_ffmpeg_fail_falls_back_moviepy(monkeypatch, tmp_path: Path, capsys) -> 
     settings = _settings(tmp_path)
     video = tmp_path / "src.mp4"
     video.write_bytes(b"vid")
-    scenes = [_scene(LayoutKind.PIP_BOTTOM_RIGHT)]
+    scenes = [_scene(PictureTag.PIP)]
     script = EditScript(scenes=scenes)
 
     def fake_ffmpeg(*_args: object, **_kwargs: object) -> None:
@@ -288,7 +284,7 @@ def test_encode_concurrency_cap(monkeypatch, tmp_path: Path) -> None:
     video = tmp_path / "src.mp4"
     video.write_bytes(b"vid")
     scenes = [
-        Scene(start=float(i), end=float(i + 1), layout=LayoutKind.FULL_FRAME)
+        Scene(start=float(i), end=float(i + 1), layout=PictureTag.NOTHING)
         for i in range(4)
     ]
     script = EditScript(scenes=scenes)
@@ -328,7 +324,7 @@ def test_encode_concurrency_cap(monkeypatch, tmp_path: Path) -> None:
     assert max_seen <= settings.encode_concurrency
 
 
-def test_real_ffmpeg_encodes_pip_with_punch(tmp_path: Path, capsys) -> None:
+def test_real_ffmpeg_encodes_pip(tmp_path: Path, capsys) -> None:
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not on PATH")
     from tests.test_compositor import _write_slide, _write_source_video
@@ -349,9 +345,8 @@ def test_real_ffmpeg_encodes_pip_with_punch(tmp_path: Path, capsys) -> None:
     scene = Scene(
         start=0.0,
         end=1.2,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        graphic=GraphicCard(title="List", asset_path=str(slide)),
-        micro_events=[MicroEvent(start=0.4, end=0.9, kind="punch_in", scale=1.15)],
+        layout=PictureTag.PIP,
+        graphic=GraphicCard(kicker="$1.5B", title="in procurements", asset_path=str(slide)),
     )
     script = EditScript(scenes=[scene])
     scene_dir = tmp_path / "scenes" / source.stem

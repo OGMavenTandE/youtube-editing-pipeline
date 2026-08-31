@@ -16,23 +16,22 @@ from pipeline.compositor import (
     write_scene_sidecar,
 )
 from pipeline.config import Settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.media import probe_duration
-from pipeline.models import EditScript, GraphicCard, MicroEvent, Scene
+from pipeline.models import EditScript, GraphicCard, Scene
 from pipeline.shotlist import compose_mode, scene_has_visual
 
 
-def test_pip_rect_is_16x9_lower_right() -> None:
-    x, y, box_w, box_h = pip_rect(1920, 1080, 0.25)
-    assert box_w == 480
-    assert box_h == 270
-    assert x + box_w < 1920
-    assert y + box_h < 1080
-    assert x > 1920 * 0.5
-    assert y > 1080 * 0.5
+def test_pip_rect_is_locked_560x315() -> None:
+    x, y, box_w, box_h = pip_rect(1920, 1080)
+    assert box_w == 560
+    assert box_h == 315
+    assert (x, y) == (1320, 725)
+    assert x + box_w + 40 == 1920
+    assert y + box_h + 40 == 1080
 
 
-def test_split_rect_is_top_two_thirds() -> None:
+def test_split_rect_is_retired_but_importable() -> None:
     x, y, box_w, box_h = split_webcam_rect(1920, 1080, 2.0 / 3.0)
     assert (x, y) == (0, 0)
     assert box_w == 1920
@@ -68,32 +67,27 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
             Scene(
                 start=0,
                 end=1,
-                layout=LayoutKind.FULL_FRAME,
-                graphic=GraphicCard(title="Talk"),
-                micro_events=[MicroEvent(start=0.4, end=0.9, kind="punch_in", scale=1.15)],
+                layout=PictureTag.NOTHING,
             ),
             Scene(
                 start=1,
                 end=2,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
+                layout=PictureTag.PIP,
                 graphic=GraphicCard(
-                    kicker="List",
-                    title="List",
-                    bullets=["One", "Two"],
+                    kicker="$1.5B",
+                    title="in procurements",
+                    quote="I think that's even low.",
                     asset_path=str(pip_slide),
                 ),
             ),
             Scene(
                 start=2,
                 end=3,
-                layout=LayoutKind.SPLIT_TOP,
-                asset_kind="card",
+                layout=PictureTag.OVERLAY,
                 graphic=GraphicCard(
-                    kicker="Claim",
-                    title="Claim",
-                    bullets=["One", "Two"],
-                    asset_path=str(split_slide),
+                    kicker="THE MONEY",
+                    title="$1.5B is the floor.",
+                    icon="bar_chart",
                 ),
             ),
         ]
@@ -134,14 +128,14 @@ def test_two_scenes_do_not_poison_source_audio_reader(
         Scene(
             start=0,
             end=3,
-            layout=LayoutKind.FULL_FRAME,
+            layout=PictureTag.NOTHING,
             graphic=GraphicCard(title="Talk"),
         ),
         Scene(
             start=3,
             end=6,
-            layout=LayoutKind.SPLIT_TOP,
-            graphic=GraphicCard(title="Claim"),
+            layout=PictureTag.OVERLAY,
+            graphic=GraphicCard(kicker="THE TEST", title="Bake in the law."),
         ),
     ]
     script = EditScript(scenes=scenes)
@@ -166,7 +160,7 @@ def test_two_scenes_do_not_poison_source_audio_reader(
     assert resumed[1].stat().st_size > 0
 
 
-def test_broll_cutaway_is_full_frame_not_pip(tmp_path: Path) -> None:
+def test_pip_video_is_not_a_face_wipe(tmp_path: Path) -> None:
     _require_ffmpeg()
     source = tmp_path / "source.mp4"
     broll = tmp_path / "dvids-clip.mp4"
@@ -180,13 +174,14 @@ def test_broll_cutaway_is_full_frame_not_pip(tmp_path: Path) -> None:
         slides_dir=tmp_path,
         scenes_dir=tmp_path / "scenes",
     )
+    still = tmp_path / "mq9.png"
+    _write_slide(still, kind="pip")
     scene = Scene(
         start=0,
         end=2,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="broll",
-        asset_ref=str(broll),
-        graphic=GraphicCard(title="DVIDS"),
+        layout=PictureTag.PIP,
+        asset_ref=str(still),
+        graphic=GraphicCard(kicker="$1.5B", title="in procurements", still_query="MQ-9"),
     )
     script = EditScript(scenes=[scene])
     canvas = (settings.output_width, settings.output_height)
@@ -195,9 +190,8 @@ def test_broll_cutaway_is_full_frame_not_pip(tmp_path: Path) -> None:
     parts = _encode_scenes(source, script, script.scenes, scene_dir, settings, canvas)
     assert len(parts) == 1
     assert parts[0].is_file()
-    assert script.scenes[0].asset_kind == "broll"
-    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
-    assert compose_mode(script.scenes[0]) == "cutaway"
+    assert script.scenes[0].layout is PictureTag.PIP
+    assert compose_mode(script.scenes[0]) == "pip"
 
 
 def test_none_asset_means_no_slide_overlay(tmp_path: Path) -> None:
@@ -217,8 +211,7 @@ def test_none_asset_means_no_slide_overlay(tmp_path: Path) -> None:
     scene = Scene(
         start=0,
         end=2,
-        layout=LayoutKind.PIP_BOTTOM_RIGHT,
-        asset_kind="none",
+        layout=PictureTag.NOTHING,
         graphic=GraphicCard(title="Empty", asset_path=str(leftover)),
     )
     script = EditScript(scenes=[scene])
@@ -229,7 +222,7 @@ def test_none_asset_means_no_slide_overlay(tmp_path: Path) -> None:
     assert len(parts) == 1
     assert parts[0].is_file()
     assert script.scenes[0].asset_kind == "none"
-    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
+    assert script.scenes[0].layout is PictureTag.NOTHING
     assert not scene_has_visual(script.scenes[0])
     assert script.scenes[0].graphic.asset_path == ""
 
@@ -241,7 +234,7 @@ def test_scene_cache_skips_when_fingerprint_matches() -> None:
     scene = Scene(
         start=0,
         end=2,
-        layout=LayoutKind.FULL_FRAME,
+        layout=PictureTag.NOTHING,
         graphic=GraphicCard(title="Talk"),
     )
     fingerprint = scene_fingerprint(scene, settings)

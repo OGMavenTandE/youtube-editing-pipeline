@@ -13,7 +13,7 @@ from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
 from pipeline.config import Settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import BODY_TAGS, PictureTag
 from pipeline.media import MediaError, extract_audio, extract_compact_audio, probe_duration
 from pipeline.models import (
     ChapterMarker,
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Gemini inline media limit. 16 kHz mono WAV hits this around 11 minutes.
 INLINE_AUDIO_LIMIT_BYTES = 20 * 1024 * 1024
 
-_ALLOWED_LAYOUTS = {item.value for item in LayoutKind}
+_ALLOWED_LAYOUTS = set(BODY_TAGS)
 
 GENERIC_TAGS = (
     "talking head",
@@ -80,53 +80,45 @@ Do not summarize. Do not invent words that were not spoken.
 """
 
 _DIRECTOR_PROMPT = """\
-You are the producer/director for a Nate-style talking-head-first YouTube edit.
+You tag spoken beats for a locked Scott Mastin YouTube picture kit.
 
-You receive a timed transcript of the trimmed video. The webcam is a static
-landscape talking-head shot. Do not request video frames.
+You receive a timed transcript. The webcam is a static landscape talking-head
+shot of Scott. Do not request video frames. Do not generate Scott. Do not
+invent a look, layout, font, color, zoom, or slide.
 
-v1 bible: full-frame host. Commentary over artifacts. Something appears on
-screen only when you can name a real artifact. Do not rotate FULL / PIP /
-SPLIT for variety. Do not invent title-only slides. Do not invent a browser
-window, site chrome, or Screen Studio / Jack mockup.
+The app already owns open and close bookends. You tag BODY beats only.
 
-A scene is a spoken beat, usually 8 to 25 seconds. Plan scenes that cover
-the assigned window with no gaps and no overlaps. Do not emit one scene for
-the whole file. Do not emit micro-events (punch-in, text flash, extra cuts).
-Those are added later in code.
+Talk structure Scott will have already followed:
+- Title + executive summary (spoken) — app open_card + lower third. Skip this window.
+- Point 1, with 2–3 spoken subpoints
+- Point 2, same
+- Point 3, same
+- Closing wrap + contact — app close_card + lower third. Skip this window.
 
-Use absolute timestamps in seconds on the full video timeline.
+open_card and close_card are dedicated talk-sheet fields, not tags.
+Do not emit them. Do not copy the spoken title/thesis onto an overlay beat.
+Do not treat the overview sentence as Point 1.
 
-For every scene fill the shot list:
-- said: what is spoken on this beat (short, from the transcript)
-- shown: what is on screen, in words (webcam, a named clip, or the card)
-- asset_kind: one of none | broll | site | card
-- asset_ref: optional local file path or URL
+Allowed layout values (this is a tag, not a design choice):
+- nothing: default. Full-frame host, no chrome. Most beats are this.
+- overlay: ONLY a Point 1–3 sub talking point that deserves the locked Nate card.
+  graphic.kicker = short gold eyebrow (all-caps idea, e.g. THE MONEY)
+  graphic.title = 1–2 line white headline he actually said on that subpoint
+  graphic.icon = one of bar_chart | robot | shield | drone | share | chip | lock | target
+- pip: rare. Only when a named-platform still is the point (DVIDS 16:9).
+  graphic.kicker = gold number or short kicker
+  graphic.title = white sub line
+  graphic.quote = optional short quote
+  graphic.still_query = the named platform (e.g. MQ-9 Reaper, M1 Abrams)
 
-Asset rules (strict):
-- none: default. You cannot name a real artifact. Layout MUST be FULL_FRAME.
-  graphic may be empty. The compositor shows full-frame webcam and NO slide.
-- broll: only if you can name a local / DVIDS file that exists. Put that
-  path in asset_ref. Layout MUST be FULL_FRAME. The compositor plays that
-  file as a full-frame cutaway (covers the face). Host audio continues.
-  If the file is missing, use none. Do not invent a graphic.
-- site: only if you can name a real company/org URL. If there is no local
-  screenshot file, asset_kind MUST be none. Do not invent a browser.
-- card: only if this beat is a named concept that deserves a dense
-  Nate-style card. Then graphic MUST have:
-  - kicker: short eyebrow (who / what / context)
-  - title: headline
-  - bullets: 2 to 5 facts (not a restated title)
-  Title-only cards are forbidden. If you cannot fill kicker + headline +
-  facts, asset_kind MUST be none. Card is the only additive on-camera
-  graphic (existing HTML slide, PIP or SPLIT).
-
-Layouts:
-- FULL_FRAME: required for none and for broll cutaways.
-- PIP_BOTTOM_RIGHT / SPLIT_TOP: only when asset_kind is card.
-
-Every scene needs a short reason. Talking-head none scenes in a row are
-correct.
+Rules:
+- Sparse. Do not tag every 3–6 seconds. A 20-minute cut might have 6–12 overlays
+  and 0–2 pip beats. The rest is nothing.
+- Never emit layout lower_third, FULL_FRAME, PIP_BOTTOM_RIGHT, or SPLIT_TOP.
+- Never invent a browser, HUD, TAKEAWAY pill, or generated host.
+- If you cannot name a real DVIDS still, do not use pip. Use overlay or nothing.
+- Cover the assigned window with no gaps. Consecutive nothing beats are correct.
+- said: short quote from the transcript. shown: webcam / card / named still.
 
 Do not write YouTube titles, description, chapters, or tags here.
 Return empty metadata. A later pass writes packaging for the full cut.
@@ -360,7 +352,7 @@ def fit_scenes_to_window(
         child.start = start
         child.end = end
         if child.layout.value not in _ALLOWED_LAYOUTS:
-            child.layout = LayoutKind.FULL_FRAME
+            child.layout = PictureTag.NOTHING
         fitted.append(child)
     return fitted
 
@@ -379,10 +371,10 @@ def stitch_director_plans(
             PlannedScene(
                 start=0.0,
                 end=duration,
-                layout=LayoutKind.FULL_FRAME,
+                layout=PictureTag.NOTHING,
                 reason="Fallback: director returned no scenes",
                 said="",
-                shown="full-frame webcam",
+                shown="full-frame host",
                 asset_kind="none",
                 graphic=GraphicCard(),
             )
@@ -512,10 +504,10 @@ def _director_user_text(
         f"Plan scenes for this window only: {start:.2f}s to {end:.2f}s.",
         "Use absolute timestamps on the full timeline.",
         f"Aim for about {lo} to {hi} scenes in this window. Cover the window with no gaps.",
-        "Fill said and shown on every scene. Default asset_kind is none.",
-        "Talking-head first. Additive card only for asset_kind card.",
-        "broll with a real file is a FULL_FRAME cutaway. site with no file is none.",
-        "If you cannot name a real artifact, asset_kind is none. No slide.",
+        "Default layout is nothing. Overlay is only a Point 1–3 sub talking point.",
+        "Do not tag the spoken title or thesis. That is the app open_card, not overlay.",
+        "PiP is rare and needs a named-platform still query. Never emit lower_third.",
+        "Do not invent fonts, colors, zoom, or Scott.",
         "Omit metadata. Return empty titles, chapters, and tags.",
     ]
     if window_count > 1:

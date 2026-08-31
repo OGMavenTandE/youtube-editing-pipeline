@@ -37,6 +37,12 @@ class Settings(BaseModel):
     output_height: int = Field(default=1080, ge=16)
     pip_scale: float = Field(default=0.25, gt=0.0, le=0.6)
     split_top_ratio: float = Field(default=2.0 / 3.0, gt=0.3, lt=0.9)
+    bookend_seconds: float = Field(default=10.0, ge=4.0, le=20.0)
+    host_name: str = "Scott Mastin"
+    host_title_line: str = "President, AI Eval Corp · SDVOSB · Independent T&E"
+    host_affiliations: str = "Army Research Lab · Project Maven · CDAO"
+    host_mission: str = "AI test and evaluation for the Department of War and the IC"
+    host_find_me: str = "scottmastin.com|linkedin.com/in/scottmastin|aieval.org"
     pacing_hook_window: float = Field(default=60.0, ge=0.0)
     layout_hold_min: float = Field(default=8.0, ge=1.0)
     layout_hold_hook_max: float = Field(default=15.0, ge=1.0)
@@ -104,6 +110,24 @@ def load_settings(env_file: Path | None = None) -> Settings:
         output_height=int(os.getenv("OUTPUT_HEIGHT", "1080")),
         pip_scale=float(os.getenv("PIP_SCALE", "0.25")),
         split_top_ratio=float(os.getenv("SPLIT_TOP_RATIO", str(2.0 / 3.0))),
+        bookend_seconds=float(os.getenv("BOOKEND_SECONDS", "10")),
+        host_name=os.getenv("HOST_NAME", "Scott Mastin").strip() or "Scott Mastin",
+        host_title_line=os.getenv(
+            "HOST_TITLE_LINE",
+            "President, AI Eval Corp · SDVOSB · Independent T&E",
+        ).strip(),
+        host_affiliations=os.getenv(
+            "HOST_AFFILIATIONS",
+            "Army Research Lab · Project Maven · CDAO",
+        ).strip(),
+        host_mission=os.getenv(
+            "HOST_MISSION",
+            "AI test and evaluation for the Department of War and the IC",
+        ).strip(),
+        host_find_me=os.getenv(
+            "HOST_FIND_ME",
+            "scottmastin.com|linkedin.com/in/scottmastin|aieval.org",
+        ).strip(),
         pacing_hook_window=float(os.getenv("PACING_HOOK_WINDOW", "60")),
         layout_hold_min=float(os.getenv("LAYOUT_HOLD_MIN", "8")),
         layout_hold_hook_max=float(os.getenv("LAYOUT_HOLD_HOOK_MAX", "15")),
@@ -126,6 +150,19 @@ def load_settings(env_file: Path | None = None) -> Settings:
         slides_dir=Path(os.getenv("SLIDES_DIR", str(REPO_ROOT / "work" / "slides"))),
         scenes_dir=Path(os.getenv("SCENES_DIR", str(REPO_ROOT / "work" / "scenes"))),
         encode_concurrency=int(os.getenv("ENCODE_CONCURRENCY", "2")),
+    )
+
+
+def identity_from_settings(settings: Settings):
+    from pipeline.models import HostIdentity
+
+    links = [part.strip() for part in settings.host_find_me.split("|") if part.strip()]
+    return HostIdentity(
+        name=settings.host_name,
+        title_line=settings.host_title_line,
+        affiliations=settings.host_affiliations,
+        mission=settings.host_mission,
+        find_me=links or ["scottmastin.com", "linkedin.com/in/scottmastin", "aieval.org"],
     )
 
 

@@ -6,10 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 
 AssetKind = Literal["none", "broll", "site", "card"]
 ASSET_KINDS: tuple[AssetKind, ...] = ("none", "broll", "site", "card")
+BodyTag = Literal["overlay", "pip", "nothing"]
+BODY_TAGS: tuple[BodyTag, ...] = ("overlay", "pip", "nothing")
+BeatRole = Literal["body", "open", "close"]
 
 
 def _coerce_asset_kind(value: object) -> AssetKind:
@@ -73,10 +76,83 @@ class BRollCue(TimeRange):
 
 
 class OverlayCallout(TimeRange):
-    """On-screen takeaway that is not a lower-third name card."""
+    """Legacy takeaway. The locked kit does not paint these."""
 
     text: str = Field(..., min_length=1, description="Short on-screen takeaway.")
     kind: Literal["takeaway", "stat", "quote"] = "takeaway"
+
+
+class HostIdentity(BaseModel):
+    """Locked lower-third copy. Config, not model output."""
+
+    name: str = "Scott Mastin"
+    title_line: str = "President, AI Eval Corp · SDVOSB · Independent T&E"
+    affiliations: str = "Army Research Lab · Project Maven · CDAO"
+    mission: str = "AI test and evaluation for the Department of War and the IC"
+    find_me_kicker: str = "FIND ME"
+    find_me: list[str] = Field(
+        default_factory=lambda: [
+            "scottmastin.com",
+            "linkedin.com/in/scottmastin",
+            "aieval.org",
+        ]
+    )
+
+
+class BookendCard(BaseModel):
+    """Dedicated open/close plate. Not an overlay|pip|nothing body tag."""
+
+    kicker: str = ""
+    headline: str = ""
+    icon: str = ""
+
+
+class TalkSheet(BaseModel):
+    """Job metadata for bookend cards. Not invented by the tagger.
+
+    open_card is the overview plate (title kicker + two-line thesis).
+    close_card is the locked CTA. Neither is a body subpoint.
+    title / exec_headline / close_* are aliases kept for older job JSON.
+    """
+
+    title: str = ""
+    exec_headline: str = ""
+    open_card: BookendCard = Field(default_factory=BookendCard)
+    close_card: BookendCard = Field(
+        default_factory=lambda: BookendCard(
+            kicker="WORK WITH ME",
+            headline="Independent AI T&E.\nVendor-agnostic.",
+            icon="share",
+        )
+    )
+    close_kicker: str = "WORK WITH ME"
+    close_headline: str = "Independent AI T&E.\nVendor-agnostic."
+    close_icon: str = "share"
+    open_icon: str = "bar_chart"
+
+    @model_validator(mode="after")
+    def sync_bookend_aliases(self) -> "TalkSheet":
+        if not self.open_card.kicker.strip() and self.title.strip():
+            self.open_card.kicker = self.title.strip()
+        if not self.open_card.headline.strip() and self.exec_headline.strip():
+            self.open_card.headline = self.exec_headline.strip()
+        if not self.open_card.icon.strip() and self.open_icon.strip():
+            self.open_card.icon = self.open_icon.strip()
+        if not self.title.strip() and self.open_card.kicker.strip():
+            self.title = self.open_card.kicker
+        if not self.exec_headline.strip() and self.open_card.headline.strip():
+            self.exec_headline = self.open_card.headline
+        if not self.close_card.kicker.strip() and self.close_kicker.strip():
+            self.close_card.kicker = self.close_kicker.strip()
+        if not self.close_card.headline.strip() and self.close_headline.strip():
+            self.close_card.headline = self.close_headline.strip()
+        if not self.close_card.icon.strip() and self.close_icon.strip():
+            self.close_card.icon = self.close_icon.strip()
+        if not self.close_kicker.strip() and self.close_card.kicker.strip():
+            self.close_kicker = self.close_card.kicker
+        if not self.close_headline.strip() and self.close_card.headline.strip():
+            self.close_headline = self.close_card.headline
+        return self
 
 
 class MicroEventKind(str, Enum):
@@ -96,27 +172,33 @@ class MicroEvent(BaseModel):
 
 
 class GraphicCard(BaseModel):
-    """Slide / lower-third copy for one scene. Reuse across adjacent scenes when the topic holds."""
+    """Copy that fills a locked kit template. No layout, font, or color fields."""
 
     kicker: str = Field(
         default="",
-        description="Eyebrow line above the headline. Required for a dense card.",
+        description="Gold eyebrow (overlay) or gold number (pip).",
     )
-    title: str = ""
+    title: str = Field(default="", description="White headline / pip sub-line.")
+    icon: str = Field(default="", description="Line-art icon name: bar_chart, shield, share, …")
+    quote: str = Field(default="", description="Optional short pip quote.")
+    still_query: str = Field(
+        default="",
+        description="Named-platform still query for a pip beat (DVIDS file first).",
+    )
     bullets: list[str] = Field(default_factory=list)
     lower_third_title: str = ""
     lower_third_subtitle: str = ""
     slide_id: str = Field(
         default="",
-        description="Stable id so adjacent scenes can share one generated slide.",
+        description="Stable id for a rendered chrome PNG.",
     )
     asset_path: str = Field(
         default="",
-        description="Rendered 1920x1080 slide PNG. Filled by the slide provider.",
+        description="Resolved still or rendered chrome PNG.",
     )
     lower_third_path: str = Field(
         default="",
-        description="Rendered lower-third PNG. Filled by the slide provider.",
+        description="Rendered bookend PNG when the compositor stamps one.",
     )
 
     @model_validator(mode="before")
@@ -136,20 +218,21 @@ class GraphicCard(BaseModel):
 
 
 class Scene(TimeRange):
-    """One layout beat on the trimmed timeline. A 20-minute cut has 50-80 of these."""
+    """One tagged beat on the trimmed timeline. Sparse. Most beats are nothing."""
 
     said: str = Field(default="", description="What is spoken on this beat.")
     shown: str = Field(default="", description="What is on screen, in words.")
     asset_kind: AssetKind = Field(
         default="none",
-        description="none | broll | site | card. none means talking-head only.",
+        description="Legacy none | broll | site | card. Prefer layout + still_query.",
     )
     asset_ref: str | None = Field(
         default=None,
         description="Optional local path or URL. Missing file is treated as none.",
     )
-    layout: LayoutKind = LayoutKind.FULL_FRAME
-    reason: str = Field(default="", description="Why this layout for this spoken beat.")
+    layout: PictureTag = PictureTag.NOTHING
+    role: BeatRole = "body"
+    reason: str = Field(default="", description="Why this tag for this spoken beat.")
     graphic: GraphicCard = Field(default_factory=GraphicCard)
     micro_events: list[MicroEvent] = Field(default_factory=list)
 
@@ -163,15 +246,24 @@ class Scene(TimeRange):
     def coerce_asset_ref(cls, value: object) -> str | None:
         return _empty_ref_to_none(value)
 
+    @field_validator("layout", mode="before")
+    @classmethod
+    def coerce_layout(cls, value: object) -> PictureTag:
+        return PictureTag.coerce(value, allow_bookend=True)
+
+    @property
+    def tag(self) -> PictureTag:
+        return self.layout
+
 
 class PlannedScene(TimeRange):
-    """Gemini scene payload. Micro-resets are added locally, not by the model."""
+    """Gemini body-beat payload. Tags only: overlay | pip | nothing."""
 
     said: str = ""
     shown: str = ""
     asset_kind: AssetKind = "none"
     asset_ref: str | None = None
-    layout: LayoutKind = LayoutKind.FULL_FRAME
+    layout: PictureTag = PictureTag.NOTHING
     reason: str = ""
     graphic: GraphicCard = Field(default_factory=GraphicCard)
 
@@ -185,6 +277,11 @@ class PlannedScene(TimeRange):
     def coerce_asset_ref(cls, value: object) -> str | None:
         return _empty_ref_to_none(value)
 
+    @field_validator("layout", mode="before")
+    @classmethod
+    def coerce_body_tag(cls, value: object) -> PictureTag:
+        return PictureTag.coerce(value, allow_bookend=False)
+
     def to_scene(self) -> Scene:
         return Scene(
             start=self.start,
@@ -194,10 +291,39 @@ class PlannedScene(TimeRange):
             asset_kind=self.asset_kind,
             asset_ref=self.asset_ref,
             layout=self.layout,
+            role="body",
             reason=self.reason,
             graphic=self.graphic,
             micro_events=[],
         )
+
+
+class TaggedBeat(TimeRange):
+    """Persisted kit beat. Written before encode so retries skip the model."""
+
+    tag: PictureTag = PictureTag.NOTHING
+    role: BeatRole = "body"
+    said: str = ""
+    kicker: str = ""
+    headline: str = ""
+    icon: str = ""
+    quote: str = ""
+    still_query: str = ""
+    still_path: str = ""
+    reason: str = ""
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def coerce_tag(cls, value: object) -> PictureTag:
+        return PictureTag.coerce(value, allow_bookend=True)
+
+
+class TaggedBeatList(BaseModel):
+    version: int = 1
+    duration: float = 0.0
+    identity: HostIdentity = Field(default_factory=HostIdentity)
+    talk_sheet: TalkSheet = Field(default_factory=TalkSheet)
+    beats: list[TaggedBeat] = Field(default_factory=list)
 
 
 class TranscriptCue(TimeRange):
@@ -337,6 +463,8 @@ class EditScript(BaseModel):
     broll: list[BRollCue] = Field(default_factory=list)
     overlays: list[OverlayCallout] = Field(default_factory=list)
     metadata: YouTubeMetadata = Field(default_factory=YouTubeMetadata)
+    talk_sheet: TalkSheet = Field(default_factory=TalkSheet)
+    identity: HostIdentity = Field(default_factory=HostIdentity)
 
     @classmethod
     def empty(cls) -> EditScript:
