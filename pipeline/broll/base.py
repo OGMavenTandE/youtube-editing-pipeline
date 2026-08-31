@@ -25,6 +25,7 @@ class BrollSpec(BaseModel):
     """Provider-agnostic request for one visual under a scene."""
 
     kind: BrollKind = BrollKind.SLIDE
+    kicker: str = ""
     title: str = ""
     bullets: list[str] = Field(default_factory=list)
     query: str = ""

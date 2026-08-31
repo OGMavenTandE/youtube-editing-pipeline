@@ -33,6 +33,7 @@ def test_pip_variant_follows_bullet_count() -> None:
 
 def test_collect_jobs_dedupes_slide_id_and_adds_lower_third() -> None:
     card = GraphicCard(
+        kicker="Hook",
         title="Keep the hook",
         bullets=["Say it once", "Repeat the number"],
         slide_id="slide_hook",
@@ -41,8 +42,20 @@ def test_collect_jobs_dedupes_slide_id_and_adds_lower_third() -> None:
     )
     script = EditScript(
         scenes=[
-            Scene(start=0, end=12, layout=LayoutKind.PIP_BOTTOM_RIGHT, graphic=card),
-            Scene(start=12, end=24, layout=LayoutKind.PIP_BOTTOM_RIGHT, graphic=card.model_copy()),
+            Scene(
+                start=0,
+                end=12,
+                layout=LayoutKind.PIP_BOTTOM_RIGHT,
+                asset_kind="card",
+                graphic=card,
+            ),
+            Scene(
+                start=12,
+                end=24,
+                layout=LayoutKind.PIP_BOTTOM_RIGHT,
+                asset_kind="card",
+                graphic=card.model_copy(),
+            ),
             Scene(start=24, end=36, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard()),
         ]
     )
@@ -66,6 +79,7 @@ def test_stable_id_from_copy() -> None:
 def test_html_escapes_copy() -> None:
     html_doc = build_slide_html(
         BrollSpec(
+            kicker="Watch <out>",
             title='Hook <em>now</em>',
             bullets=['Use "quotes"'],
             variant=SlideVariant.PIP_LIST,
@@ -73,6 +87,7 @@ def test_html_escapes_copy() -> None:
     )
     assert "<em>" not in html_doc
     assert "&lt;em&gt;now&lt;/em&gt;" in html_doc
+    assert "class=\"kicker\"" in html_doc
     assert "pip_list" in html_doc
 
 
@@ -115,6 +130,7 @@ def test_playwright_renders_1920x1080_pngs(tmp_path: Path | None = None) -> None
         item.unlink()
     settings = Settings(slides_dir=dest)
     shared = GraphicCard(
+        kicker="Edit",
         title="Cut the pause, keep the point",
         bullets=["Drop gaps over 0.7s", "Leave a 0.15s pad", "Stay on the idea"],
         slide_id="demo_list",
@@ -123,13 +139,31 @@ def test_playwright_renders_1920x1080_pngs(tmp_path: Path | None = None) -> None
     )
     script = EditScript(
         scenes=[
-            Scene(start=0, end=12, layout=LayoutKind.PIP_BOTTOM_RIGHT, graphic=shared),
-            Scene(start=12, end=24, layout=LayoutKind.PIP_BOTTOM_RIGHT, graphic=shared.model_copy()),
+            Scene(
+                start=0,
+                end=12,
+                layout=LayoutKind.PIP_BOTTOM_RIGHT,
+                asset_kind="card",
+                graphic=shared,
+            ),
+            Scene(
+                start=12,
+                end=24,
+                layout=LayoutKind.PIP_BOTTOM_RIGHT,
+                asset_kind="card",
+                graphic=shared.model_copy(),
+            ),
             Scene(
                 start=24,
                 end=36,
                 layout=LayoutKind.SPLIT_TOP,
-                graphic=GraphicCard(title="One number matters", slide_id="demo_split"),
+                asset_kind="card",
+                graphic=GraphicCard(
+                    kicker="Claim",
+                    title="One number matters",
+                    bullets=["Name the figure", "Say why it sticks"],
+                    slide_id="demo_split",
+                ),
             ),
             Scene(start=36, end=48, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard()),
         ]

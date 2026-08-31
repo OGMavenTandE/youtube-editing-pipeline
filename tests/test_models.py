@@ -53,10 +53,10 @@ def test_cut_map_maps_kept_time() -> None:
 def test_graphic_card_caps_bullets_and_aliases_lower_third() -> None:
     card = GraphicCard(
         title="Hook",
-        bullets=["one", "two", "three", "four", ""],
+        bullets=["one", "two", "three", "four", "five", "six", ""],
         lower_third="Host",
     )
-    assert card.bullets == ["one", "two", "three"]
+    assert card.bullets == ["one", "two", "three", "four", "five"]
     assert card.lower_third_title == "Host"
 
 

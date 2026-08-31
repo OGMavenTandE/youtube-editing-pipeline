@@ -14,6 +14,7 @@ from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit
 from pipeline.media import MediaError, probe_duration, write_json
 from pipeline.models import EditScript, SilenceTrimResult
 from pipeline.pacing import enforce_pacing, evaluate_pacing
+from pipeline.shotlist import resolve_edit_script
 from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
 from pipeline.studio import resolve_title_index, write_studio_package
@@ -246,6 +247,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     broll_dir = Path(args.broll_dir) if args.broll_dir else None
     if broll_dir is not None:
         apply_local_broll(script, broll_dir)
+    resolve_edit_script(script)
 
     if args.skip_slides or skip_composite:
         print("[3/5] Slides skipped.")

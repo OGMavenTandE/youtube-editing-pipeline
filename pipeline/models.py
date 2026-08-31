@@ -8,6 +8,23 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from pipeline.layouts import LayoutKind
 
+AssetKind = Literal["none", "broll", "site", "card"]
+ASSET_KINDS: tuple[AssetKind, ...] = ("none", "broll", "site", "card")
+
+
+def _coerce_asset_kind(value: object) -> AssetKind:
+    raw = str(value or "none").strip().lower()
+    if raw in ASSET_KINDS:
+        return raw  # type: ignore[return-value]
+    return "none"
+
+
+def _empty_ref_to_none(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
 
 class TimeRange(BaseModel):
     """Closed-open time range in seconds on the current working timeline."""
@@ -81,6 +98,10 @@ class MicroEvent(BaseModel):
 class GraphicCard(BaseModel):
     """Slide / lower-third copy for one scene. Reuse across adjacent scenes when the topic holds."""
 
+    kicker: str = Field(
+        default="",
+        description="Eyebrow line above the headline. Required for a dense card.",
+    )
     title: str = ""
     bullets: list[str] = Field(default_factory=list)
     lower_third_title: str = ""
@@ -111,29 +132,67 @@ class GraphicCard(BaseModel):
     @classmethod
     def cap_bullets(cls, value: list[str]) -> list[str]:
         cleaned = [item.strip() for item in value if item and item.strip()]
-        return cleaned[:3]
+        return cleaned[:5]
 
 
 class Scene(TimeRange):
     """One layout beat on the trimmed timeline. A 20-minute cut has 50-80 of these."""
 
+    said: str = Field(default="", description="What is spoken on this beat.")
+    shown: str = Field(default="", description="What is on screen, in words.")
+    asset_kind: AssetKind = Field(
+        default="none",
+        description="none | broll | site | card. none means talking-head only.",
+    )
+    asset_ref: str | None = Field(
+        default=None,
+        description="Optional local path or URL. Missing file is treated as none.",
+    )
     layout: LayoutKind = LayoutKind.FULL_FRAME
     reason: str = Field(default="", description="Why this layout for this spoken beat.")
     graphic: GraphicCard = Field(default_factory=GraphicCard)
     micro_events: list[MicroEvent] = Field(default_factory=list)
 
+    @field_validator("asset_kind", mode="before")
+    @classmethod
+    def coerce_asset_kind(cls, value: object) -> AssetKind:
+        return _coerce_asset_kind(value)
+
+    @field_validator("asset_ref", mode="before")
+    @classmethod
+    def coerce_asset_ref(cls, value: object) -> str | None:
+        return _empty_ref_to_none(value)
+
 
 class PlannedScene(TimeRange):
     """Gemini scene payload. Micro-resets are added locally, not by the model."""
 
+    said: str = ""
+    shown: str = ""
+    asset_kind: AssetKind = "none"
+    asset_ref: str | None = None
     layout: LayoutKind = LayoutKind.FULL_FRAME
     reason: str = ""
     graphic: GraphicCard = Field(default_factory=GraphicCard)
+
+    @field_validator("asset_kind", mode="before")
+    @classmethod
+    def coerce_asset_kind(cls, value: object) -> AssetKind:
+        return _coerce_asset_kind(value)
+
+    @field_validator("asset_ref", mode="before")
+    @classmethod
+    def coerce_asset_ref(cls, value: object) -> str | None:
+        return _empty_ref_to_none(value)
 
     def to_scene(self) -> Scene:
         return Scene(
             start=self.start,
             end=self.end,
+            said=self.said,
+            shown=self.shown,
+            asset_kind=self.asset_kind,
+            asset_ref=self.asset_ref,
             layout=self.layout,
             reason=self.reason,
             graphic=self.graphic,

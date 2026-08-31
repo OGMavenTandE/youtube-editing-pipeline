@@ -62,6 +62,16 @@ def test_fit_scenes_keeps_absolute_timestamps() -> None:
     assert fitted[1].end == 340
 
 
+def test_stitch_fallback_is_talking_head_none() -> None:
+    stitched = stitch_director_plans([], [], 30.0)
+    assert len(stitched.scenes) == 1
+    scene = stitched.scenes[0]
+    assert scene.asset_kind == "none"
+    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.graphic.title == ""
+    assert scene.graphic.slide_id == ""
+
+
 def test_stitch_does_not_keep_window_zero_metadata() -> None:
     plans = [
         DirectorPlan(

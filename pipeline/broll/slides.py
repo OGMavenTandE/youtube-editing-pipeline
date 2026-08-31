@@ -12,6 +12,7 @@ from pipeline.broll.base import BrollAsset, BrollKind, BrollSpec, SlideVariant
 from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.models import EditScript, GraphicCard, Scene
+from pipeline.shotlist import scene_shows_slide
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ def ensure_slide_id(graphic: GraphicCard, layout: LayoutKind) -> str:
     raw = "|".join(
         [
             layout.value,
+            graphic.kicker.strip(),
             graphic.title.strip(),
             *graphic.bullets,
             graphic.lower_third_title.strip(),
@@ -67,14 +69,15 @@ def slide_filename(slide_id: str, variant: SlideVariant) -> str:
 
 
 def collect_slide_jobs(script: EditScript, dest_dir: Path) -> list[SlideJob]:
-    """Unique slide and lower-third renders for the paced scene list."""
+    """Unique slide and lower-third renders for scenes that actually have a card."""
     jobs: list[SlideJob] = []
     seen: set[tuple[str, SlideVariant]] = set()
     for scene in script.scenes:
         _assign_id(scene)
-        variant = slide_variant(scene.layout, scene.graphic)
-        if variant is not None:
-            _add_job(jobs, seen, scene, variant, dest_dir)
+        if scene_shows_slide(scene):
+            variant = slide_variant(scene.layout, scene.graphic)
+            if variant is not None:
+                _add_job(jobs, seen, scene, variant, dest_dir)
         if needs_lower_third(scene.graphic):
             _add_job(jobs, seen, scene, SlideVariant.LOWER_THIRD, dest_dir)
     return jobs
@@ -83,9 +86,12 @@ def collect_slide_jobs(script: EditScript, dest_dir: Path) -> list[SlideJob]:
 def stamp_slide_paths(script: EditScript, dest_dir: Path) -> None:
     for scene in script.scenes:
         _assign_id(scene)
-        variant = slide_variant(scene.layout, scene.graphic)
-        if variant is not None:
-            scene.graphic.asset_path = str(dest_dir / slide_filename(scene.graphic.slide_id, variant))
+        if scene_shows_slide(scene):
+            variant = slide_variant(scene.layout, scene.graphic)
+            if variant is not None:
+                scene.graphic.asset_path = str(
+                    dest_dir / slide_filename(scene.graphic.slide_id, variant)
+                )
         if needs_lower_third(scene.graphic):
             scene.graphic.lower_third_path = str(
                 dest_dir / slide_filename(scene.graphic.slide_id, SlideVariant.LOWER_THIRD)
@@ -94,17 +100,20 @@ def stamp_slide_paths(script: EditScript, dest_dir: Path) -> None:
 
 def build_slide_html(spec: BrollSpec) -> str:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
+    kicker = html.escape(spec.kicker.strip())
+    kicker_block = f'<p class="kicker">{kicker}</p>' if kicker else ""
     title = html.escape(spec.title.strip())
     title_block = f"<h1>{title}</h1>" if title else ""
     if spec.variant is SlideVariant.PIP_CLAIM and len(spec.bullets) == 1:
         body = f'<p class="lede">{html.escape(spec.bullets[0])}</p>'
     elif spec.bullets:
-        items = "".join(f"<li>{html.escape(item)}</li>" for item in spec.bullets[:3])
+        items = "".join(f"<li>{html.escape(item)}</li>" for item in spec.bullets[:5])
         body = f"<ul>{items}</ul>"
     else:
         body = ""
     return (
         template.replace("{{variant}}", spec.variant.value)
+        .replace("{{kicker_block}}", kicker_block)
         .replace("{{title_block}}", title_block)
         .replace("{{body}}", body)
         .replace("{{lt_title}}", html.escape(spec.lower_third_title.strip()))
@@ -209,6 +218,7 @@ def _add_job(
     dest = dest_dir / slide_filename(slide_id, variant)
     spec = BrollSpec(
         kind=BrollKind.SLIDE,
+        kicker=scene.graphic.kicker,
         title=scene.graphic.title,
         bullets=list(scene.graphic.bullets),
         layout=scene.layout,
