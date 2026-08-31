@@ -369,16 +369,23 @@ def _norm_label(text: str) -> str:
 
 
 def _is_point_image_text(text: str, point: TalkPoint) -> bool:
+    """True when overlay gold is the still title, including a longer typed variant."""
     image = _norm_label(point.image_text)
     label = _norm_label(text)
-    return bool(image and label and label == image)
+    if not image or not label:
+        return False
+    if label == image:
+        return True
+    if len(image) < 16 and len(image.split()) < 5:
+        return False
+    return image in label or label in image
 
 
 def _overlay_kicker_for_card(point: TalkPoint, card_i: int, scene: Scene, allowed: str) -> str:
     """Card Title is the gold kicker. Image text never fills this slot."""
-    if point.title_locked(card_i):
-        return point.titles[card_i]
     headline = point.cards[card_i].strip() or scene.graphic.title
+    if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
+        return point.titles[card_i]
     candidate = point.titles[card_i].strip()
     if candidate and _is_point_image_text(candidate, point):
         candidate = ""
@@ -389,6 +396,26 @@ def _overlay_kicker_for_card(point: TalkPoint, card_i: int, scene: Scene, allowe
         platform=point.platform,
         allowed=allowed,
     )
+
+
+def _strip_image_text_from_overlay(scene: Scene, sheet: TalkSheet) -> None:
+    """Hard wall: still image text cannot be the overlay gold line."""
+    if scene.layout is not PictureTag.OVERLAY or scene.role != "body":
+        return
+    for point in sheet.points:
+        if not _is_point_image_text(scene.graphic.kicker, point):
+            continue
+        replacement = ""
+        for card_i, title in enumerate(point.titles):
+            if point.title_locked(card_i) and title.strip() and not _is_point_image_text(title, point):
+                replacement = title
+                break
+        scene.graphic.kicker = replacement or derive_kicker(
+            point.cards[0].strip() or scene.graphic.title,
+            said=scene.said,
+            platform=point.platform,
+        )
+        return
 
 
 def sheet_source_text(sheet: TalkSheet, transcript: str = "") -> str:
@@ -1051,14 +1078,13 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
             if scene.layout is PictureTag.OVERLAY
         ]
         for card_i, scene in zip(range(TALK_CARDS_PER_POINT), overlays):
-            if point.title_locked(card_i):
+            scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
+            if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
                 scene.graphic.kicker = point.titles[card_i]
-                locked_ids.add(id(scene))
-            elif point.titles[card_i].strip() or scene.graphic.title.strip() or point.cards[card_i].strip():
-                scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
-                if point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+            elif point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+                if not _is_point_image_text(scene.graphic.kicker, point):
                     point.titles[card_i] = scene.graphic.kicker
-                locked_ids.add(id(scene))
+            locked_ids.add(id(scene))
         for scene in _scenes_in_window(script, w0, w1):
             if scene.layout is not PictureTag.PIP:
                 continue
@@ -1083,7 +1109,7 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
             continue
         if scene.layout is PictureTag.OVERLAY:
             if any(_is_point_image_text(scene.graphic.kicker, point) for point in sheet.points):
-                scene.graphic.kicker = derive_kicker(scene.graphic.title, said=scene.said)
+                _strip_image_text_from_overlay(scene, sheet)
             else:
                 scene.graphic.kicker = resolve_auto_kicker(
                     scene.graphic.kicker,
@@ -1099,6 +1125,9 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
                 platform=scene.graphic.still_query,
                 allowed=allowed,
             )
+    for scene in script.scenes:
+        if scene.role == "body" and scene.layout is PictureTag.OVERLAY:
+            _strip_image_text_from_overlay(scene, sheet)
     return script
 
 

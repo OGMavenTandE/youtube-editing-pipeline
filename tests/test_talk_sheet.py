@@ -660,6 +660,48 @@ def test_empty_overlay_title_comes_from_card_not_image_text() -> None:
     assert 1 <= len(words) <= 4
 
 
+def test_screenshot_overlay_does_not_use_still_image_text() -> None:
+    """Gold kicker was the drone-cable still title. Card body is the 3000.09 line."""
+    image = "Look at this drone laying cable to keep comms with it's pilot. Adorable."
+    body = "Humans must be in the loop for an attack, DoW Directive 3000.09"
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                image_text=image,
+                image_text_source="user",
+                titles=[image, "", ""],
+                title_sources=["user", "empty", "empty"],
+                cards=[body, "", ""],
+                card_sources=["user", "empty", "empty"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker=image, title=body),
+            ),
+            Scene(start=18, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    apply_user_point_locks(script, sheet)
+    overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert overlay.graphic.title == body
+    assert "drone laying cable" not in overlay.graphic.kicker.casefold()
+    assert "adorable" not in overlay.graphic.kicker.casefold()
+    assert overlay.graphic.kicker.strip()
+    words = overlay.graphic.kicker.split()
+    assert 1 <= len(words) <= 4
+
+
 def test_user_still_does_not_turn_whole_body_into_pip(tmp_path: Path) -> None:
     still = tmp_path / "user.jpg"
     still.write_bytes(b"x")

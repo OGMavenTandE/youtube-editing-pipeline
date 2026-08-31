@@ -138,7 +138,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         self._previews.append(preview)
 
         image_text = ctk.StringVar()
-        ctk.CTkLabel(box, text="Image text (on still)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
+        ctk.CTkLabel(box, text="Image text (on still only)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
         ctk.CTkEntry(box, textvariable=image_text).grid(
             row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=4
         )
@@ -150,7 +150,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             title_var = ctk.StringVar()
             headline_var = ctk.StringVar()
             row = 5 + card_i * 2
-            ctk.CTkLabel(box, text=f"{label} title").grid(row=row, column=0, sticky="w", padx=12, pady=4)
+            ctk.CTkLabel(box, text=f"{label} title (gold on card)").grid(row=row, column=0, sticky="w", padx=12, pady=4)
             ctk.CTkEntry(box, textvariable=title_var).grid(
                 row=row, column=1, columnspan=2, sticky="ew", padx=12, pady=4
             )
