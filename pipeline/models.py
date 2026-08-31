@@ -140,21 +140,30 @@ class BookendCard(BaseModel):
 class TalkPoint(BaseModel):
     """One of three talk points. Cards are overlay headlines. titles are gold kickers.
 
-    image_text is the left-third gold line painted on the PiP still, not a card kicker.
+    image_title is the optional gold kicker on the PiP still plate.
+    image_text is the white content on that plate. Never split image_text into a title.
     """
 
     platform: str = ""
     still_path: str = ""
+    image_title: str = ""
     image_text: str = ""
     cards: list[str] = Field(default_factory=lambda: ["", "", ""])
     titles: list[str] = Field(default_factory=lambda: ["", "", ""])
     platform_source: FieldSource = "empty"
     still_source: FieldSource = "empty"
+    image_title_source: FieldSource = "empty"
     image_text_source: FieldSource = "empty"
     card_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
     title_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
 
-    @field_validator("platform_source", "still_source", "image_text_source", mode="before")
+    @field_validator(
+        "platform_source",
+        "still_source",
+        "image_title_source",
+        "image_text_source",
+        mode="before",
+    )
     @classmethod
     def coerce_point_source(cls, value: object) -> FieldSource:
         return _coerce_field_source(value)
@@ -174,6 +183,9 @@ class TalkPoint(BaseModel):
 
     def still_locked(self) -> bool:
         return field_is_locked(self.still_source, self.still_path)
+
+    def image_title_locked(self) -> bool:
+        return field_is_locked(self.image_title_source, self.image_title)
 
     def image_text_locked(self) -> bool:
         return field_is_locked(self.image_text_source, self.image_text)
@@ -199,7 +211,7 @@ class TalkSheet(BaseModel):
     open_card is the overview plate (title kicker + two-line thesis).
     close_card is the locked CTA. Neither is a body subpoint.
     title / exec_headline / close_* are aliases kept for older job JSON.
-    points[] holds platform, still_path, and up to three overlay cards each.
+    points[] holds platform, still_path, optional image title, image text, and up to three overlay cards each.
     """
 
     title: str = ""
@@ -243,6 +255,8 @@ class TalkSheet(BaseModel):
                     row["platform_source"] = "user"
                 if "still_source" not in row and str(row.get("still_path") or "").strip():
                     row["still_source"] = "user"
+                if "image_title_source" not in row and str(row.get("image_title") or "").strip():
+                    row["image_title_source"] = "user"
                 if "image_text_source" not in row and str(row.get("image_text") or "").strip():
                     row["image_text_source"] = "user"
                 cards = _pad_str_list(row.get("cards"), TALK_CARDS_PER_POINT)
