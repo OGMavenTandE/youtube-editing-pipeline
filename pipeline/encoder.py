@@ -10,6 +10,7 @@ and keep using software for the rest of the run.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -107,6 +108,7 @@ NVENC = VideoEncoder(NVENC_CODEC)
 
 _choice: VideoEncoder | None = None
 _announced = False
+_choice_lock = threading.Lock()
 
 
 def software_encoder() -> VideoEncoder:
@@ -120,14 +122,16 @@ def nvenc_encoder() -> VideoEncoder:
 def reset_encoder_cache() -> None:
     """Test helper. Clears the process-wide encoder choice."""
     global _choice, _announced
-    _choice = None
-    _announced = False
+    with _choice_lock:
+        _choice = None
+        _announced = False
 
 
 def remember_nvenc_failure(reason: str = "") -> VideoEncoder:
     """Stop using NVENC for this process after a real encode fails."""
     global _choice
-    _choice = SOFTWARE
+    with _choice_lock:
+        _choice = SOFTWARE
     extra = f" ({reason})" if reason else ""
     logger.warning("NVENC encode failed%s. encoder=%s", extra, SOFTWARE_CODEC)
     print(f"      encoder={SOFTWARE_CODEC} (NVENC failed{extra})")
@@ -137,11 +141,13 @@ def remember_nvenc_failure(reason: str = "") -> VideoEncoder:
 def select_video_encoder(settings: Settings | None = None) -> VideoEncoder:
     """Return the cached encoder for this run. Probes ffmpeg on first call."""
     global _choice
-    if _choice is not None:
-        return _choice
-    _choice, reason = _probe_encoder(settings)
-    _announce(_choice, reason)
-    return _choice
+    with _choice_lock:
+        if _choice is not None:
+            return _choice
+        choice, reason = _probe_encoder(settings)
+        _choice = choice
+    _announce(choice, reason)
+    return choice
 
 
 def encoder_is_listed(encoders_text: str, name: str) -> bool:
@@ -155,9 +161,10 @@ def encoder_is_listed(encoders_text: str, name: str) -> bool:
 
 def _announce(choice: VideoEncoder, reason: str = "") -> None:
     global _announced
-    if _announced:
-        return
-    _announced = True
+    with _choice_lock:
+        if _announced:
+            return
+        _announced = True
     if reason:
         logger.info("encoder=%s (%s)", choice.name, reason)
     else:

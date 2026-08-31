@@ -94,8 +94,16 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
     assert info == (1920, 1080)
 
 
-def test_two_scenes_do_not_poison_source_audio_reader(tmp_path: Path) -> None:
+def test_two_scenes_do_not_poison_source_audio_reader(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Second scene must encode after the first close() (MoviePy None.stdout)."""
+    from pipeline.ffmpeg_scene import FFmpegSceneError
+
+    def _force_moviepy(*_args: object, **_kwargs: object) -> None:
+        raise FFmpegSceneError("force MoviePy for audio-reader regression")
+
+    monkeypatch.setattr("pipeline.ffmpeg_scene.encode_scene_ffmpeg", _force_moviepy)
     _require_ffmpeg()
     source = tmp_path / "source.mp4"
     # MoviePy AudioFileClip buffers ~4.5s. A 3s fixture never leaves that

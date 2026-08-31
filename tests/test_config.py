@@ -11,6 +11,7 @@ def test_default_canvas_and_pip() -> None:
     assert settings.output_height == 1080
     assert settings.pip_scale == 0.25
     assert abs(settings.split_top_ratio - 2.0 / 3.0) < 1e-9
+    assert settings.encode_concurrency == 2
 
 
 def test_layout_values() -> None:

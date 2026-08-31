@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,14 @@ from pipeline.encoder import (
     select_video_encoder,
     software_encoder,
 )
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import (
+    BORDER_COLOR,
+    DARK_RGB,
+    LayoutKind,
+    cover_scale,
+    pip_rect,
+    split_webcam_rect,
+)
 from pipeline.media import MediaError, concat_scene_files, probe_duration
 from pipeline.models import (
     EditScript,
@@ -38,10 +46,8 @@ _FONT_CANDIDATES = (
     "C:\\Windows\\Fonts\\arial.ttf",
 )
 
-_DARK = (11, 16, 22)
-_PIP_MARGIN = 0.04
-_PIP_ASPECT = 9.0 / 16.0
-_BORDER_COLOR = (232, 241, 248, 230)
+_DARK = DARK_RGB
+_BORDER_COLOR = BORDER_COLOR
 _ACCENT = (56, 189, 248)
 
 
@@ -51,36 +57,6 @@ class CompositorError(RuntimeError):
 
 def canvas_size(settings: Settings) -> tuple[int, int]:
     return int(settings.output_width), int(settings.output_height)
-
-
-def cover_scale(src_w: int, src_h: int, dest_w: int, dest_h: int, zoom: float = 1.0) -> float:
-    if src_w <= 0 or src_h <= 0:
-        return 1.0
-    return max(dest_w / src_w, dest_h / src_h) * max(zoom, 1.0)
-
-
-def pip_rect(
-    width: int,
-    height: int,
-    scale: float,
-    margin_ratio: float = _PIP_MARGIN,
-) -> tuple[int, int, int, int]:
-    """Lower-right 16:9 bubble: x, y, w, h."""
-    box_w = max(80, int(width * scale))
-    box_h = max(45, int(box_w * _PIP_ASPECT))
-    margin_x = int(width * margin_ratio)
-    margin_y = int(height * margin_ratio)
-    x = max(0, width - box_w - margin_x)
-    y = max(0, height - box_h - margin_y)
-    return x, y, box_w, box_h
-
-
-def split_webcam_rect(
-    width: int, height: int, top_ratio: float
-) -> tuple[int, int, int, int]:
-    """Top band for the webcam on SPLIT_TOP: x, y, w, h."""
-    box_h = max(1, int(round(height * top_ratio)))
-    return 0, 0, width, min(box_h, height)
 
 
 def scene_fingerprint(scene: Scene, settings: Settings) -> str:
@@ -205,15 +181,16 @@ def _encode_scenes(
     settings: Settings,
     canvas: tuple[int, int],
 ) -> list[Path]:
-    parts: list[Path] = []
-    stills: dict[str, np.ndarray] = {}
+    total = len(scenes)
+    parts: list[Path | None] = [None] * total
+    jobs: list[tuple[int, Scene, Path, str]] = []
     for index, scene in enumerate(scenes):
         fingerprint = scene_fingerprint(scene, settings)
         dest = scene_encode_path(scene_dir, index, fingerprint)
         stale = list(scene_dir.glob(f"scene_{index:04d}_*.mp4"))
         if scene_cache_valid(dest, scene, settings, fingerprint=fingerprint):
-            print(f"      resume scene {index + 1}/{len(scenes)} {dest.name}")
-            parts.append(dest)
+            print(f"      resume scene {index + 1}/{total} {dest.name}")
+            parts[index] = dest
             continue
         for old in stale:
             if old != dest and old.exists():
@@ -221,11 +198,77 @@ def _encode_scenes(
             sidecar = old.with_suffix(".json")
             if sidecar.exists() and sidecar != dest.with_suffix(".json"):
                 sidecar.unlink()
-        print(f"      encode scene {index + 1}/{len(scenes)} {scene.layout.value}")
-        _encode_one_scene(video_path, script, scene, dest, settings, canvas, stills)
-        write_scene_sidecar(dest, scene, fingerprint)
-        parts.append(dest)
-    return parts
+        jobs.append((index, scene, dest, fingerprint))
+
+    if jobs:
+        workers = max(1, min(int(settings.encode_concurrency), len(jobs)))
+        if workers == 1:
+            for job in jobs:
+                index, dest = _run_scene_job(video_path, script, settings, canvas, total, job)
+                parts[index] = dest
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [
+                    pool.submit(
+                        _run_scene_job, video_path, script, settings, canvas, total, job
+                    )
+                    for job in jobs
+                ]
+                for future in as_completed(futures):
+                    index, dest = future.result()
+                    parts[index] = dest
+
+    finished = [path for path in parts if path is not None]
+    if len(finished) != total:
+        raise CompositorError("Scene encode missed one or more outputs")
+    return finished
+
+
+def _run_scene_job(
+    video_path: Path,
+    script: EditScript,
+    settings: Settings,
+    canvas: tuple[int, int],
+    total: int,
+    job: tuple[int, Scene, Path, str],
+) -> tuple[int, Path]:
+    index, scene, dest, fingerprint = job
+    backend = _encode_one_scene_or_fallback(
+        video_path, script, scene, dest, settings, canvas
+    )
+    write_scene_sidecar(dest, scene, fingerprint)
+    encoder = select_video_encoder(settings)
+    print(
+        f"      encode scene {index + 1}/{total} {scene.layout.value} "
+        f"encoder={encoder.name} backend={backend}"
+    )
+    return index, dest
+
+
+def _encode_one_scene_or_fallback(
+    video_path: Path,
+    script: EditScript,
+    scene: Scene,
+    dest: Path,
+    settings: Settings,
+    canvas: tuple[int, int],
+) -> str:
+    """ffmpeg filter_complex first; MoviePy only if that graph fails."""
+    from pipeline.ffmpeg_scene import FFmpegSceneError, encode_scene_ffmpeg
+
+    try:
+        encode_scene_ffmpeg(video_path, script, scene, dest, settings, canvas)
+        return "ffmpeg"
+    except (FFmpegSceneError, MediaError, OSError, RuntimeError) as exc:
+        logger.warning(
+            "ffmpeg scene graph failed (%s). Falling back to MoviePy for this scene.",
+            exc,
+        )
+        print(f"      ffmpeg graph failed, MoviePy fallback: {exc}")
+        if dest.exists():
+            dest.unlink()
+        _encode_one_scene(video_path, script, scene, dest, settings, canvas, {})
+        return "moviepy"
 
 
 def _encode_one_scene(
