@@ -13,6 +13,7 @@ from pipeline.talk_sheet import (
     collect_form_text,
     default_talk_sheet_md_path,
     parse_talk_sheet_markdown,
+    talk_sheet_to_markdown,
 )
 
 IMAGE_TYPES = [("Images", "*.jpg *.jpeg *.png *.webp"), ("All files", "*.*")]
@@ -41,6 +42,9 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             side="left", padx=(0, 8)
         )
         ctk.CTkButton(import_row, text="Apply paste", width=120, command=self._apply_paste).pack(
+            side="left", padx=(0, 8)
+        )
+        ctk.CTkButton(import_row, text="Copy markdown", width=140, command=self._copy_markdown).pack(
             side="left"
         )
         self.paste_box = ctk.CTkTextbox(self, height=72, wrap="word")
@@ -133,16 +137,41 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         preview.grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=4)
         self._previews.append(preview)
 
+        image_text = ctk.StringVar()
+        ctk.CTkLabel(box, text="Image text (on still)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
+        ctk.CTkEntry(box, textvariable=image_text).grid(
+            row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=4
+        )
+
         cards: list[ctk.StringVar] = []
+        titles: list[ctk.StringVar] = []
         labels = ("Card 1", "Card 2", "Card 3 (optional)")
         for card_i, label in enumerate(labels):
-            var = ctk.StringVar()
-            ctk.CTkLabel(box, text=label).grid(row=4 + card_i, column=0, sticky="w", padx=12, pady=4)
-            ctk.CTkEntry(box, textvariable=var).grid(
-                row=4 + card_i, column=1, columnspan=2, sticky="ew", padx=12, pady=4
+            title_var = ctk.StringVar()
+            headline_var = ctk.StringVar()
+            row = 5 + card_i * 2
+            ctk.CTkLabel(box, text=f"{label} title").grid(row=row, column=0, sticky="w", padx=12, pady=4)
+            ctk.CTkEntry(box, textvariable=title_var).grid(
+                row=row, column=1, columnspan=2, sticky="ew", padx=12, pady=4
             )
-            cards.append(var)
-        self._point_vars.append({"platform": platform, "c1": cards[0], "c2": cards[1], "c3": cards[2]})
+            ctk.CTkLabel(box, text=label).grid(row=row + 1, column=0, sticky="w", padx=12, pady=4)
+            ctk.CTkEntry(box, textvariable=headline_var).grid(
+                row=row + 1, column=1, columnspan=2, sticky="ew", padx=12, pady=4
+            )
+            titles.append(title_var)
+            cards.append(headline_var)
+        self._point_vars.append(
+            {
+                "platform": platform,
+                "image_text": image_text,
+                "t1": titles[0],
+                "t2": titles[1],
+                "t3": titles[2],
+                "c1": cards[0],
+                "c2": cards[1],
+                "c3": cards[2],
+            }
+        )
 
     def load_sheet(self, sheet: TalkSheet) -> None:
         self._sheet = sheet.model_copy(deep=True)
@@ -156,6 +185,10 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         for index, point in enumerate(self._sheet.points):
             vars_ = self._point_vars[index]
             vars_["platform"].set(point.platform)
+            vars_["image_text"].set(point.image_text)
+            vars_["t1"].set(point.titles[0])
+            vars_["t2"].set(point.titles[1])
+            vars_["t3"].set(point.titles[2])
             vars_["c1"].set(point.cards[0])
             vars_["c2"].set(point.cards[1])
             vars_["c3"].set(point.cards[2])
@@ -187,11 +220,22 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             )
             point.platform = platform
             point.platform_source = platform_source
+            image_text, image_source = collect_form_text(
+                vars_["image_text"].get(), point.image_text, point.image_text_source
+            )
+            point.image_text = image_text
+            point.image_text_source = image_source
             cards = [vars_["c1"].get(), vars_["c2"].get(), vars_["c3"].get()]
+            titles = [vars_["t1"].get(), vars_["t2"].get(), vars_["t3"].get()]
             for card_i, typed in enumerate(cards):
                 text, source = collect_form_text(typed, point.cards[card_i], point.card_sources[card_i])
                 point.cards[card_i] = text
                 point.card_sources[card_i] = source
+                title, title_source = collect_form_text(
+                    titles[card_i], point.titles[card_i], point.title_sources[card_i]
+                )
+                point.titles[card_i] = title
+                point.title_sources[card_i] = title_source
             still = self._still_paths[index].strip()
             if not still:
                 point.still_path = ""
@@ -229,6 +273,17 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
     def _apply_paste(self) -> None:
         text = self.paste_box.get("1.0", "end")
         self._import_markdown(text)
+
+    def _copy_markdown(self) -> None:
+        text = talk_sheet_to_markdown(self.collect_sheet())
+        self.paste_box.delete("1.0", "end")
+        self.paste_box.insert("1.0", text)
+        try:
+            top = self.winfo_toplevel()
+            top.clipboard_clear()
+            top.clipboard_append(text)
+        except Exception:
+            pass
 
     def _import_markdown(self, text: str) -> None:
         current = self.collect_sheet()

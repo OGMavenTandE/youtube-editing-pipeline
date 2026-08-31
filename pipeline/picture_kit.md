@@ -16,8 +16,8 @@ Most of the file is `nothing`: full-frame host, no chrome.
 
 The model may tag a **body** beat as `overlay` | `pip` | `nothing` and fill copy:
 
-- `overlay`: gold kicker, 2-line white headline, icon name. **Only** Point 1–3 sub talking points.
-- `pip`: left-type (gold number/kicker, white sub, optional quote) plus a still query
+- `overlay`: gold kicker (talk-sheet card title), 2-line white headline, icon name. **Only** Point 1–3 sub talking points.
+- `pip`: left-type gold image text over the still, white sub, optional quote, plus a still query
 - `nothing`: no copy
 
 It must not choose layout, font, colors, zoom, or `lower_third`.
@@ -44,7 +44,8 @@ No third font, no extra colors, no TAKEAWAY pills.
 Full 16:9 still fills the frame (DVIDS named-platform file first).
 Nano Banana 2 is a stub that may fill the **image slot only**. Prefer skip PiP if there is no still.
 Host: entire talking-head frame scaled into a 560x315 16:9 window, margin 40, radius 16, gold 3px border.
-Left third type over a dark left-to-right gradient: gold kicker, white sub, optional quote.
+Left third type over a dark left-to-right gradient: gold image text from the talk-sheet still field, white sub, optional quote.
+PiP / still beats hold `PIP_HOLD_SECONDS` (default 8s) so the title can be read twice. Overlay and talking-head defaults stay put. Grow a short PiP into adjacent `nothing` only.
 
 ### bookends (open + close)
 
@@ -66,4 +67,4 @@ Identity and find-me strings are config. Title / exec / close-card copy come fro
 
 Write `output/<stem>_tagged_beats.json` after tagging and bookends, before encode, so a retry skips the model.
 
-The Windows tray form writes `<stem>_talk_sheet.json` (title, overview, Point 1–3 platform/still/cards, source flags). Close and identity stay locked. Empty slots may auto-fill. User slots do not.
+The Windows tray form writes `<stem>_talk_sheet.json` (open title, overview, Point 1–3 platform/still/image text/card titles/card headlines, source flags). Close and identity stay locked. Empty slots may auto-fill a short gold label from the headline, spoken beat, or platform. Auto copy never invents a directive or says DoD. User slots do not get rewritten.

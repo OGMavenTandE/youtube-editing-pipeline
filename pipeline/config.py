@@ -38,6 +38,7 @@ class Settings(BaseModel):
     pip_scale: float = Field(default=0.25, gt=0.0, le=0.6)
     split_top_ratio: float = Field(default=2.0 / 3.0, gt=0.3, lt=0.9)
     bookend_seconds: float = Field(default=10.0, ge=4.0, le=20.0)
+    pip_hold_seconds: float = Field(default=8.0, ge=4.0, le=20.0)
     host_name: str = "Scott Mastin"
     host_title_line: str = "President, AI Eval Corp · SDVOSB · Independent T&E"
     host_affiliations: str = "Army Research Lab · Project Maven · CDAO"
@@ -111,6 +112,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         pip_scale=float(os.getenv("PIP_SCALE", "0.25")),
         split_top_ratio=float(os.getenv("SPLIT_TOP_RATIO", str(2.0 / 3.0))),
         bookend_seconds=float(os.getenv("BOOKEND_SECONDS", "10")),
+        pip_hold_seconds=float(os.getenv("PIP_HOLD_SECONDS", "8")),
         host_name=os.getenv("HOST_NAME", "Scott Mastin").strip() or "Scott Mastin",
         host_title_line=os.getenv(
             "HOST_TITLE_LINE",

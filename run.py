@@ -28,7 +28,9 @@ from pipeline.talk_sheet import (
     attach_talk_sheet,
     autofill_talk_sheet,
     discover_talk_sheet,
+    enforce_pip_holds,
     persist_talk_sheet,
+    sanitize_script_kickers,
 )
 from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
@@ -285,6 +287,8 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         apply_local_broll(script, broll_dir)
         apply_stills(script, broll_dir)
     autofill_talk_sheet(script.talk_sheet, script, broll_dir)
+    sanitize_script_kickers(script, script.talk_sheet)
+    enforce_pip_holds(script, settings.pip_hold_seconds)
     persist_talk_sheet(
         script.talk_sheet,
         video_path=input_path,

@@ -36,6 +36,15 @@ _OVERVIEW_HEAD = re.compile(
     re.IGNORECASE,
 )
 _TITLE_LINE = re.compile(r"^(?:#{1,3}\s*)?(?:title|kicker)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+_CARD_TITLE_LINE = re.compile(
+    r"^(?:card\s*)?(\d)\s*(?:title|kicker)\s*[:\-]\s*(.+)$",
+    re.IGNORECASE,
+)
+_TITLE_INDEX_LINE = re.compile(r"^(?:title|kicker)\s*(\d)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+_IMAGE_TEXT_LINE = re.compile(
+    r"^(?:image[- ]?text|still[- ]?title|pip[- ]?title|on[- ]?still)\s*[:\-]\s*(.+)$",
+    re.IGNORECASE,
+)
 _PLATFORM_LINE = re.compile(
     r"^(?:platform|still(?:\s+query)?|query|hardware)\s*[:\-]\s*(.+)$",
     re.IGNORECASE,
@@ -44,6 +53,51 @@ _CARD_LINE = re.compile(r"^(?:card\s*)(\d)\s*[:\-]\s*(.+)$", re.IGNORECASE)
 _BULLET = re.compile(r"^(?:[-*]|\d+[.)])\s+(.+)$")
 _NOTES_HEAD = re.compile(r"^(?:spoken[- ]?exec(?:utive)?[- ]?notes|spoken notes|notes)\s*[:\-]\s*(.*)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
+_DOD_PHRASE = re.compile(r"\bdepartment of defense\b", re.IGNORECASE)
+_DOD_ABBR = re.compile(r"\bdod\b", re.IGNORECASE)
+_CITATION = re.compile(
+    r"""(?ix)
+    \b(?:directive|instruction|statute|regulation|executive\s+order|\beo\b|public\s+law|\bpl\b)
+    (?:\s+[\d.]+)?
+    |
+    \b\d+\s*u\.?s\.?c\.?\b
+    |
+    \b\d{2,4}\.\d{2,}\b
+    """
+)
+_KICKER_STOP = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "to",
+        "for",
+        "in",
+        "on",
+        "at",
+        "is",
+        "are",
+        "was",
+        "be",
+        "do",
+        "does",
+        "not",
+        "with",
+        "each",
+        "other",
+        "that",
+        "this",
+        "it",
+        "as",
+        "from",
+        "by",
+        "they",
+    }
+)
+PIP_HOLD_SECONDS = 8.0
 
 KNOWN_MARKDOWN_SHAPE = """\
 # SKYNET IS COMING · PART 2
@@ -57,17 +111,25 @@ Title plus the two-line thesis. Not painted.
 
 ## Point 1
 Platform: MQ-9 Reaper
+Image text: MQ-9 REAPER
+Title 1: THE MONEY
 - $1.5B in procurements. That's the floor.
+Title 2: EVEN LOW
 - I think that's even low.
+Title 3: STACKING
 - Programs are stacking, not replacing.
 
 ## Point 2
 Platform: M1 Abrams
+Image text: M1 ABRAMS
+Title 1: NAMED STILL
 - The vehicle is the named still.
 - Overlay copy stays a spoken sentence.
 
 ## Point 3
 Platform: Patriot
+Image text: PATRIOT
+Title 1: LAST POINT
 - Last point, first card.
 - Last point, second card.
 - Last point, third card.
@@ -225,6 +287,126 @@ def persist_talk_sheet(
     return written
 
 
+def rewrite_house_style(text: str) -> str:
+    """Auto copy says Department of War / DOW, never DoD."""
+    if not text:
+        return ""
+    out = _DOD_PHRASE.sub("Department of War", text)
+
+    def _abbr(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        return "DOW" if raw.isupper() or raw[:1].isupper() else "dow"
+
+    return _DOD_ABBR.sub(_abbr, out)
+
+
+def has_banned_defense_name(text: str) -> bool:
+    return bool(_DOD_PHRASE.search(text or "") or _DOD_ABBR.search(text or ""))
+
+
+def looks_like_citation(text: str) -> bool:
+    return bool(_CITATION.search(text or ""))
+
+
+def citation_allowed(text: str, source: str) -> bool:
+    """True when each citation-like span already appears in user sheet or transcript."""
+    haystack = (source or "").casefold()
+    if not haystack:
+        return False
+    for match in _CITATION.finditer(text or ""):
+        span = re.sub(r"\s+", " ", match.group(0)).strip().casefold()
+        if len(span) < 3:
+            continue
+        if span not in haystack:
+            return False
+    return True
+
+
+def is_invented_citation(text: str, source: str) -> bool:
+    return looks_like_citation(text) and not citation_allowed(text, source)
+
+
+def derive_kicker(headline: str, *, said: str = "", platform: str = "") -> str:
+    """Short gold label from the spoken beat. Never a statute the source did not say."""
+    blob = rewrite_house_style((headline or said or platform or "").strip())
+    if re.search(r"department of war", blob, re.IGNORECASE) and not (headline or said).strip():
+        return "DEPARTMENT OF WAR"
+    words = [re.sub(r"^[^\w$]+|[^\w$]+$", "", word) for word in blob.replace("\n", " ").split()]
+    words = [word for word in words if word]
+    keep = [
+        word
+        for word in words
+        if word.casefold() not in _KICKER_STOP and not re.fullmatch(r"\d+(\.\d+)?", word)
+    ]
+    picked = keep[:4] or words[:3] or ([platform.strip()] if platform.strip() else [])
+    if not picked:
+        return "POINT"
+    label = rewrite_house_style(" ".join(picked[:4])).strip()
+    return re.sub(r"\s+", " ", label).upper()[:40].strip() or "POINT"
+
+
+def resolve_auto_kicker(
+    candidate: str,
+    *,
+    headline: str = "",
+    said: str = "",
+    platform: str = "",
+    allowed: str = "",
+) -> str:
+    """Keep a short source-derived label. Drop invented cites and DoD auto copy."""
+    text = rewrite_house_style((candidate or "").strip())
+    if text and not is_invented_citation(text, allowed) and not has_banned_defense_name(text):
+        return re.sub(r"\s+", " ", text).upper()[:40].strip()
+    if text and looks_like_citation(text) and citation_allowed(text, allowed):
+        cleaned = rewrite_house_style(text)
+        if not has_banned_defense_name(cleaned):
+            return re.sub(r"\s+", " ", cleaned).upper()[:40].strip()
+    return derive_kicker(headline, said=said, platform=platform)
+
+
+def sheet_source_text(sheet: TalkSheet, transcript: str = "") -> str:
+    parts = [sheet.title, sheet.exec_headline, sheet.exec_notes, transcript]
+    for point in sheet.points:
+        parts.append(point.platform)
+        parts.append(point.image_text)
+        parts.extend(point.titles)
+        parts.extend(point.cards)
+    return "\n".join(part for part in parts if part and str(part).strip())
+
+
+def talk_sheet_to_markdown(sheet: TalkSheet) -> str:
+    """Export the Gem-fillable shape, including per-card titles and image text."""
+    line1, line2 = sheet.headline_lines()
+    lines = [
+        f"# {sheet.title.strip() or 'Talk sheet'}",
+        "",
+        "## Overview",
+    ]
+    if line1:
+        lines.append(line1)
+    if line2:
+        lines.append(line2)
+    if sheet.exec_notes.strip():
+        lines.append("")
+        lines.append(f"Spoken notes: {sheet.exec_notes.strip()}")
+    for index, point in enumerate(sheet.points, start=1):
+        lines.extend(["", f"## Point {index}", f"Platform: {point.platform}".rstrip()])
+        lines.append(f"Image text: {point.image_text}".rstrip())
+        for card_i in range(TALK_CARDS_PER_POINT):
+            lines.append(f"Title {card_i + 1}: {point.titles[card_i]}".rstrip())
+            lines.append(f"Card {card_i + 1}: {point.cards[card_i]}".rstrip())
+    lines.extend(
+        [
+            "",
+            "## Close",
+            "WORK WITH ME",
+            "Independent AI T&E.",
+            "Vendor-agnostic.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def parse_talk_sheet_markdown(text: str, *, base: TalkSheet | None = None) -> TalkSheet:
     """Map Title, Overview headline, Point platform, and Point cards.
 
@@ -283,9 +465,27 @@ def parse_talk_sheet_markdown(text: str, *, base: TalkSheet | None = None) -> Ta
         if section == "close":
             continue
 
+        card_title_match = _CARD_TITLE_LINE.match(stripped) or _TITLE_INDEX_LINE.match(stripped)
+        if card_title_match and section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
+            _set_card_title(
+                sheet,
+                point_index,
+                int(card_title_match.group(1)),
+                card_title_match.group(2),
+            )
+            continue
+
+        image_match = _IMAGE_TEXT_LINE.match(stripped)
+        if image_match and section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
+            _set_image_text(sheet, point_index, image_match.group(1))
+            continue
+
         title_match = _TITLE_LINE.match(stripped)
         if title_match:
-            _set_title(sheet, title_match.group(1))
+            if section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
+                _set_image_text(sheet, point_index, title_match.group(1))
+            else:
+                _set_title(sheet, title_match.group(1))
             continue
 
         platform_match = _PLATFORM_LINE.match(stripped)
@@ -375,11 +575,19 @@ def merge_talk_sheet(base: TalkSheet, incoming: TalkSheet) -> TalkSheet:
             if src.still_path.strip():
                 dest.still_path = src.still_path.strip()
                 dest.still_source = src.still_source
+        if src.image_text_locked() or (src.image_text.strip() and not dest.image_text_locked()):
+            if src.image_text.strip():
+                dest.image_text = src.image_text.strip()
+                dest.image_text_source = src.image_text_source
         for card_i in range(TALK_CARDS_PER_POINT):
             if src.card_locked(card_i) or (src.cards[card_i].strip() and not dest.card_locked(card_i)):
                 if src.cards[card_i].strip():
                     dest.cards[card_i] = src.cards[card_i].strip()
                     dest.card_sources[card_i] = src.card_sources[card_i]
+            if src.title_locked(card_i) or (src.titles[card_i].strip() and not dest.title_locked(card_i)):
+                if src.titles[card_i].strip():
+                    dest.titles[card_i] = src.titles[card_i].strip()
+                    dest.title_sources[card_i] = src.title_sources[card_i]
     _lock_close(out)
     return out
 
@@ -393,26 +601,26 @@ def attach_talk_sheet(script: EditScript, sheet: TalkSheet) -> EditScript:
 
 
 def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
-    """Stamp user cards and user stills onto body beats. Do not invent a still."""
+    """Stamp user cards, titles, image text, and user stills onto body beats."""
     windows = point_windows(script)
+    allowed = sheet_source_text(sheet, script.transcript)
     for index, (point, (w0, w1)) in enumerate(zip(sheet.points, windows)):
         if w1 <= w0:
             continue
         user_cards = [
-            (card_i, point.cards[card_i].strip())
+            card_i
             for card_i in range(TALK_CARDS_PER_POINT)
-            if point.card_locked(card_i)
+            if point.card_locked(card_i) or point.title_locked(card_i)
         ]
         need_pip = point.still_locked()
         if need_pip:
-            pip_scene = _pick_pip_scene(script, w0, w1)
+            pip_scene = _ensure_pip_slot(script, w0, w1, PIP_HOLD_SECONDS)
             pip_scene.layout = PictureTag.PIP
             pip_scene.graphic.asset_path = point.still_path.strip()
             pip_scene.asset_ref = point.still_path.strip()
             if point.platform.strip():
                 pip_scene.graphic.still_query = point.platform.strip()
-            if not pip_scene.graphic.kicker.strip():
-                pip_scene.graphic.kicker = point.platform.strip() or f"{index + 1}"
+            _stamp_image_text(pip_scene, point, allowed)
         elif point.platform.strip():
             _stamp_platform_query(script, w0, w1, point.platform.strip())
 
@@ -423,13 +631,15 @@ def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
             for scene in _scenes_in_window(script, w0, w1)
             if scene.layout is PictureTag.OVERLAY
         ]
-        for (card_i, text), scene in zip(user_cards, overlays):
-            _stamp_overlay(scene, text, point, index)
+        for card_i, scene in zip(user_cards, overlays):
+            _stamp_overlay(scene, point, index, card_i, allowed)
         missing = user_cards[len(overlays) :]
         if missing:
             extras = _ensure_overlay_slots(script, w0, w1, len(missing), skip_pip=need_pip)
-            for (card_i, text), scene in zip(missing, extras):
-                _stamp_overlay(scene, text, point, index)
+            for card_i, scene in zip(missing, extras):
+                _stamp_overlay(scene, point, index, card_i, allowed)
+    sanitize_script_kickers(script, sheet)
+    enforce_pip_holds(script, PIP_HOLD_SECONDS)
     return script
 
 
@@ -454,6 +664,7 @@ def autofill_talk_sheet(
             sheet.exec_headline_source = "auto"
             sheet.open_card.headline = headline
 
+    allowed = sheet_source_text(sheet, script.transcript)
     for point, (w0, w1) in zip(sheet.points, windows):
         overlays = [
             scene
@@ -461,24 +672,55 @@ def autofill_talk_sheet(
             if scene.layout is PictureTag.OVERLAY and scene.graphic.title.strip()
         ]
         for card_i in range(TALK_CARDS_PER_POINT):
-            if point.card_locked(card_i):
-                continue
-            if card_i < len(overlays):
-                point.cards[card_i] = overlays[card_i].graphic.title.strip()
+            scene = overlays[card_i] if card_i < len(overlays) else None
+            if not point.card_locked(card_i) and scene is not None:
+                point.cards[card_i] = scene.graphic.title.strip()
                 point.card_sources[card_i] = "auto"
-        if point.still_locked():
-            continue
-        if point.platform.strip() and folder is not None:
-            matched = match_local_still(point.platform, folder)
-            if matched is not None:
-                point.still_path = str(matched.resolve())
-                point.still_source = "auto"
-        if not point.platform_locked() and not point.platform.strip():
-            query = _first_still_query(script, w0, w1)
-            if query:
-                point.platform = query
-                point.platform_source = "auto"
+            if not point.title_locked(card_i):
+                headline = point.cards[card_i] or (scene.graphic.title if scene else "")
+                said = scene.said if scene is not None else ""
+                candidate = point.titles[card_i] or (scene.graphic.kicker if scene else "")
+                if headline.strip() or candidate.strip():
+                    point.titles[card_i] = resolve_auto_kicker(
+                        candidate,
+                        headline=headline,
+                        said=said,
+                        platform=point.platform,
+                        allowed=allowed,
+                    )
+                    point.title_sources[card_i] = "auto"
+        pips = [
+            scene
+            for scene in _scenes_in_window(script, w0, w1)
+            if scene.layout is PictureTag.PIP
+        ]
+        if not point.still_locked():
+            if point.platform.strip() and folder is not None:
+                matched = match_local_still(point.platform, folder)
+                if matched is not None:
+                    point.still_path = str(matched.resolve())
+                    point.still_source = "auto"
+            if not point.platform_locked() and not point.platform.strip():
+                query = _first_still_query(script, w0, w1)
+                if query:
+                    point.platform = query
+                    point.platform_source = "auto"
+        if not point.image_text_locked() and (
+            point.still_path.strip() or pips or point.platform.strip()
+        ):
+            pip = pips[0] if pips else None
+            candidate = point.image_text or (pip.graphic.kicker if pip else "") or point.platform
+            point.image_text = resolve_auto_kicker(
+                candidate,
+                headline=point.platform or (point.cards[0] if point.cards else ""),
+                said=pip.said if pip is not None else "",
+                platform=point.platform,
+                allowed=allowed,
+            )
+            point.image_text_source = "auto"
     _lock_close(sheet)
+    sanitize_script_kickers(script, sheet)
+    enforce_pip_holds(script, PIP_HOLD_SECONDS)
     return sheet
 
 
@@ -527,10 +769,16 @@ def _reset_user_import_slots(sheet: TalkSheet) -> None:
         if not point.still_locked():
             point.still_path = ""
             point.still_source = "empty"
+        if not point.image_text_locked():
+            point.image_text = ""
+            point.image_text_source = "empty"
         for card_i in range(TALK_CARDS_PER_POINT):
             if not point.card_locked(card_i):
                 point.cards[card_i] = ""
                 point.card_sources[card_i] = "empty"
+            if not point.title_locked(card_i):
+                point.titles[card_i] = ""
+                point.title_sources[card_i] = "empty"
 
 
 def _set_title(sheet: TalkSheet, value: str) -> None:
@@ -560,6 +808,26 @@ def _set_card(sheet: TalkSheet, point_index: int, card_index: int, value: str) -
         return
     point.cards[card_index - 1] = text
     point.card_sources[card_index - 1] = "user"
+
+
+def _set_card_title(sheet: TalkSheet, point_index: int, card_index: int, value: str) -> None:
+    if card_index < 1 or card_index > TALK_CARDS_PER_POINT:
+        return
+    point = sheet.points[point_index - 1]
+    text = value.strip()
+    if not text or point.title_locked(card_index - 1):
+        return
+    point.titles[card_index - 1] = text
+    point.title_sources[card_index - 1] = "user"
+
+
+def _set_image_text(sheet: TalkSheet, point_index: int, value: str) -> None:
+    point = sheet.points[point_index - 1]
+    text = value.strip()
+    if not text or point.image_text_locked():
+        return
+    point.image_text = text
+    point.image_text_source = "user"
 
 
 def _append_card(sheet: TalkSheet, point_index: int, value: str) -> None:
@@ -595,16 +863,173 @@ def _scenes_in_window(script: EditScript, start: float, end: float) -> list[Scen
 
 
 def _pick_pip_scene(script: EditScript, start: float, end: float) -> Scene:
+    return _ensure_pip_slot(script, start, end, PIP_HOLD_SECONDS)
+
+
+def _ensure_pip_slot(script: EditScript, start: float, end: float, min_hold: float) -> Scene:
+    """A PiP beat inside the window. Split from nothing. Do not consume overlays."""
     current = _scenes_in_window(script, start, end)
     for scene in current:
         if scene.layout is PictureTag.PIP:
+            _grow_pip_into_nothing(script, scene, min_hold, window=(start, end))
             return scene
-    for scene in current:
-        if scene.layout is PictureTag.NOTHING:
-            return scene
-    if current:
-        return current[0]
-    return _insert_nothing(script, start, end)
+    nothings = [scene for scene in current if scene.layout is PictureTag.NOTHING]
+    host = nothings[0] if nothings else None
+    if host is None:
+        inserted = _insert_nothing(script, start, min(end, start + max(min_hold, 0.4)))
+        inserted.layout = PictureTag.PIP
+        return inserted
+    pip_start = max(host.start, start)
+    available = max(0.0, min(host.end, end) - pip_start)
+    pip_end = pip_start + min(max(min_hold, 0.4), available if available > 0 else max(min_hold, 0.4))
+    pip_end = min(pip_end, host.end)
+    if pip_end - pip_start < 0.05:
+        host.layout = PictureTag.PIP
+        return host
+    parts: list[Scene] = []
+    if pip_start - host.start >= 0.05:
+        left = host.model_copy(deep=True)
+        left.end = pip_start
+        parts.append(left)
+    pip = host.model_copy(deep=True)
+    pip.start = pip_start
+    pip.end = pip_end
+    pip.layout = PictureTag.PIP
+    parts.append(pip)
+    if host.end - pip_end >= 0.05:
+        right = host.model_copy(deep=True)
+        right.start = pip_end
+        parts.append(right)
+    idx = script.scenes.index(host)
+    script.scenes[idx : idx + 1] = parts
+    script.scenes.sort(key=lambda item: (item.start, item.end))
+    return pip
+
+
+def _grow_pip_into_nothing(
+    script: EditScript,
+    pip: Scene,
+    min_hold: float,
+    *,
+    window: tuple[float, float] | None = None,
+) -> None:
+    """Lengthen a short PiP using adjacent nothing only. Overlay duration stays put."""
+    needed = min_hold - (pip.end - pip.start)
+    if needed <= 1e-6:
+        return
+    w0, w1 = window if window is not None else (0.0, 1e9)
+    scenes = script.scenes
+    try:
+        index = scenes.index(pip)
+    except ValueError:
+        return
+    if index + 1 < len(scenes):
+        nxt = scenes[index + 1]
+        if (
+            nxt.role == "body"
+            and nxt.layout is PictureTag.NOTHING
+            and abs(nxt.start - pip.end) < 0.06
+        ):
+            take = min(needed, max(0.0, min(nxt.end, w1) - max(nxt.start, pip.end)))
+            if take > 0.04:
+                pip.end += take
+                nxt.start += take
+                needed -= take
+                if nxt.end - nxt.start < 0.05:
+                    scenes.pop(index + 1)
+    if needed <= 1e-6:
+        return
+    if index > 0:
+        prev = scenes[index - 1]
+        if (
+            prev.role == "body"
+            and prev.layout is PictureTag.NOTHING
+            and abs(prev.end - pip.start) < 0.06
+        ):
+            take = min(needed, max(0.0, min(pip.start, prev.end) - max(prev.start, w0)))
+            if take > 0.04:
+                pip.start -= take
+                prev.end -= take
+                if prev.end - prev.start < 0.05:
+                    scenes.pop(index - 1)
+
+
+def enforce_pip_holds(script: EditScript, min_hold: float = PIP_HOLD_SECONDS) -> EditScript:
+    """Default still hold is long enough to read the image title twice, then cut."""
+    hold = max(4.0, float(min_hold or PIP_HOLD_SECONDS))
+    for scene in list(script.scenes):
+        if scene.role != "body" or scene.layout is not PictureTag.PIP:
+            continue
+        if scene.end - scene.start + 1e-6 >= hold:
+            continue
+        _grow_pip_into_nothing(script, scene, hold)
+    script.scenes.sort(key=lambda item: (item.start, item.end))
+    return script
+
+
+def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
+    """User titles stay exact. Auto overlay/PiP kickers cannot invent DoD or statutes."""
+    allowed = sheet_source_text(sheet, script.transcript)
+    windows = point_windows(script)
+    locked_ids: set[int] = set()
+    for point, (w0, w1) in zip(sheet.points, windows):
+        overlays = [
+            scene
+            for scene in _scenes_in_window(script, w0, w1)
+            if scene.layout is PictureTag.OVERLAY
+        ]
+        for card_i, scene in zip(range(TALK_CARDS_PER_POINT), overlays):
+            if point.title_locked(card_i):
+                scene.graphic.kicker = point.titles[card_i]
+                locked_ids.add(id(scene))
+            elif point.titles[card_i].strip() or scene.graphic.kicker.strip() or scene.graphic.title.strip():
+                scene.graphic.kicker = resolve_auto_kicker(
+                    point.titles[card_i] or scene.graphic.kicker,
+                    headline=point.cards[card_i] or scene.graphic.title,
+                    said=scene.said,
+                    platform=point.platform,
+                    allowed=allowed,
+                )
+                if point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+                    point.titles[card_i] = scene.graphic.kicker
+        for scene in _scenes_in_window(script, w0, w1):
+            if scene.layout is not PictureTag.PIP:
+                continue
+            if point.image_text_locked():
+                scene.graphic.kicker = point.image_text
+                locked_ids.add(id(scene))
+            else:
+                scene.graphic.kicker = resolve_auto_kicker(
+                    point.image_text or scene.graphic.kicker,
+                    headline=point.platform or scene.graphic.title,
+                    said=scene.said,
+                    platform=point.platform,
+                    allowed=allowed,
+                )
+                if point.image_text_source != "user":
+                    point.image_text = scene.graphic.kicker
+                    if scene.graphic.kicker.strip() and point.image_text_source == "empty":
+                        point.image_text_source = "auto"
+            locked_ids.add(id(scene))
+    for scene in script.scenes:
+        if scene.role != "body" or id(scene) in locked_ids:
+            continue
+        if scene.layout is PictureTag.OVERLAY:
+            scene.graphic.kicker = resolve_auto_kicker(
+                scene.graphic.kicker,
+                headline=scene.graphic.title,
+                said=scene.said,
+                allowed=allowed,
+            )
+        elif scene.layout is PictureTag.PIP:
+            scene.graphic.kicker = resolve_auto_kicker(
+                scene.graphic.kicker,
+                headline=scene.graphic.title or scene.graphic.still_query,
+                said=scene.said,
+                platform=scene.graphic.still_query,
+                allowed=allowed,
+            )
+    return script
 
 
 def _stamp_platform_query(script: EditScript, start: float, end: float, platform: str) -> None:
@@ -697,13 +1122,50 @@ def _split_scene(scene: Scene, pieces: int) -> list[Scene]:
     return out
 
 
-def _stamp_overlay(scene: Scene, text: str, point: TalkPoint, point_index: int) -> None:
+def _stamp_overlay(
+    scene: Scene,
+    point: TalkPoint,
+    point_index: int,
+    card_i: int,
+    allowed: str,
+) -> None:
     scene.layout = PictureTag.OVERLAY
-    scene.graphic.title = text
+    headline = point.cards[card_i].strip()
+    if headline:
+        scene.graphic.title = headline
+    if point.title_locked(card_i):
+        scene.graphic.kicker = point.titles[card_i]
+    else:
+        scene.graphic.kicker = resolve_auto_kicker(
+            point.titles[card_i] or scene.graphic.kicker,
+            headline=headline or scene.graphic.title,
+            said=scene.said,
+            platform=point.platform,
+            allowed=allowed,
+        )
     if not scene.graphic.kicker.strip():
-        scene.graphic.kicker = (point.platform.strip() or f"POINT {point_index + 1}").upper()
+        scene.graphic.kicker = derive_kicker(
+            headline or scene.graphic.title,
+            said=scene.said,
+            platform=point.platform or f"POINT {point_index + 1}",
+        )
     if not scene.graphic.icon.strip():
         scene.graphic.icon = "bar_chart"
+
+
+def _stamp_image_text(scene: Scene, point: TalkPoint, allowed: str) -> None:
+    if point.image_text_locked():
+        scene.graphic.kicker = point.image_text
+        return
+    scene.graphic.kicker = resolve_auto_kicker(
+        point.image_text or scene.graphic.kicker,
+        headline=point.platform or scene.graphic.title,
+        said=scene.said,
+        platform=point.platform,
+        allowed=allowed,
+    )
+    if not scene.graphic.title.strip() and point.platform.strip():
+        scene.graphic.title = point.platform.strip()
 
 
 def _first_still_query(script: EditScript, start: float, end: float) -> str:

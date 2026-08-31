@@ -102,11 +102,11 @@ Do not treat the overview sentence as Point 1.
 Allowed layout values (this is a tag, not a design choice):
 - nothing: default. Full-frame host, no chrome. Most beats are this.
 - overlay: ONLY a Point 1–3 sub talking point that deserves the locked Nate card.
-  graphic.kicker = short gold eyebrow (all-caps idea, e.g. THE MONEY)
+  graphic.kicker = short gold label of the point (platform name or a 2–4 word claim he said)
   graphic.title = 1–2 line white headline he actually said on that subpoint
   graphic.icon = one of bar_chart | robot | shield | drone | share | chip | lock | target
 - pip: rare. Only when a named-platform still is the point (DVIDS 16:9).
-  graphic.kicker = gold number or short kicker
+  graphic.kicker = left-third gold image text (platform name or short claim)
   graphic.title = white sub line
   graphic.quote = optional short quote
   graphic.still_query = the named platform (e.g. MQ-9 Reaper, M1 Abrams)
@@ -117,6 +117,10 @@ Rules:
 - Never emit layout lower_third, FULL_FRAME, PIP_BOTTOM_RIGHT, or SPLIT_TOP.
 - Never invent a browser, HUD, TAKEAWAY pill, or generated host.
 - If you cannot name a real DVIDS still, do not use pip. Use overlay or nothing.
+- Do not invent a directive, statute, USC cite, executive order, or office name
+  unless that exact string appears in the transcript.
+- Never write DoD, DOD, or Department of Defense. Use Department of War or DOW
+  when that department is the subject.
 - Cover the assigned window with no gaps. Consecutive nothing beats are correct.
 - said: short quote from the transcript. shown: webcam / card / named still.
 

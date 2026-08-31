@@ -185,6 +185,9 @@ def test_director_prompt_is_tag_contract() -> None:
     assert "TAKEAWAY" in _DIRECTOR_PROMPT
     assert "FULL_FRAME" in _DIRECTOR_PROMPT
     assert "Every scene needs a graphic card" not in _DIRECTOR_PROMPT
+    assert "Department of War" in _DIRECTOR_PROMPT
+    assert "DoD" in _DIRECTOR_PROMPT
+    assert "directive" in _DIRECTOR_PROMPT
 
 
 def test_overlay_is_the_additive_card() -> None:
