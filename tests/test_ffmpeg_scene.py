@@ -13,11 +13,13 @@ from pipeline.config import Settings
 from pipeline.ffmpeg_scene import (
     FFmpegSceneError,
     OverlayLayer,
+    _graphic_path,
     build_ffmpeg_command,
     build_scene_graph,
     cover_filter,
     gpu_filters_suitable,
 )
+from pipeline.shotlist import resolve_scene
 from pipeline.encoder import nvenc_encoder, software_encoder
 from pipeline.hwaccel import HwDecode
 from pipeline.layouts import LayoutKind, pip_rect, split_webcam_rect
@@ -76,6 +78,42 @@ def _graph(
         use_gpu_filters=use_gpu_filters,
         hw=hw,
     )
+
+
+def test_none_leftover_slide_is_not_an_ffmpeg_graphic(tmp_path: Path) -> None:
+    leftover = tmp_path / "empty.png"
+    leftover.write_bytes(b"png")
+    scene = Scene(
+        start=0,
+        end=1,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        asset_kind="none",
+        graphic=GraphicCard(title="Empty", asset_path=str(leftover)),
+    )
+    resolve_scene(scene)
+    assert _graphic_path(scene) is None
+    assert scene.layout is LayoutKind.FULL_FRAME
+
+
+def test_broll_file_is_ffmpeg_full_frame_cutaway(tmp_path: Path) -> None:
+    clip = tmp_path / "dvids.mp4"
+    clip.write_bytes(b"vid")
+    scene = Scene(
+        start=0,
+        end=1,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        asset_kind="broll",
+        asset_ref=str(clip),
+        graphic=GraphicCard(title="DVIDS"),
+    )
+    resolve_scene(scene)
+    graphic = _graphic_path(scene)
+    assert graphic is not None
+    assert graphic == clip.resolve()
+    assert scene.layout is LayoutKind.FULL_FRAME
+    graph = _graph(tmp_path, scene, graphic=graphic)
+    assert graph.layout is LayoutKind.FULL_FRAME
+    assert "[1:v]" in graph.filter_complex
 
 
 def test_cover_filter_scales_then_crops() -> None:

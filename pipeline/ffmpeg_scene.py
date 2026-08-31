@@ -22,6 +22,7 @@ from pipeline.layouts import (
 )
 from pipeline.media import MediaError, _run_encode, probe_video_stream
 from pipeline.models import EditScript, MicroEvent, Scene
+from pipeline.shotlist import compose_mode, resolved_media_path
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,8 @@ def cover_filter(dest_w: int, dest_h: int, zoom: float = 1.0) -> str:
 
 def gpu_filters_suitable(scene: Scene) -> bool:
     """CUDA scale only covers a full-canvas webcam with no extra layers."""
+    if compose_mode(scene) != "talking_head":
+        return False
     if scene.layout is not LayoutKind.FULL_FRAME:
         return False
     if any(event.kind == "punch_in" for event in scene.micro_events):
@@ -468,7 +471,9 @@ def _full_frame_graph(
 ) -> SceneGraph:
     width, height = canvas
     filters: list[str] = []
-    if graphic is not None and graphic_is_video:
+    if graphic is not None and (
+        graphic_is_video or compose_mode(scene) == "cutaway"
+    ):
         filters.append(f"[1:v]{cover_filter(width, height)},format=rgba[base]")
         current = "base"
     else:
@@ -654,6 +659,11 @@ def _cpu_prefix(hw: HwDecode | None) -> str:
 
 
 def _graphic_path(scene: Scene) -> Path | None:
+    mode = compose_mode(scene)
+    if mode == "talking_head":
+        return None
+    if mode == "cutaway":
+        return resolved_media_path(scene)
     path = scene.graphic.asset_path
     if not path:
         return None
@@ -669,7 +679,7 @@ def _write_pip_assets(
     canvas: tuple[int, int],
     work: Path,
 ) -> tuple[Path | None, Path | None]:
-    if scene.layout is not LayoutKind.PIP_BOTTOM_RIGHT:
+    if compose_mode(scene) != "card" or scene.layout is not LayoutKind.PIP_BOTTOM_RIGHT:
         return None, None
     width, height = canvas
     _x, _y, box_w, box_h = pip_rect(width, height, settings.pip_scale)
