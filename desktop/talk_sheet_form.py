@@ -2,24 +2,133 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import customtkinter as ctk
 
 from pipeline.config import identity_from_settings, load_settings
-from pipeline.models import TALK_POINT_COUNT, TalkSheet
+from pipeline.models import TALK_POINT_COUNT, TalkPoint, TalkSheet
 from pipeline.talk_sheet import (
     collect_form_text,
+    copy_point_still,
+    default_stills_dir,
     default_talk_sheet_md_path,
     parse_talk_sheet_markdown,
     talk_sheet_to_markdown,
 )
 
-IMAGE_TYPES = [("Images", "*.jpg *.jpeg *.png *.webp"), ("All files", "*.*")]
 MARKDOWN_TYPES = [("Markdown", "*.md *.markdown *.txt"), ("All files", "*.*")]
-
 OnChange = Callable[[], None]
+
+
+def image_filetypes(*, platform: str | None = None) -> list[tuple[str, str]]:
+    """Windows GetOpenFileName rejects space-separated multi-wildcards.
+
+    One pattern per type so Open returns the path instead of ''.
+    """
+    if (platform or sys.platform) == "win32":
+        return [
+            ("JPEG", "*.jpg"),
+            ("JPEG", "*.jpeg"),
+            ("PNG", "*.png"),
+            ("WebP", "*.webp"),
+            ("All files", "*.*"),
+        ]
+    return [("Images", "*.jpg *.jpeg *.png *.webp"), ("All files", "*.*")]
+
+
+IMAGE_TYPES = image_filetypes()
+
+
+def normalize_dialog_path(raw: object) -> str:
+    """Turn a filedialog result into a usable path. Empty is cancel."""
+    text = str(raw or "").strip()
+    if len(text) >= 2 and text[0] == "{" and text[-1] == "}" and text.count("{") == 1:
+        text = text[1:-1].strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    if not text:
+        return ""
+    return str(Path(text))
+
+
+def commit_form_still(point: TalkPoint, still: str) -> None:
+    still = (still or "").strip()
+    if not still:
+        point.still_path = ""
+        point.still_source = "empty"
+        return
+    if still != point.still_path.strip():
+        point.still_path = still
+        point.still_source = "user"
+        return
+    point.still_path = still
+    if point.still_source == "empty":
+        point.still_source = "user"
+
+
+def apply_browsed_still(
+    still_paths: list[str],
+    index: int,
+    chosen: str,
+    *,
+    dest_dir: Path,
+    platform: str = "",
+) -> str | None:
+    """Copy a dialog result into dest_dir as pointN_*.ext.
+
+    Empty chosen is cancel and leaves still_paths unchanged.
+    """
+    path = normalize_dialog_path(chosen)
+    if not path:
+        return None
+    copied = copy_point_still(Path(path), dest_dir, index + 1, platform)
+    still_paths[index] = str(copied)
+    return still_paths[index]
+
+
+def ask_open_still(
+    *,
+    parent: Any | None = None,
+    title: str = "Point still",
+    filedialog_fn: Callable[..., Any] | None = None,
+) -> str:
+    """Open the native image picker owned by the CTk/Tk toplevel.
+
+    No parent is the usual Windows CTk miss: Open dismisses and returns ''.
+    """
+    from tkinter import filedialog
+
+    ask = filedialog_fn or filedialog.askopenfilename
+    kwargs: dict[str, Any] = {"title": title, "filetypes": image_filetypes()}
+    topmost = False
+    if parent is not None:
+        kwargs["parent"] = parent
+        try:
+            parent.update_idletasks()
+        except Exception:
+            pass
+        try:
+            topmost = bool(int(parent.attributes("-topmost")))
+        except Exception:
+            topmost = False
+        if topmost:
+            try:
+                parent.attributes("-topmost", False)
+                parent.update_idletasks()
+            except Exception:
+                topmost = False
+    try:
+        raw = ask(**kwargs)
+    finally:
+        if topmost and parent is not None:
+            try:
+                parent.attributes("-topmost", True)
+            except Exception:
+                pass
+    return normalize_dialog_path(raw)
 
 
 class TalkSheetForm(ctk.CTkScrollableFrame):
@@ -30,6 +139,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         self._previews: list[ctk.CTkLabel] = []
         self._preview_images: list[object] = [None, None, None]
         self._still_paths: list[str] = ["", "", ""]
+        self._stills_dir: Path | None = None
         self._build()
         self.load_sheet(TalkSheet())
 
@@ -236,17 +346,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
                 )
                 point.titles[card_i] = title
                 point.title_sources[card_i] = title_source
-            still = self._still_paths[index].strip()
-            if not still:
-                point.still_path = ""
-                point.still_source = "empty"
-            elif still != point.still_path.strip():
-                point.still_path = still
-                point.still_source = "user"
-            else:
-                point.still_path = still
-                if point.still_source == "empty":
-                    point.still_source = "user"
+            commit_form_still(point, self._still_paths[index])
         sheet.close_card.kicker = "WORK WITH ME"
         sheet.close_card.headline = "Independent AI T&E.\nVendor-agnostic."
         sheet.close_card.icon = "share"
@@ -292,37 +392,74 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         if self._on_change:
             self._on_change()
 
-    def _browse_still(self, index: int) -> None:
-        from tkinter import filedialog
+    def _dialog_parent(self) -> Any | None:
+        try:
+            return self.winfo_toplevel()
+        except Exception:
+            return None
 
-        path = filedialog.askopenfilename(title=f"Point {index + 1} still", filetypes=IMAGE_TYPES)
-        if not path:
+    def _resolve_stills_dir(self) -> Path:
+        if self._stills_dir is not None:
+            return Path(self._stills_dir)
+        return default_stills_dir()
+
+    def _point_platform(self, index: int) -> str:
+        if index < 0 or index >= len(self._point_vars):
+            return ""
+        return str(self._point_vars[index]["platform"].get() or "")
+
+    def _browse_still(
+        self,
+        index: int,
+        chosen: str | None = None,
+        dest_dir: Path | None = None,
+    ) -> None:
+        if chosen is None:
+            chosen = ask_open_still(
+                parent=self._dialog_parent(),
+                title=f"Point {index + 1} still",
+            )
+        attached = apply_browsed_still(
+            self._still_paths,
+            index,
+            chosen,
+            dest_dir=Path(dest_dir) if dest_dir is not None else self._resolve_stills_dir(),
+            platform=self._point_platform(index),
+        )
+        if attached is None:
             return
-        self._still_paths[index] = path
-        self._set_preview(index, path)
+        commit_form_still(self._sheet.points[index], attached)
+        self._set_preview(index, attached)
         if self._on_change:
             self._on_change()
 
     def _clear_still(self, index: int) -> None:
         self._still_paths[index] = ""
+        commit_form_still(self._sheet.points[index], "")
         self._set_preview(index, "")
         if self._on_change:
             self._on_change()
 
     def _set_preview(self, index: int, path: str) -> None:
         label = self._previews[index]
-        if not path or not Path(path).is_file():
+        resolved = normalize_dialog_path(path)
+        if not resolved:
             self._preview_images[index] = None
             label.configure(image=None, text="No still")
+            return
+        file_path = Path(resolved)
+        if not file_path.is_file():
+            self._preview_images[index] = None
+            label.configure(image=None, text=file_path.name)
             return
         try:
             from PIL import Image
 
-            image = Image.open(path)
+            image = Image.open(file_path)
             image.thumbnail((160, 90))
             photo = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
             self._preview_images[index] = photo
             label.configure(image=photo, text="")
         except Exception:
             self._preview_images[index] = None
-            label.configure(image=None, text=Path(path).name)
+            label.configure(image=None, text=file_path.name)
