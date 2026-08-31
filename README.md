@@ -130,7 +130,7 @@ The main window plus a tray icon stay running. Status is Idle / Watching / Downl
 
 The main window is the talk-sheet form: open title + two-line overview, Point 1–3 platform query / one PiP still / two or three overlay cards, and a locked close + identity preview. Paste or load `Documents\\Youtube Pipeline\\talk_sheet.md`. Save writes JSON next to the video stem and a last-used copy in `%APPDATA%\\YouTubePipeline\\`. Empty fields stay empty until Run; the kit/director fills those only. User text and a browsed still are locked.
 
-When a Drive inbox video is ready, encode waits until Run / Continue job (v1 default; uncheck "Wait for this form before encode" to skip). Empty form + Run is valid. The window comes to the front. Browsed stills are copied into `Documents\\Youtube Pipeline\\stills` (or the work stills dir) as `pointN_<platform>.jpg` and passed as `--broll-dir`.
+When a Drive inbox video is ready, encode pauses until Run / Continue job. Empty form + Run is a full auto-fill job. The window comes to the front. The pipeline does not start behind the form, and a prefilled last-used sheet does not skip the wait. Browsed stills are copied into `Documents\\Youtube Pipeline\\stills` (or the work stills dir) as `pointN_<platform>.jpg` and passed as `--broll-dir`.
 
 Record on the phone, drop a landscape MP4 in the Drive inbox, fill or skip the form, then open the outbox folder from the app. After a successful run you can pick titles 1–5. That calls the existing `--repack-studio --title-index` path and re-uploads the Studio folder. It is one screen, not the Streamlit reviewer.
 

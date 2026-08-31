@@ -9,7 +9,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from .config_store import AppConfig, load_config, save_config
+from .config_store import AppConfig, load_config
 from .paths import last_talk_sheet_path
 from .talk_sheet_form import TalkSheetForm
 from .wizard import open_wizard_window
@@ -90,13 +90,6 @@ class MainView(ctk.CTkFrame):
         self.run_btn = ctk.CTkButton(actions, text="Run / Continue job", command=self._run_or_continue)
         self.run_btn.pack(side="left", padx=(0, 8))
         ctk.CTkButton(actions, text="Settings", command=self._open_settings).pack(side="left", padx=(0, 8))
-        self.gate_var = ctk.BooleanVar(value=load_config().require_talk_sheet)
-        ctk.CTkCheckBox(
-            actions,
-            text="Wait for this form before encode",
-            variable=self.gate_var,
-            command=self._toggle_gate,
-        ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(actions, text="Quit", fg_color="#8a2b2b", command=self._on_quit).pack(side="right")
 
     def set_status(self, status: JobStatus, detail: str = "") -> None:
@@ -193,13 +186,6 @@ class MainView(ctk.CTkFrame):
         self.worker.set_paused(not self.worker.is_paused())
         self.pause_btn.configure(text="Resume watching" if self.worker.is_paused() else "Pause watching")
 
-    def _toggle_gate(self) -> None:
-        config = load_config()
-        config.require_talk_sheet = bool(self.gate_var.get())
-        save_config(config)
-        state = "on" if config.require_talk_sheet else "off"
-        self.append_log(f"Wait for talk sheet before encode: {state}.")
-
     def _collect_and_save(self) -> TalkSheet:
         sheet = self.form.collect_sheet()
         persist_talk_sheet(sheet, last_used=last_talk_sheet_path())
@@ -264,5 +250,4 @@ class MainView(ctk.CTkFrame):
 
     def _settings_saved(self, _config: AppConfig) -> None:
         self.append_log("Settings saved.")
-        self.gate_var.set(load_config().require_talk_sheet)
         self.refresh_job()

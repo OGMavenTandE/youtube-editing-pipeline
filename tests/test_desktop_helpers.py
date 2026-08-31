@@ -245,7 +245,7 @@ def test_worker_does_not_encode_until_talk_sheet_run(monkeypatch, tmp_path: Path
         name = "talk.mp4"
 
     worker = PipelineWorker(log=logs.append, status=lambda *_: None)
-    config = AppConfig(require_talk_sheet=True, broll_dir=str(tmp_path / "stills"))
+    config = AppConfig(broll_dir=str(tmp_path / "stills"))
     thread = threading.Thread(
         target=lambda: worker._process(Client(), Store(), config, Item(), "talk"),
         name="process-job",
@@ -263,6 +263,73 @@ def test_worker_does_not_encode_until_talk_sheet_run(monkeypatch, tmp_path: Path
     assert "--talk-sheet" in calls[0]
     assert "--broll-dir" in calls[0]
     assert str(tmp_path / "stills") in calls[0]
+
+
+def test_worker_waits_when_last_used_sheet_is_prefilled(monkeypatch, tmp_path: Path) -> None:
+    import json
+    import threading
+    import time
+
+    from pipeline.config import Settings
+
+    last = tmp_path / "last.json"
+    last.write_text(
+        json.dumps({"title": "PREFILLED", "title_source": "user", "points": [{}, {}, {}]}),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr("desktop.worker.invoke_run_py", lambda argv, log: calls.append(list(argv)) or 0)
+    monkeypatch.setattr("desktop.worker.probe_landscape", lambda *args, **kwargs: True)
+    monkeypatch.setattr("desktop.worker.last_talk_sheet_path", lambda: last)
+    monkeypatch.setattr("desktop.worker.save_config", lambda cfg: None)
+    monkeypatch.setattr(
+        "desktop.worker.pipeline_settings",
+        lambda: Settings(
+            input_dir=tmp_path / "input",
+            output_dir=tmp_path / "output",
+            work_dir=tmp_path / "work",
+            slides_dir=tmp_path / "slides",
+            scenes_dir=tmp_path / "scenes",
+        ),
+    )
+
+    class Store:
+        def claim(self, *args: object, **kwargs: object) -> bool:
+            return True
+
+        def mark_error(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def mark_skipped(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    class Client:
+        def claim_file(self, file_id: str) -> bool:
+            return True
+
+        def download_resumable(self, file_id: str, dest: Path, progress=None) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"mp4")
+
+    class Item:
+        id = "abc"
+        name = "talk.mp4"
+
+    worker = PipelineWorker(log=lambda *_: None, status=lambda *_: None)
+    thread = threading.Thread(
+        target=lambda: worker._process(Client(), Store(), AppConfig(), Item(), "talk"),
+        name="process-prefilled",
+    )
+    thread.start()
+    deadline = time.time() + 3
+    while worker.status != JobStatus.TALK_SHEET and time.time() < deadline:
+        time.sleep(0.02)
+    assert worker.status == JobStatus.TALK_SHEET
+    assert calls == []
+    worker.stop()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert calls == []
 
 
 def test_config_roundtrip(tmp_path: Path) -> None:

@@ -154,7 +154,7 @@ class PipelineWorker:
     def stop(self) -> None:
         self._stop.set()
         self._run_now.set()
-        self._talk_ready.set()
+        self.cancel_talk_sheet()
 
     def set_paused(self, paused: bool) -> None:
         if paused:
@@ -409,10 +409,6 @@ class PipelineWorker:
             stills_dir=str(stills_dir),
             sheet_path=str(job_talk_sheet_path(dest)),
         )
-        if not config.require_talk_sheet:
-            prepared = self._materialize_and_save(sheet, dest, stills_dir, stem)
-            return prepared, stills_dir
-
         accepted = self._await_talk_sheet(pending, sheet)
         if accepted is None:
             return None, stills_dir
@@ -434,6 +430,8 @@ class PipelineWorker:
         sheet = self._talk_sheet
         self.pending_talk_job = None
         self._talk_ready.clear()
+        if self._stop.is_set() and sheet is None:
+            return None
         return sheet
 
     def _materialize_and_save(
