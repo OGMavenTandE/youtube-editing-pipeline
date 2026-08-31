@@ -530,9 +530,16 @@ def _pip_graph(
     border_index = len(inputs)
     inputs.append(FilterInput(path=str(border), args=still_args))
 
+    mask_count = 1 + len(punches)
     filters.append(f"{cam_prefix}{cover_filter(box_w, box_h)},format=rgba[camrgb]")
-    filters.append(f"[{mask_index}:v]scale={box_w}:{box_h},format=gray[mask]")
-    filters.append("[camrgb][mask]alphamerge[pip]")
+    if mask_count == 1:
+        filters.append(f"[{mask_index}:v]scale={box_w}:{box_h},format=gray[mask0]")
+    else:
+        mask_labels = "".join(f"[mask{i}]" for i in range(mask_count))
+        filters.append(
+            f"[{mask_index}:v]scale={box_w}:{box_h},format=gray,split={mask_count}{mask_labels}"
+        )
+    filters.append("[camrgb][mask0]alphamerge[pip]")
     filters.append(f"[bg][{border_index}:v]overlay={x}:{y}[bgb]")
     filters.append(f"[bgb][pip]overlay={x}:{y}[base]")
     current = "base"
@@ -543,7 +550,7 @@ def _pip_graph(
         filters.append(
             f"{cam_prefix}{cover_filter(box_w, box_h, punch.scale)},format=rgba[{label}rgb]"
         )
-        filters.append(f"[{label}rgb][mask]alphamerge[{label}]")
+        filters.append(f"[{label}rgb][mask{index + 1}]alphamerge[{label}]")
         filters.append(
             f"[{current}][{label}]overlay={x}:{y}:enable='{_between(punch.start, punch.end)}'[{nxt}]"
         )

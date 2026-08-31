@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from pipeline.compositor import _encode_scenes
+from pipeline.media import probe_duration
 from pipeline.config import Settings
 from pipeline.ffmpeg_scene import (
     FFmpegSceneError,
@@ -109,6 +113,10 @@ def test_pip_graph_mask_border_and_overlay(tmp_path: Path) -> None:
     assert f"overlay={x}:{y}" in graph.filter_complex
     assert str(mask) in {item.path for item in graph.inputs}
     assert str(border) in {item.path for item in graph.inputs}
+    punched = _scene(LayoutKind.PIP_BOTTOM_RIGHT, graphic=str(slide), punch=True)
+    punch_graph = _graph(tmp_path, punched, graphic=slide, mask=mask, border=border)
+    assert "split=2[mask0][mask1]" in punch_graph.filter_complex
+    assert "[mask1]alphamerge" in punch_graph.filter_complex
 
 
 def test_split_graph_top_band(tmp_path: Path) -> None:
@@ -280,3 +288,39 @@ def test_encode_concurrency_cap(monkeypatch, tmp_path: Path) -> None:
     assert len(parts) == 4
     assert max_seen == 2
     assert max_seen <= settings.encode_concurrency
+
+
+def test_real_ffmpeg_encodes_pip_with_punch(tmp_path: Path, capsys) -> None:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not on PATH")
+    from tests.test_compositor import _write_slide, _write_source_video
+
+    source = tmp_path / "talk.mp4"
+    slide = tmp_path / "slide.png"
+    _write_source_video(source, seconds=2)
+    _write_slide(slide, kind="pip")
+    settings = Settings(
+        output_width=640,
+        output_height=360,
+        work_dir=tmp_path,
+        output_dir=tmp_path,
+        slides_dir=tmp_path,
+        scenes_dir=tmp_path / "scenes",
+        encode_concurrency=1,
+    )
+    scene = Scene(
+        start=0.0,
+        end=1.2,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        graphic=GraphicCard(title="List", asset_path=str(slide)),
+        micro_events=[MicroEvent(start=0.4, end=0.9, kind="punch_in", scale=1.15)],
+    )
+    script = EditScript(scenes=[scene])
+    scene_dir = tmp_path / "scenes" / source.stem
+    scene_dir.mkdir(parents=True)
+    parts = _encode_scenes(source, script, [scene], scene_dir, settings, (640, 360))
+    assert parts[0].is_file()
+    assert parts[0].stat().st_size > 0
+    duration = probe_duration(parts[0], settings)
+    assert 1.0 <= duration <= 1.4
+    assert "backend=ffmpeg" in capsys.readouterr().out
