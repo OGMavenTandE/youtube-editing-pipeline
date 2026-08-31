@@ -255,8 +255,12 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         ctk.CTkLabel(box, text="Platform / still query").grid(row=1, column=0, sticky="w", padx=12, pady=4)
         ctk.CTkEntry(box, textvariable=platform).grid(row=1, column=1, columnspan=2, sticky="ew", padx=12, pady=4)
 
+        start_cue = ctk.StringVar()
+        ctk.CTkLabel(box, text="Starts when I say").grid(row=2, column=0, sticky="w", padx=12, pady=4)
+        ctk.CTkEntry(box, textvariable=start_cue).grid(row=2, column=1, columnspan=2, sticky="ew", padx=12, pady=4)
+
         btn_row = ctk.CTkFrame(box, fg_color="transparent")
-        btn_row.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=4)
+        btn_row.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=4)
         ctk.CTkButton(
             btn_row,
             text="Browse image",
@@ -272,13 +276,13 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         ).pack(side="left")
 
         preview = ctk.CTkLabel(box, text="No still", width=160, height=90, anchor="center")
-        preview.grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=4)
+        preview.grid(row=4, column=0, columnspan=3, sticky="w", padx=12, pady=4)
         self._previews.append(preview)
 
         image_title = ctk.StringVar()
-        _limited_entry(box, 4, "Image title (optional)", image_title, KICKER_CHAR_LIMIT)
+        _limited_entry(box, 5, "Image title (optional)", image_title, KICKER_CHAR_LIMIT)
         image_text = ctk.StringVar()
-        _limited_entry(box, 5, "Image text", image_text, HEADLINE_CHAR_LIMIT)
+        _limited_entry(box, 6, "Image text", image_text, HEADLINE_CHAR_LIMIT)
 
         cards: list[ctk.StringVar] = []
         titles: list[ctk.StringVar] = []
@@ -286,7 +290,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         for card_i, label in enumerate(labels):
             title_var = ctk.StringVar()
             headline_var = ctk.StringVar()
-            row = 6 + card_i * 2
+            row = 7 + card_i * 2
             _limited_entry(box, row, f"{label} title (gold on card)", title_var, KICKER_CHAR_LIMIT)
             _limited_entry(box, row + 1, label, headline_var, HEADLINE_CHAR_LIMIT)
             titles.append(title_var)
@@ -294,6 +298,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         self._point_vars.append(
             {
                 "platform": platform,
+                "start_cue": start_cue,
                 "image_title": image_title,
                 "image_text": image_text,
                 "t1": titles[0],
@@ -317,6 +322,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         for index, point in enumerate(self._sheet.points):
             vars_ = self._point_vars[index]
             vars_["platform"].set(point.platform)
+            vars_["start_cue"].set(point.start_cue)
             vars_["image_title"].set(point.image_title)
             vars_["image_text"].set(point.image_text)
             vars_["t1"].set(point.titles[0])
@@ -342,6 +348,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             apply_point_form_values(
                 point,
                 platform=vars_["platform"].get(),
+                start_cue=vars_["start_cue"].get(),
                 image_title=vars_["image_title"].get(),
                 image_text=vars_["image_text"].get(),
                 titles=[vars_["t1"].get(), vars_["t2"].get(), vars_["t3"].get()],
