@@ -138,26 +138,33 @@ class BookendCard(BaseModel):
 
 
 class TalkPoint(BaseModel):
-    """One of three talk points. Cards are overlay copy. still_path is the PiP still."""
+    """One of three talk points. Cards are overlay headlines. titles are gold kickers.
+
+    image_text is the left-third gold line painted on the PiP still, not a card kicker.
+    """
 
     platform: str = ""
     still_path: str = ""
+    image_text: str = ""
     cards: list[str] = Field(default_factory=lambda: ["", "", ""])
+    titles: list[str] = Field(default_factory=lambda: ["", "", ""])
     platform_source: FieldSource = "empty"
     still_source: FieldSource = "empty"
+    image_text_source: FieldSource = "empty"
     card_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
+    title_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
 
-    @field_validator("platform_source", "still_source", mode="before")
+    @field_validator("platform_source", "still_source", "image_text_source", mode="before")
     @classmethod
     def coerce_point_source(cls, value: object) -> FieldSource:
         return _coerce_field_source(value)
 
-    @field_validator("cards", mode="before")
+    @field_validator("cards", "titles", mode="before")
     @classmethod
     def pad_cards(cls, value: object) -> list[str]:
         return _pad_str_list(value, TALK_CARDS_PER_POINT)
 
-    @field_validator("card_sources", mode="before")
+    @field_validator("card_sources", "title_sources", mode="before")
     @classmethod
     def pad_card_sources(cls, value: object) -> list[FieldSource]:
         return _pad_source_list(value, TALK_CARDS_PER_POINT)
@@ -168,10 +175,18 @@ class TalkPoint(BaseModel):
     def still_locked(self) -> bool:
         return field_is_locked(self.still_source, self.still_path)
 
+    def image_text_locked(self) -> bool:
+        return field_is_locked(self.image_text_source, self.image_text)
+
     def card_locked(self, index: int) -> bool:
         if index < 0 or index >= TALK_CARDS_PER_POINT:
             return False
         return field_is_locked(self.card_sources[index], self.cards[index])
+
+    def title_locked(self, index: int) -> bool:
+        if index < 0 or index >= TALK_CARDS_PER_POINT:
+            return False
+        return field_is_locked(self.title_sources[index], self.titles[index])
 
 
 def empty_talk_points() -> list[TalkPoint]:
@@ -228,9 +243,14 @@ class TalkSheet(BaseModel):
                     row["platform_source"] = "user"
                 if "still_source" not in row and str(row.get("still_path") or "").strip():
                     row["still_source"] = "user"
+                if "image_text_source" not in row and str(row.get("image_text") or "").strip():
+                    row["image_text_source"] = "user"
                 cards = _pad_str_list(row.get("cards"), TALK_CARDS_PER_POINT)
                 if "card_sources" not in row:
                     row["card_sources"] = ["user" if card.strip() else "empty" for card in cards]
+                titles = _pad_str_list(row.get("titles"), TALK_CARDS_PER_POINT)
+                if "title_sources" not in row:
+                    row["title_sources"] = ["user" if title.strip() else "empty" for title in titles]
                 inferred.append(row)
             payload["points"] = inferred
         return payload

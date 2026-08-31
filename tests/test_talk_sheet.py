@@ -7,17 +7,23 @@ from pipeline.pacing import enforce_pacing
 from pipeline.stills import match_local_still
 from pipeline.talk_sheet import (
     KNOWN_MARKDOWN_SHAPE,
+    PIP_HOLD_SECONDS,
     apply_user_point_locks,
     attach_talk_sheet,
     autofill_talk_sheet,
     collect_form_text,
     copy_point_still,
+    enforce_pip_holds,
     job_talk_sheet_path,
     load_talk_sheet,
     parse_talk_sheet_markdown,
     persist_talk_sheet,
     point_still_filename,
+    resolve_auto_kicker,
+    rewrite_house_style,
     save_talk_sheet,
+    sanitize_script_kickers,
+    talk_sheet_to_markdown,
 )
 
 
@@ -36,6 +42,10 @@ def test_talk_sheet_json_roundtrip(tmp_path: Path) -> None:
                 still_source="user",
                 cards=["User card one.", "User card two.", ""],
                 card_sources=["user", "user", "empty"],
+                titles=["THE MONEY", "EVEN LOW", ""],
+                title_sources=["user", "user", "empty"],
+                image_text="MQ-9 REAPER",
+                image_text_source="user",
             ),
             TalkPoint(),
             TalkPoint(),
@@ -49,7 +59,11 @@ def test_talk_sheet_json_roundtrip(tmp_path: Path) -> None:
     assert loaded.headline_lines() == ("$1.5B is the floor.", "Not the program.")
     assert loaded.points[0].platform == "MQ-9 Reaper"
     assert loaded.points[0].cards[0] == "User card one."
+    assert loaded.points[0].titles[0] == "THE MONEY"
+    assert loaded.points[0].image_text == "MQ-9 REAPER"
     assert loaded.points[0].still_source == "user"
+    assert loaded.points[0].title_sources[0] == "user"
+    assert loaded.points[0].image_text_source == "user"
     assert loaded.close_card.kicker == "WORK WITH ME"
     assert "Vendor-agnostic" in loaded.close_card.headline
     assert len(loaded.points) == 3
@@ -79,6 +93,8 @@ def test_markdown_import_known_sheet_shape() -> None:
     assert "floor" in line1
     assert "program" in line2.lower()
     assert sheet.points[0].platform == "MQ-9 Reaper"
+    assert sheet.points[0].image_text == "MQ-9 REAPER"
+    assert sheet.points[0].titles[0] == "THE MONEY"
     assert sheet.points[0].cards[0].startswith("$1.5B")
     assert sheet.points[0].cards[2].startswith("Programs")
     assert sheet.points[1].platform == "M1 Abrams"
@@ -195,6 +211,10 @@ def test_apply_user_locks_stamps_cards_and_still(tmp_path: Path) -> None:
                 still_source="user",
                 cards=["First spoken card.", "Second spoken card.", ""],
                 card_sources=["user", "user", "empty"],
+                titles=["THE MONEY", "EVEN LOW", ""],
+                title_sources=["user", "user", "empty"],
+                image_text="MQ-9 REAPER",
+                image_text_source="user",
             ),
             TalkPoint(),
             TalkPoint(),
@@ -211,6 +231,11 @@ def test_apply_user_locks_stamps_cards_and_still(tmp_path: Path) -> None:
     overlays = [scene for scene in body if scene.layout is PictureTag.OVERLAY]
     assert pip
     assert pip[0].graphic.asset_path.endswith("user.jpg")
+    assert pip[0].graphic.kicker == "MQ-9 REAPER"
+    assert pip[0].end - pip[0].start + 1e-6 >= PIP_HOLD_SECONDS
+    kickers = [scene.graphic.kicker for scene in overlays]
+    assert "THE MONEY" in kickers
+    assert "EVEN LOW" in kickers
     titles = [scene.graphic.title for scene in overlays]
     assert "First spoken card." in titles
     assert "Second spoken card." in titles
@@ -247,3 +272,275 @@ def test_empty_form_is_valid_for_autofill() -> None:
     script = enforce_pacing(EditScript.empty(), 60.0, Settings(bookend_seconds=10))
     autofill_talk_sheet(sheet, script)
     assert sheet.close_card.kicker == "WORK WITH ME"
+
+
+def test_user_card_title_is_locked_kicker() -> None:
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                cards=["Military drones do not coordinate with each other"],
+                card_sources=["user"],
+                titles=["DRONE SWARMS"],
+                title_sources=["user"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        transcript="Military drones do not coordinate with each other.",
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="DOD DIRECTIVE 3000.09", title="Gemini rewrite."),
+            ),
+            Scene(start=18, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ],
+    )
+    apply_user_point_locks(script, sheet)
+    overlays = [scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY]
+    assert overlays
+    assert overlays[0].graphic.kicker == "DRONE SWARMS"
+    assert "dod" not in overlays[0].graphic.kicker.casefold()
+    assert "3000.09" not in overlays[0].graphic.kicker
+
+
+def test_empty_title_autofill_does_not_invent_dod_or_directive() -> None:
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(cards=["", "", ""], card_sources=["empty", "empty", "empty"]),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        transcript="Military drones do not coordinate with each other.",
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                said="Military drones do not coordinate with each other.",
+                graphic=GraphicCard(
+                    kicker="DOD DIRECTIVE 3000.09",
+                    title="Military drones do not coordinate with each other",
+                ),
+            ),
+            Scene(start=18, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ],
+    )
+    autofill_talk_sheet(sheet, script)
+    kicker = sheet.points[0].titles[0]
+    overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert sheet.points[0].title_sources[0] == "auto"
+    assert "dod" not in kicker.casefold()
+    assert "department of defense" not in kicker.casefold()
+    assert "3000.09" not in kicker
+    assert "directive" not in kicker.casefold()
+    assert "dod" not in overlay.graphic.kicker.casefold()
+    assert "3000.09" not in overlay.graphic.kicker
+    assert kicker
+    assert overlay.graphic.kicker == kicker
+
+
+def test_auto_copy_uses_department_of_war() -> None:
+    assert rewrite_house_style("Department of Defense drones") == "Department of War drones"
+    assert rewrite_house_style("DOD policy") == "DOW policy"
+    label = resolve_auto_kicker(
+        "Department of Defense",
+        headline="Department of Defense owns the program",
+        allowed="",
+    )
+    assert "DOD" not in label
+    assert "DEPARTMENT OF DEFENSE" not in label
+    assert "WAR" in label or label == "DOW"
+
+
+def test_user_may_type_dod_as_a_title() -> None:
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                cards=["He said the old name on purpose."],
+                card_sources=["user"],
+                titles=["DoD"],
+                title_sources=["user"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=18,
+                role="body",
+                layout=PictureTag.OVERLAY,
+                graphic=GraphicCard(kicker="AUTO", title="He said the old name on purpose."),
+            ),
+            Scene(start=18, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    apply_user_point_locks(script, sheet)
+    overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert overlay.graphic.kicker == "DoD"
+
+
+def test_user_image_text_is_pip_gold_line(tmp_path: Path) -> None:
+    still = tmp_path / "user.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                platform="MQ-9 Reaper",
+                platform_source="user",
+                still_path=str(still),
+                still_source="user",
+                image_text="REAPER ON STATION",
+                image_text_source="user",
+                cards=["First spoken card.", "", ""],
+                card_sources=["user", "empty", "empty"],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, sheet)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    assert pip.graphic.kicker == "REAPER ON STATION"
+    assert pip.end - pip.start + 1e-6 >= PIP_HOLD_SECONDS
+
+
+def test_empty_image_text_autofill_from_platform_not_dod() -> None:
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(platform="MQ-9 Reaper", platform_source="user"),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = EditScript(
+        transcript="The Reaper does not talk to the next airframe.",
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=13,
+                role="body",
+                layout=PictureTag.PIP,
+                graphic=GraphicCard(
+                    kicker="DOD DIRECTIVE 3000.09",
+                    title="Reaper",
+                    still_query="MQ-9 Reaper",
+                    asset_path="/tmp/reaper.jpg",
+                ),
+            ),
+            Scene(start=13, end=40, role="body", layout=PictureTag.NOTHING),
+            Scene(start=40, end=100, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ],
+    )
+    autofill_talk_sheet(sheet, script)
+    assert sheet.points[0].image_text_source == "auto"
+    assert "dod" not in sheet.points[0].image_text.casefold()
+    assert "3000.09" not in sheet.points[0].image_text
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    assert pip.graphic.kicker == sheet.points[0].image_text
+    assert "dod" not in pip.graphic.kicker.casefold()
+
+
+def test_markdown_export_includes_card_title_and_image_text() -> None:
+    sheet = TalkSheet(
+        title="A TITLE",
+        title_source="user",
+        exec_headline="Line one.\nLine two.",
+        points=[
+            TalkPoint(
+                platform="MQ-9 Reaper",
+                image_text="MQ-9 REAPER",
+                titles=["THE MONEY", "", ""],
+                cards=["$1.5B is the floor.", "", ""],
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ],
+    )
+    text = talk_sheet_to_markdown(sheet)
+    assert "Image text: MQ-9 REAPER" in text
+    assert "Title 1: THE MONEY" in text
+    assert "Card 1: $1.5B is the floor." in text
+    imported = parse_talk_sheet_markdown(text)
+    assert imported.points[0].image_text == "MQ-9 REAPER"
+    assert imported.points[0].titles[0] == "THE MONEY"
+    assert imported.points[0].cards[0].startswith("$1.5B")
+
+
+def test_pip_hold_grows_into_nothing_not_overlay() -> None:
+    overlay = Scene(
+        start=28,
+        end=36,
+        role="body",
+        layout=PictureTag.OVERLAY,
+        graphic=GraphicCard(kicker="THE MONEY", title="$1.5B is the floor."),
+    )
+    script = EditScript(
+        scenes=[
+            Scene(start=0, end=10, role="open", layout=PictureTag.LOWER_THIRD),
+            Scene(
+                start=10,
+                end=13,
+                role="body",
+                layout=PictureTag.PIP,
+                graphic=GraphicCard(kicker="MQ-9", title="Reaper", asset_path="/tmp/x.jpg"),
+            ),
+            Scene(start=13, end=28, role="body", layout=PictureTag.NOTHING),
+            overlay,
+            Scene(start=36, end=110, role="body", layout=PictureTag.NOTHING),
+            Scene(start=110, end=120, role="close", layout=PictureTag.LOWER_THIRD),
+        ]
+    )
+    enforce_pip_holds(script, 8.0)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    kept = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
+    assert pip.end - pip.start + 1e-6 >= 8.0
+    assert kept.start == 28
+    assert kept.end == 36
+    assert kept.graphic.title == "$1.5B is the floor."
+
+
+def test_user_still_does_not_turn_whole_body_into_pip(tmp_path: Path) -> None:
+    still = tmp_path / "user.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                platform="MQ-9 Reaper",
+                platform_source="user",
+                still_path=str(still),
+                still_source="user",
+                image_text="REAPER",
+                image_text_source="user",
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, sheet)
+    pips = [scene for scene in script.scenes if scene.layout is PictureTag.PIP]
+    nothings = [scene for scene in script.scenes if scene.role == "body" and scene.layout is PictureTag.NOTHING]
+    assert len(pips) == 1
+    assert 7.5 <= pips[0].end - pips[0].start <= 12
+    assert nothings
+    assert sum(scene.end - scene.start for scene in nothings) > 40

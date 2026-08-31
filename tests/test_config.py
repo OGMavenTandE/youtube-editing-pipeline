@@ -10,6 +10,7 @@ def test_default_canvas_and_pip() -> None:
     assert settings.output_width == 1920
     assert settings.output_height == 1080
     assert settings.bookend_seconds == 10
+    assert settings.pip_hold_seconds == 8
     assert settings.host_name == "Scott Mastin"
     assert settings.encode_concurrency == 2
 
