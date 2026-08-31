@@ -20,7 +20,14 @@ from pipeline.ffmpeg_scene import (
     gpu_filters_suitable,
 )
 from pipeline.shotlist import resolve_scene
-from pipeline.encoder import nvenc_encoder, software_encoder
+from pipeline.encoder import (
+    HQ_X264_CRF,
+    HQ_X264_PRESET,
+    nvenc_encoder,
+    picture_encode_args_are_hq,
+    software_encoder,
+)
+from pipeline.media import probe_video_stream
 from pipeline.hwaccel import HwDecode
 from pipeline.layouts import PictureTag, pip_rect
 from pipeline.models import EditScript, GraphicCard, Scene
@@ -117,10 +124,18 @@ def test_pip_still_is_ffmpeg_graphic(tmp_path: Path) -> None:
 def test_cover_filter_scales_then_crops() -> None:
     filt = cover_filter(1920, 1080)
     assert "scale=1920:1080:force_original_aspect_ratio=increase" in filt
+    assert "flags=lanczos" in filt
     assert "crop=1920:1080" in filt
     zoomed = cover_filter(1920, 1080, 1.15)
     assert "scale=2208:1242" in zoomed
     assert "crop=1920:1080" in zoomed
+
+
+def test_cover_filter_is_noop_when_source_matches_canvas() -> None:
+    filt = cover_filter(1920, 1080, src_w=1920, src_h=1080)
+    assert filt == "setsar=1"
+    assert "scale=" not in filt
+    assert "fps=" not in filt
 
 
 def test_nothing_graph_covers_host(tmp_path: Path) -> None:
@@ -129,9 +144,31 @@ def test_nothing_graph_covers_host(tmp_path: Path) -> None:
     assert graph.layout is PictureTag.NOTHING
     assert not graph.uses_gpu_filters
     assert "crop=1920:1080" in graph.filter_complex
+    assert "fps=" not in graph.filter_complex
     assert "punch" not in graph.filter_complex
     assert graph.inputs[0].args[:2] == ("-ss", "0.000")
     assert graph.video_map == "vout"
+
+
+def test_nothing_graph_skips_scale_when_source_matches(tmp_path: Path) -> None:
+    scene = _scene(PictureTag.NOTHING)
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    graph = build_scene_graph(
+        video_path=video,
+        scene=scene,
+        settings=_settings(tmp_path),
+        canvas=(1920, 1080),
+        fps=30.0,
+        graphic=None,
+        overlays=(),
+        mask=None,
+        border=None,
+        src_size=(1920, 1080),
+    )
+    assert "scale=" not in graph.filter_complex
+    assert "fps=" not in graph.filter_complex
+    assert "setsar=1" in graph.filter_complex
 
 
 def test_pip_graph_mask_border_and_fit(tmp_path: Path) -> None:
@@ -187,12 +224,18 @@ def test_command_uses_hidden_style_and_encoder(tmp_path: Path) -> None:
         software_encoder(),
         hw=None,
         hold=1.0,
+        fps=30.0,
     )
     assert cmd[0] == "ffmpeg"
     assert "-filter_complex" in cmd
     assert "-c:v" in cmd
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert cmd[cmd.index("-preset") + 1] == HQ_X264_PRESET
+    assert cmd[cmd.index("-crf") + 1] == str(HQ_X264_CRF)
+    assert cmd[cmd.index("-r") + 1] == "30"
     assert "aac" in cmd
+    assert "fps=" not in cmd[cmd.index("-filter_complex") + 1]
+    assert picture_encode_args_are_hq(cmd)
     hw = HwDecode("h264_cuvid", ("-c:v", "h264_cuvid"))
     nvenc_cmd = build_ffmpeg_command(
         "ffmpeg",
@@ -201,9 +244,12 @@ def test_command_uses_hidden_style_and_encoder(tmp_path: Path) -> None:
         nvenc_encoder(),
         hw=hw,
         hold=1.0,
+        fps=30.0,
     )
     assert "h264_cuvid" in nvenc_cmd
     assert "h264_nvenc" in nvenc_cmd
+    assert nvenc_cmd[nvenc_cmd.index("-r") + 1] == "30"
+    assert picture_encode_args_are_hq(nvenc_cmd)
 
 
 def test_ffmpeg_success_skips_moviepy(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -356,4 +402,107 @@ def test_real_ffmpeg_encodes_pip(tmp_path: Path, capsys) -> None:
     assert parts[0].stat().st_size > 0
     duration = probe_duration(parts[0], settings)
     assert 1.0 <= duration <= 1.4
+    assert "backend=ffmpeg" in capsys.readouterr().out
+
+
+def test_gpu_graph_skips_scale_when_source_matches(tmp_path: Path) -> None:
+    scene = _scene(PictureTag.NOTHING)
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    graph = build_scene_graph(
+        video_path=video,
+        scene=scene,
+        settings=_settings(tmp_path),
+        canvas=(1920, 1080),
+        fps=30.0,
+        graphic=None,
+        overlays=(),
+        mask=None,
+        border=None,
+        use_gpu_filters=True,
+        src_size=(1920, 1080),
+    )
+    assert graph.uses_gpu_filters
+    assert "scale_cuda=" not in graph.filter_complex
+    assert "fps=" not in graph.filter_complex
+
+
+def _write_1080p30(path: Path, seconds: float = 1.0) -> None:
+    import subprocess
+
+    from PIL import Image, ImageDraw
+
+    png = path.with_suffix(".png")
+    img = Image.new("RGB", (1920, 1080), (40, 90, 160))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, 80, 80), fill=(255, 0, 0))
+    draw.rectangle((1840, 1000, 1920, 1080), fill=(0, 255, 0))
+    img.save(png)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        "30",
+        "-i",
+        str(png),
+        "-f",
+        "lavfi",
+        "-i",
+        f"sine=frequency=440:duration={seconds}",
+        "-t",
+        str(seconds),
+        "-r",
+        "30",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        str(path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+
+
+def test_real_ffmpeg_keeps_1080p30_and_hq_args(monkeypatch, tmp_path: Path, capsys) -> None:
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe not on PATH")
+    source = tmp_path / "talk.mp4"
+    _write_1080p30(source, seconds=1.0)
+    src_w, src_h, src_fps = probe_video_stream(source, _settings(tmp_path))
+    assert (src_w, src_h) == (1920, 1080)
+    assert abs(src_fps - 30.0) < 0.05
+    settings = _settings(tmp_path, concurrency=1)
+    scene = Scene(start=0.0, end=1.0, layout=PictureTag.NOTHING)
+    script = EditScript(scenes=[scene])
+    scene_dir = tmp_path / "scenes" / source.stem
+    scene_dir.mkdir(parents=True)
+    seen: list[list[str]] = []
+    import pipeline.media as media
+
+    real_run = media._run
+
+    def spy_run(cmd: list[str], label: str) -> None:
+        seen.append(list(cmd))
+        real_run(cmd, label)
+
+    monkeypatch.setattr("pipeline.media._run", spy_run)
+    parts = _encode_scenes(source, script, [scene], scene_dir, settings, (1920, 1080))
+    assert parts[0].is_file()
+    out_w, out_h, out_fps = probe_video_stream(parts[0], settings)
+    assert (out_w, out_h) == (1920, 1080)
+    assert abs(out_fps - 30.0) < 0.05
+    assert seen, "expected an ffmpeg encode command"
+    encode_cmds = [cmd for cmd in seen if "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] != "copy"]
+    assert encode_cmds
+    for cmd in encode_cmds:
+        assert picture_encode_args_are_hq(cmd)
+        graph = cmd[cmd.index("-filter_complex") + 1] if "-filter_complex" in cmd else ""
+        assert "fps=" not in graph
+        assert cmd[cmd.index("-r") + 1] == "30"
     assert "backend=ffmpeg" in capsys.readouterr().out

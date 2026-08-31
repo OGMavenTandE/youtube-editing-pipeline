@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from pipeline.config import Settings, require_ffmpeg, require_ffprobe
 from pipeline.encoder import (
+    HQ_X264_CRF,
+    MIN_PLAYBACK_FPS,
     NVENC_CODEC,
     VideoEncoder,
     remember_nvenc_failure,
@@ -14,6 +17,10 @@ from pipeline.encoder import (
     software_encoder,
 )
 from pipeline.hidden_process import run_hidden
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_FPS = 30.0
 
 
 class MediaError(RuntimeError):
@@ -46,38 +53,73 @@ def probe_media(path: Path, settings: Settings) -> dict[str, Any]:
 
 
 def probe_video_stream(path: Path, settings: Settings) -> tuple[int, int, float]:
-    """Return width, height, fps from the first video stream. fps defaults to 30."""
+    """Return width, height, fps from the first video stream. fps defaults to 30.
+
+    Prefer ``r_frame_rate`` (nominal camera rate). ``avg_frame_rate`` can be
+    nframes/duration on sparse-index camera files and land around 6–8 fps.
+    """
     info = probe_media(path, settings)
     for stream in info.get("streams", []):
         if stream.get("codec_type") != "video":
             continue
         width = int(stream.get("width") or 0)
         height = int(stream.get("height") or 0)
-        fps = _parse_frame_rate(stream.get("avg_frame_rate") or stream.get("r_frame_rate"))
-        return width, height, fps
-    return 0, 0, 30.0
+        r_fps = _parse_frame_rate(stream.get("r_frame_rate"))
+        avg_fps = _parse_frame_rate(stream.get("avg_frame_rate"))
+        return width, height, choose_source_fps(r_fps, avg_fps)
+    return 0, 0, DEFAULT_FPS
+
+
+def choose_source_fps(r_fps: float, avg_fps: float) -> float:
+    """Pick a real playback rate. Never keep a ~6–8 fps avg over a 30 fps r."""
+    if r_fps >= MIN_PLAYBACK_FPS:
+        return r_fps
+    if avg_fps >= MIN_PLAYBACK_FPS:
+        return avg_fps
+    return DEFAULT_FPS
+
+
+def format_output_fps(fps: float) -> str:
+    """CFR token for ``-r``. Standard broadcast rates stay as exact ratios."""
+    if abs(fps - 30.0) < 0.02:
+        return "30"
+    if abs(fps - 29.97) < 0.02:
+        return "30000/1001"
+    if abs(fps - 59.94) < 0.02:
+        return "60000/1001"
+    if abs(fps - 24.0) < 0.02:
+        return "24"
+    if abs(fps - 25.0) < 0.02:
+        return "25"
+    if abs(fps - 60.0) < 0.02:
+        return "60"
+    if fps < MIN_PLAYBACK_FPS:
+        return "30"
+    if abs(fps - round(fps)) < 0.01:
+        return str(int(round(fps)))
+    return f"{fps:.3f}"
 
 
 def _parse_frame_rate(value: object) -> float:
     text = str(value or "").strip()
     if not text or text in {"0/0", "0"}:
-        return 30.0
+        return 0.0
     if "/" in text:
         num_s, den_s = text.split("/", 1)
         try:
             num = float(num_s)
             den = float(den_s)
         except ValueError:
-            return 30.0
+            return 0.0
         if den == 0:
-            return 30.0
+            return 0.0
         rate = num / den
-        return rate if rate > 1.0 else 30.0
+        return rate if rate > 0 else 0.0
     try:
         rate = float(text)
     except ValueError:
-        return 30.0
-    return rate if rate > 1.0 else 30.0
+        return 0.0
+    return rate if rate > 0 else 0.0
 
 
 def probe_duration(path: Path, settings: Settings) -> float:
@@ -164,6 +206,11 @@ def concat_keep_ranges(
         raise MediaError("No keep ranges to concat; the clip would be empty.")
     ffmpeg_bin = require_ffmpeg(settings)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _width, _height, fps = probe_video_stream(video_path, settings)
+    except MediaError:
+        fps = DEFAULT_FPS
+    rate = format_output_fps(fps)
     if len(ranges) == 1:
         start, end = ranges[0]
 
@@ -177,7 +224,9 @@ def concat_keep_ranges(
                 f"{end:.3f}",
                 "-i",
                 str(video_path),
-                *encoder.ffmpeg_video_args(quality="veryfast"),
+                *encoder.ffmpeg_video_args(quality="medium"),
+                "-r",
+                rate,
                 "-c:a",
                 "aac",
                 "-movflags",
@@ -211,7 +260,9 @@ def concat_keep_ranges(
                     f"{_end:.3f}",
                     "-i",
                     str(video_path),
-                    *encoder.ffmpeg_video_args(quality="veryfast"),
+                    *encoder.ffmpeg_video_args(quality="medium"),
+                    "-r",
+                    rate,
                     "-c:a",
                     "aac",
                     str(_part),
@@ -317,7 +368,7 @@ def concat_scene_files(
     )
     target = settings.target_lufs
 
-    def build_concat(encoder: VideoEncoder) -> list[str]:
+    def build_copy() -> list[str]:
         cmd = [
             ffmpeg_bin,
             "-y",
@@ -333,7 +384,8 @@ def concat_scene_files(
                 [
                     "-af",
                     f"loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
-                    *encoder.ffmpeg_video_args(quality="medium"),
+                    "-c:v",
+                    "copy",
                     "-c:a",
                     "aac",
                     "-ar",
@@ -345,11 +397,40 @@ def concat_scene_files(
         cmd.extend(["-movflags", "+faststart", str(dest)])
         return cmd
 
+    def build_reencode(encoder: VideoEncoder) -> list[str]:
+        return [
+            ffmpeg_bin,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-af",
+            f"loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
+            *encoder.ffmpeg_video_args(quality="medium"),
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(dest),
+        ]
+
     try:
-        if loudnorm:
-            _run_encode(settings, f"concat scenes -> {dest}", build_concat)
-        else:
-            _run(build_concat(software_encoder()), f"concat scenes -> {dest}")
+        try:
+            _run(build_copy(), f"concat scenes -> {dest}")
+        except MediaError as exc:
+            if not loudnorm:
+                raise
+            logger.warning(
+                "concat copy+loudnorm failed (%s). Re-encoding HQ (CRF/CQ %s).",
+                exc,
+                HQ_X264_CRF,
+            )
+            _run_encode(settings, f"concat scenes HQ -> {dest}", build_reencode)
     finally:
         if list_file.exists():
             list_file.unlink()
@@ -366,6 +447,25 @@ def apply_loudnorm(video_path: Path, dest: Path, settings: Settings) -> Path:
     """Single-pass ffmpeg loudnorm toward settings.target_lufs."""
     ffmpeg_bin = require_ffmpeg(settings)
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    def build_copy() -> list[str]:
+        return [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(video_path),
+            "-af",
+            f"loudnorm=I={settings.target_lufs:.1f}:TP=-1.5:LRA=11",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(dest),
+        ]
 
     def build(encoder: VideoEncoder) -> list[str]:
         return [
@@ -385,7 +485,11 @@ def apply_loudnorm(video_path: Path, dest: Path, settings: Settings) -> Path:
             str(dest),
         ]
 
-    _run_encode(settings, f"loudnorm {video_path} -> {dest}", build)
+    try:
+        _run(build_copy(), f"loudnorm {video_path} -> {dest}")
+    except MediaError as exc:
+        logger.warning("loudnorm copy failed (%s). Re-encoding HQ.", exc)
+        _run_encode(settings, f"loudnorm HQ {video_path} -> {dest}", build)
     return dest
 
 
