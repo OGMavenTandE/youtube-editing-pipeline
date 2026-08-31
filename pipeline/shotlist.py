@@ -1,13 +1,15 @@
-"""Shot-list production contract: commentary over artifacts.
+"""Shot-list production contract: Nate talking-head-first.
 
-A scene may put something on screen only when it names a real artifact
-(card / local b-roll / local site still). Otherwise asset_kind is none and
-the compositor shows full-frame webcam with no slide.
+v1 bible: full-frame host. Additive card only when asset_kind is card.
+Local / DVIDS b-roll is a full-frame cutaway (covers the face, host audio
+continues) when the file exists. site with no local file is none, not a
+fake browser. This compositor does not draw Jack / Screen Studio chrome.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pipeline.layouts import LayoutKind
 from pipeline.models import (
@@ -62,6 +64,24 @@ def scene_has_visual(scene: Scene | PlannedScene) -> bool:
     return path is not None
 
 
+ComposeMode = Literal["talking_head", "card", "cutaway"]
+
+
+def compose_mode(scene: Scene) -> ComposeMode:
+    """How the compositor should treat this scene after the contract.
+
+    talking_head: full-frame host, no slide.
+    card: additive HTML card on the existing PIP/SPLIT layouts.
+    cutaway: full-frame b-roll/site file covering the face. Host audio stays.
+    """
+    if scene.asset_kind == "card" and card_is_dense(scene.graphic):
+        return "card"
+    if scene.asset_kind in {"broll", "site"}:
+        if resolved_media_path(scene) is not None:
+            return "cutaway"
+    return "talking_head"
+
+
 def talking_head_scene(scene: Scene) -> Scene:
     """Force commentary-only: full-frame webcam, no slide, no invented graphic path."""
     scene.asset_kind = "none"
@@ -75,7 +95,8 @@ def resolve_scene(scene: Scene) -> Scene:
     """Apply the production contract to one scene.
 
     card: keep only when kicker + headline + facts are present.
-    broll / site: keep only when a local file exists. Missing file becomes none.
+    broll: keep only when a local file exists, then force FULL_FRAME cutaway.
+    site: local file is a cutaway. No file (URL only) is none, not a browser.
     none: talking-head, no overlay.
     """
     kind: AssetKind = scene.asset_kind if scene.asset_kind in ASSET_KINDS else "none"
@@ -92,6 +113,7 @@ def resolve_scene(scene: Scene) -> Scene:
             return talking_head_scene(scene)
         scene.asset_ref = str(path)
         scene.graphic.asset_path = str(path)
+        scene.layout = LayoutKind.FULL_FRAME
         return scene
 
     if not card_is_dense(scene.graphic):

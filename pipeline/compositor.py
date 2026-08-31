@@ -34,7 +34,13 @@ from pipeline.models import (
     OverlayCallout,
     Scene,
 )
-from pipeline.shotlist import resolve_edit_script, resolve_scene, resolved_media_path, scene_has_visual
+from pipeline.shotlist import (
+    compose_mode,
+    resolve_edit_script,
+    resolve_scene,
+    resolved_media_path,
+    scene_has_visual,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -413,9 +419,13 @@ def _compose_scene(
         else None
     )
 
-    # none, or a card/broll/site that did not resolve, is talking-head only.
-    if graphic is None or not scene_has_visual(scene):
+    mode = compose_mode(scene)
+    # none, or a missing broll/site file, is talking-head only. No empty slide.
+    if graphic is None or mode == "talking_head":
         layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, None))
+    elif mode == "cutaway":
+        # DVIDS / local b-roll covers the face. Host audio is muxed separately.
+        layers.extend(_full_frame_layers(webcam, scene, canvas, hold, start, graphic))
     elif scene.layout is LayoutKind.PIP_BOTTOM_RIGHT:
         layers.extend(
             _pip_layers(webcam, scene, settings, canvas, hold, start, graphic)
@@ -439,7 +449,9 @@ def _full_frame_layers(
     graphic: object | None = None,
 ) -> list[object]:
     width, height = canvas
-    if graphic is not None and _is_video_asset(scene.graphic.asset_path):
+    if graphic is not None and (
+        _is_video_asset(scene.graphic.asset_path) or compose_mode(scene) == "cutaway"
+    ):
         return [graphic]
     layers = [_cover(webcam, width, height).with_duration(hold)]
     layers.extend(

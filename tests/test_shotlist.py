@@ -7,6 +7,7 @@ from pipeline.layouts import LayoutKind
 from pipeline.models import EditScript, GraphicCard, PlannedScene, Scene, TimedTranscript
 from pipeline.shotlist import (
     card_is_dense,
+    compose_mode,
     local_asset_path,
     resolve_edit_script,
     resolve_scene,
@@ -137,8 +138,10 @@ def test_missing_site_url_is_none(tmp_path: Path) -> None:
     )
     resolve_scene(scene)
     assert scene.asset_kind == "none"
+    assert scene.layout is LayoutKind.FULL_FRAME
     assert local_asset_path("https://example.com/product") is None
     assert not scene_has_visual(scene)
+    assert compose_mode(scene) == "talking_head"
 
 
 def test_local_broll_path_is_kept(tmp_path: Path) -> None:
@@ -154,9 +157,11 @@ def test_local_broll_path_is_kept(tmp_path: Path) -> None:
     )
     resolve_scene(scene)
     assert scene.asset_kind == "broll"
+    assert scene.layout is LayoutKind.FULL_FRAME
     assert scene.asset_ref == str(clip.resolve())
     assert scene.graphic.asset_path == str(clip.resolve())
     assert scene_has_visual(scene)
+    assert compose_mode(scene) == "cutaway"
     assert not scene_shows_slide(scene)
 
 
@@ -190,14 +195,43 @@ def test_none_scene_does_not_collect_a_slide(tmp_path: Path) -> None:
     assert script.scenes[1].graphic.asset_path.endswith("real_card_pip.png")
 
 
-def test_director_prompt_is_producer_not_layout_roulette() -> None:
-    assert "SAID" in _DIRECTOR_PROMPT.upper() or "said:" in _DIRECTOR_PROMPT
+def test_director_prompt_is_talking_head_first() -> None:
+    assert "said:" in _DIRECTOR_PROMPT
     assert "shown:" in _DIRECTOR_PROMPT
     assert "asset_kind" in _DIRECTOR_PROMPT
+    assert "cutaway" in _DIRECTOR_PROMPT
     assert "none" in _DIRECTOR_PROMPT
-    assert "Nate-style" in _DIRECTOR_PROMPT or "kicker" in _DIRECTOR_PROMPT
+    assert "Do not invent a browser" in _DIRECTOR_PROMPT
+    assert "Jack mockup" in _DIRECTOR_PROMPT
     assert "Never use the same layout three times" not in _DIRECTOR_PROMPT
     assert "Every scene needs a graphic card" not in _DIRECTOR_PROMPT
+
+
+def test_card_is_the_only_additive_graphic() -> None:
+    card = Scene(
+        start=0,
+        end=8,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        asset_kind="card",
+        graphic=_dense_card(),
+    )
+    assert compose_mode(card) == "card"
+    assert scene_shows_slide(card)
+
+
+def test_site_without_file_is_not_a_fake_browser() -> None:
+    scene = Scene(
+        start=0,
+        end=8,
+        asset_kind="site",
+        asset_ref="https://example.com",
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        graphic=GraphicCard(title="Example.com"),
+    )
+    resolve_scene(scene)
+    assert scene.asset_kind == "none"
+    assert compose_mode(scene) == "talking_head"
+    assert not scene_shows_slide(scene)
 
 
 def test_plan_from_transcript_cannot_emit_slide_without_asset(monkeypatch) -> None:

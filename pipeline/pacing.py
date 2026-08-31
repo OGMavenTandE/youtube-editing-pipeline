@@ -256,8 +256,12 @@ def _split_long_holds(scenes: list[Scene], settings: Settings) -> list[Scene]:
             if scene.end - (cursor + hold) < settings.layout_hold_min:
                 hold = scene.end - cursor
             if part == 0:
-                layout = scene.layout if scene_has_visual(scene) else LayoutKind.FULL_FRAME
-            elif scene_has_visual(scene):
+                layout = (
+                    scene.layout
+                    if scene.asset_kind == "card" and scene_has_visual(scene)
+                    else LayoutKind.FULL_FRAME
+                )
+            elif scene.asset_kind == "card" and scene_has_visual(scene):
                 layout = _next_layout(split[-1].layout if split else scene.layout)
             else:
                 layout = LayoutKind.FULL_FRAME
@@ -279,7 +283,7 @@ def _avoid_triple_layouts(scenes: list[Scene]) -> list[Scene]:
         if scenes[index].layout == scenes[index - 1].layout:
             streak += 1
             if streak >= 3:
-                if scene_has_visual(scenes[index]):
+                if scenes[index].asset_kind == "card" and scene_has_visual(scenes[index]):
                     scenes[index].layout = _next_layout(scenes[index].layout)
                     streak = 1
         else:

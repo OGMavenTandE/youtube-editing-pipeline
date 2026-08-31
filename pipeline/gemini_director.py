@@ -80,14 +80,15 @@ Do not summarize. Do not invent words that were not spoken.
 """
 
 _DIRECTOR_PROMPT = """\
-You are the producer/director for a commentary-over-artifacts YouTube edit.
+You are the producer/director for a Nate-style talking-head-first YouTube edit.
 
 You receive a timed transcript of the trimmed video. The webcam is a static
 landscape talking-head shot. Do not request video frames.
 
-Season 1 format is COMMENTARY OVER ARTIFACTS. The host talks. Something
-appears on screen only when you can name a real artifact. Do not rotate
-FULL / PIP / SPLIT for variety. Do not invent title-only slides.
+v1 bible: full-frame host. Commentary over artifacts. Something appears on
+screen only when you can name a real artifact. Do not rotate FULL / PIP /
+SPLIT for variety. Do not invent title-only slides. Do not invent a browser
+window, site chrome, or Screen Studio / Jack mockup.
 
 A scene is a spoken beat, usually 8 to 25 seconds. Plan scenes that cover
 the assigned window with no gaps and no overlaps. Do not emit one scene for
@@ -98,35 +99,34 @@ Use absolute timestamps in seconds on the full video timeline.
 
 For every scene fill the shot list:
 - said: what is spoken on this beat (short, from the transcript)
-- shown: what is on screen, in words (webcam, a named clip, a URL, or the
-  card headline)
+- shown: what is on screen, in words (webcam, a named clip, or the card)
 - asset_kind: one of none | broll | site | card
 - asset_ref: optional local file path or URL
 
 Asset rules (strict):
 - none: default. You cannot name a real artifact. Layout MUST be FULL_FRAME.
   graphic may be empty. The compositor shows full-frame webcam and NO slide.
-- broll: only if you can name a local B-roll file that matches this beat.
-  Put that path in asset_ref. If you do not have a real path, use none.
-- site: only if you can name a real company/org URL. Put the URL in
-  asset_ref. A later step may fetch it. If you cannot name a URL, use none.
+- broll: only if you can name a local / DVIDS file that exists. Put that
+  path in asset_ref. Layout MUST be FULL_FRAME. The compositor plays that
+  file as a full-frame cutaway (covers the face). Host audio continues.
+  If the file is missing, use none. Do not invent a graphic.
+- site: only if you can name a real company/org URL. If there is no local
+  screenshot file, asset_kind MUST be none. Do not invent a browser.
 - card: only if this beat is a named concept that deserves a dense
   Nate-style card. Then graphic MUST have:
   - kicker: short eyebrow (who / what / context)
   - title: headline
   - bullets: 2 to 5 facts (not a restated title)
   Title-only cards are forbidden. If you cannot fill kicker + headline +
-  facts, asset_kind MUST be none.
+  facts, asset_kind MUST be none. Card is the only additive on-camera
+  graphic (existing HTML slide, PIP or SPLIT).
 
-Layouts (only when the asset is real):
-- FULL_FRAME: webcam fills the frame. Required when asset_kind is none.
-- PIP_BOTTOM_RIGHT: artifact fills the frame, webcam as a lower-right bubble.
-  Use only with asset_kind card, broll, or site.
-- SPLIT_TOP: webcam on top two-thirds, graphic on the bottom third. Use only
-  with a real card.
+Layouts:
+- FULL_FRAME: required for none and for broll cutaways.
+- PIP_BOTTOM_RIGHT / SPLIT_TOP: only when asset_kind is card.
 
-Every scene needs a short reason. Do not pick PIP or SPLIT to avoid a
-repeat. Talking-head none scenes in a row are correct.
+Every scene needs a short reason. Talking-head none scenes in a row are
+correct.
 
 Do not write YouTube titles, description, chapters, or tags here.
 Return empty metadata. A later pass writes packaging for the full cut.
@@ -513,8 +513,9 @@ def _director_user_text(
         "Use absolute timestamps on the full timeline.",
         f"Aim for about {lo} to {hi} scenes in this window. Cover the window with no gaps.",
         "Fill said and shown on every scene. Default asset_kind is none.",
-        "Only use card, broll, or site when you can name a real artifact.",
-        "If you cannot, asset_kind is none and layout is FULL_FRAME. No slide.",
+        "Talking-head first. Additive card only for asset_kind card.",
+        "broll with a real file is a FULL_FRAME cutaway. site with no file is none.",
+        "If you cannot name a real artifact, asset_kind is none. No slide.",
         "Omit metadata. Return empty titles, chapters, and tags.",
     ]
     if window_count > 1:
