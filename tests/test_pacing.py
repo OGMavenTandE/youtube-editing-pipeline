@@ -1,52 +1,53 @@
 from pipeline.config import Settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.models import EditScript, GraphicCard, Scene
 from pipeline.pacing import enforce_pacing, evaluate_pacing, expected_scene_range, graphic_is_real
 
 
-def test_twenty_minute_band_is_about_50_to_80() -> None:
+def test_twenty_minute_band_is_sparse() -> None:
     low, high = expected_scene_range(20 * 60, Settings())
-    assert low == 50
-    assert 75 <= high <= 90
+    assert low == 3
+    assert high <= 40
+    assert high >= 10
 
 
-def test_empty_script_fills_20_minute_timeline() -> None:
-    settings = Settings()
+def test_empty_script_gets_bookends_not_fifty_scenes() -> None:
+    settings = Settings(bookend_seconds=10)
     duration = 20 * 60
     script = enforce_pacing(EditScript.empty(), duration, settings)
     report = evaluate_pacing(script, duration, settings)
     assert report.in_band
-    assert report.scene_count >= 50
     assert script.scenes[0].start == 0.0
     assert abs(script.scenes[-1].end - duration) < 0.05
-    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
-    assert report.micro_event_count > report.scene_count
+    assert script.scenes[0].role == "open"
+    assert script.scenes[-1].role == "close"
+    assert script.scenes[0].layout is PictureTag.LOWER_THIRD
+    assert report.micro_event_count == 0
     kinds = {event.kind for scene in script.scenes for event in scene.micro_events}
-    assert "punch_in" in kinds
-    assert "text" in kinds
-    assert "cut" in kinds
+    assert "punch_in" not in kinds
+    assert "text" not in kinds
 
 
-def test_lazy_three_scene_script_is_split() -> None:
-    settings = Settings()
+def test_lazy_script_stays_nothing_in_the_body() -> None:
+    settings = Settings(bookend_seconds=10)
     duration = 20 * 60
     lazy = EditScript(
         scenes=[
-            Scene(start=0, end=400, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="A")),
-            Scene(start=400, end=800, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="B")),
-            Scene(start=800, end=1200, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard(title="C")),
+            Scene(start=0, end=400, layout=PictureTag.NOTHING, graphic=GraphicCard(title="A")),
+            Scene(start=400, end=800, layout=PictureTag.NOTHING, graphic=GraphicCard(title="B")),
+            Scene(start=800, end=1200, layout=PictureTag.NOTHING, graphic=GraphicCard(title="C")),
         ]
     )
     script = enforce_pacing(lazy, duration, settings)
-    report = evaluate_pacing(script, duration, settings)
-    assert len(script.scenes) >= 50
-    assert report.in_band
-    assert all(scene.layout is LayoutKind.FULL_FRAME for scene in script.scenes)
-    assert all(scene.asset_kind == "none" for scene in script.scenes)
+    body = [scene for scene in script.scenes if scene.role == "body"]
+    assert body
+    assert all(scene.layout is PictureTag.NOTHING for scene in body)
+    assert all(scene.asset_kind == "none" for scene in body)
+    assert all(not scene.micro_events for scene in script.scenes)
 
 
-def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
-    settings = Settings()
+def test_pacing_fills_do_not_invent_pip() -> None:
+    settings = Settings(bookend_seconds=10)
     duration = 90.0
     script = enforce_pacing(
         EditScript(
@@ -54,13 +55,11 @@ def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
                 Scene(
                     start=20,
                     end=40,
-                    layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                    asset_kind="card",
+                    layout=PictureTag.OVERLAY,
                     graphic=GraphicCard(
-                        kicker="Real",
-                        title="Real card",
-                        bullets=["One", "Two"],
-                        slide_id="real",
+                        kicker="THE MONEY",
+                        title="$1.5B is the floor.",
+                        icon="bar_chart",
                     ),
                 )
             ]
@@ -69,26 +68,28 @@ def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
         settings,
     )
     fills = [scene for scene in script.scenes if scene.reason == "pacing-fill"]
-    assert fills
     for scene in fills:
-        if scene.layout is not LayoutKind.FULL_FRAME:
-            assert graphic_is_real(scene.graphic)
-            assert scene.graphic.title
-    for scene in script.scenes:
-        if scene.layout is not LayoutKind.FULL_FRAME:
-            assert graphic_is_real(scene.graphic)
-            assert scene.graphic.title or scene.graphic.asset_path
+        assert scene.layout is PictureTag.NOTHING
+    body_chrome = [
+        scene
+        for scene in script.scenes
+        if scene.role == "body" and scene.layout is PictureTag.OVERLAY
+    ]
+    assert body_chrome
+    assert graphic_is_real(body_chrome[0].graphic)
 
 
-def test_empty_script_fills_stay_full_frame() -> None:
-    script = enforce_pacing(EditScript.empty(), 60.0, Settings())
-    assert script.scenes
-    assert all(scene.layout is LayoutKind.FULL_FRAME for scene in script.scenes)
-    assert all(not graphic_is_real(scene.graphic) for scene in script.scenes)
+def test_empty_script_body_is_nothing() -> None:
+    script = enforce_pacing(EditScript.empty(), 60.0, Settings(bookend_seconds=10))
+    body = [scene for scene in script.scenes if scene.role == "body"]
+    assert body
+    assert all(scene.layout is PictureTag.NOTHING for scene in body)
+    assert all(not graphic_is_real(scene.graphic) for scene in body)
 
 
-def test_short_clip_stays_one_or_two_scenes() -> None:
-    settings = Settings()
+def test_short_clip_is_bookends() -> None:
+    settings = Settings(bookend_seconds=10)
     script = enforce_pacing(EditScript.empty(), 3.0, settings)
     assert 1 <= len(script.scenes) <= 2
     assert abs(script.scenes[-1].end - 3.0) < 0.05
+    assert script.scenes[0].role == "open"

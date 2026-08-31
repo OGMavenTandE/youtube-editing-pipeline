@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from PIL import Image
-
 from pipeline.broll.base import BrollSpec, SlideVariant
 from pipeline.broll.slides import (
     _chromium_help,
@@ -14,66 +12,42 @@ from pipeline.broll.slides import (
     stamp_slide_paths,
 )
 from pipeline.config import Settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.models import EditScript, GraphicCard, Scene
 
 
-def test_empty_full_frame_is_not_a_slide() -> None:
-    graphic = GraphicCard()
-    assert slide_variant(LayoutKind.FULL_FRAME, graphic) is None
+def test_kit_tags_are_not_chromium_slides() -> None:
+    graphic = GraphicCard(kicker="THE MONEY", title="$1.5B is the floor.")
+    assert slide_variant(PictureTag.OVERLAY, graphic) is None
+    assert slide_variant(PictureTag.PIP, graphic) is None
+    assert slide_variant(PictureTag.NOTHING, graphic) is None
+    assert slide_variant(PictureTag.LOWER_THIRD, graphic) is None
 
 
-def test_pip_variant_follows_bullet_count() -> None:
-    claim = GraphicCard(title="One idea")
-    listed = GraphicCard(title="List", bullets=["A", "B"])
-    assert slide_variant(LayoutKind.PIP_BOTTOM_RIGHT, claim) is SlideVariant.PIP_CLAIM
-    assert slide_variant(LayoutKind.PIP_BOTTOM_RIGHT, listed) is SlideVariant.PIP_LIST
-    assert slide_variant(LayoutKind.SPLIT_TOP, claim) is SlideVariant.SPLIT
-
-
-def test_collect_jobs_dedupes_slide_id_and_adds_lower_third() -> None:
+def test_collect_jobs_is_empty_for_the_kit() -> None:
     card = GraphicCard(
-        kicker="Hook",
-        title="Keep the hook",
-        bullets=["Say it once", "Repeat the number"],
+        kicker="THE MONEY",
+        title="$1.5B is the floor.",
+        icon="bar_chart",
         slide_id="slide_hook",
-        lower_third_title="Scott",
-        lower_third_subtitle="Host",
     )
     script = EditScript(
         scenes=[
-            Scene(
-                start=0,
-                end=12,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
-                graphic=card,
-            ),
-            Scene(
-                start=12,
-                end=24,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
-                graphic=card.model_copy(),
-            ),
-            Scene(start=24, end=36, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard()),
+            Scene(start=0, end=12, layout=PictureTag.OVERLAY, graphic=card),
+            Scene(start=12, end=24, layout=PictureTag.PIP, graphic=card.model_copy()),
+            Scene(start=24, end=36, layout=PictureTag.NOTHING, graphic=GraphicCard()),
         ]
     )
     jobs = collect_slide_jobs(script, Path("/tmp/slides"))
-    variants = {job.variant for job in jobs}
-    assert variants == {SlideVariant.PIP_LIST, SlideVariant.LOWER_THIRD}
-    assert len(jobs) == 2
+    assert jobs == []
     stamp_slide_paths(script, Path("/tmp/slides"))
-    assert script.scenes[0].graphic.asset_path.endswith("slide_hook_pip.png")
-    assert script.scenes[0].graphic.lower_third_path.endswith("slide_hook_lt.png")
-    assert script.scenes[2].graphic.asset_path == ""
+    assert script.scenes[0].graphic.asset_path == ""
 
 
 def test_stable_id_from_copy() -> None:
     a = GraphicCard(title="Same", bullets=["One"])
     b = GraphicCard(title="Same", bullets=["One"])
-    assert ensure_slide_id(a, LayoutKind.SPLIT_TOP) == ensure_slide_id(b, LayoutKind.SPLIT_TOP)
-    assert ensure_slide_id(a, LayoutKind.SPLIT_TOP) != ensure_slide_id(a, LayoutKind.PIP_BOTTOM_RIGHT)
+    assert ensure_slide_id(a, PictureTag.OVERLAY) == ensure_slide_id(b, PictureTag.OVERLAY)
 
 
 def test_html_escapes_copy() -> None:
@@ -123,68 +97,23 @@ def test_playwright_launches_are_headless() -> None:
         assert "chromium.launch()" not in text.replace("chromium.launch(headless=True)", "")
 
 
-def test_playwright_renders_1920x1080_pngs(tmp_path: Path | None = None) -> None:
-    dest = Path("/tmp/yt-pipe-slide-test")
-    dest.mkdir(parents=True, exist_ok=True)
-    for item in dest.glob("*.png"):
-        item.unlink()
-    settings = Settings(slides_dir=dest)
-    shared = GraphicCard(
-        kicker="Edit",
-        title="Cut the pause, keep the point",
-        bullets=["Drop gaps over 0.7s", "Leave a 0.15s pad", "Stay on the idea"],
-        slide_id="demo_list",
-        lower_third_title="Scott Mastin",
-        lower_third_subtitle="YouTube edit",
-    )
+def test_render_slides_is_a_noop_for_the_kit(tmp_path: Path) -> None:
+    settings = Settings(slides_dir=tmp_path)
     script = EditScript(
         scenes=[
             Scene(
                 start=0,
                 end=12,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
-                graphic=shared,
-            ),
-            Scene(
-                start=12,
-                end=24,
-                layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                asset_kind="card",
-                graphic=shared.model_copy(),
-            ),
-            Scene(
-                start=24,
-                end=36,
-                layout=LayoutKind.SPLIT_TOP,
-                asset_kind="card",
+                layout=PictureTag.OVERLAY,
                 graphic=GraphicCard(
-                    kicker="Claim",
-                    title="One number matters",
-                    bullets=["Name the figure", "Say why it sticks"],
-                    slide_id="demo_split",
+                    kicker="THE MONEY",
+                    title="$1.5B is the floor.",
+                    icon="bar_chart",
+                    slide_id="demo_list",
                 ),
-            ),
-            Scene(start=36, end=48, layout=LayoutKind.FULL_FRAME, graphic=GraphicCard()),
+            )
         ]
     )
     assets = render_slides(script, settings)
-    assert len(assets) == 3
-    pip = Image.open(dest / "demo_list_pip.png")
-    split = Image.open(dest / "demo_split_split.png")
-    lower = Image.open(dest / "demo_list_lt.png")
-    assert pip.size == (1920, 1080)
-    assert split.size == (1920, 1080)
-    assert lower.size == (1920, 1080)
-    assert pip.mode in {"RGB", "RGBA"}
-    pip_px = pip.convert("RGBA").getpixel((80, 80))
-    assert pip_px[3] == 255
-    top = split.convert("RGBA").getpixel((960, 80))
-    assert top[3] == 0
-    band = split.convert("RGBA").getpixel((200, 900))
-    assert band[3] == 255
-    lt_empty = lower.convert("RGBA").getpixel((1800, 80))
-    assert lt_empty[3] == 0
-    assert script.scenes[0].graphic.asset_path.endswith("demo_list_pip.png")
-    assert script.scenes[1].graphic.asset_path == script.scenes[0].graphic.asset_path
-    assert script.scenes[3].graphic.asset_path == ""
+    assert assets == []
+    assert script.scenes[0].graphic.asset_path == ""

@@ -4,17 +4,30 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from pipeline.broll.local import apply_local_broll
 from pipeline.broll.slides import PlaywrightNotFoundError, render_slides
-from pipeline.config import FFmpegNotFoundError, Settings, load_settings, require_ffmpeg
+from pipeline.config import (
+    FFmpegNotFoundError,
+    Settings,
+    identity_from_settings,
+    load_settings,
+    require_ffmpeg,
+)
 from pipeline.gemini_director import GeminiConfigError, analyze_video, load_edit_script
 from pipeline.media import MediaError, probe_duration, write_json
-from pipeline.models import EditScript, SilenceTrimResult
+from pipeline.models import EditScript, SilenceTrimResult, TalkSheet
 from pipeline.pacing import enforce_pacing, evaluate_pacing
-from pipeline.shotlist import resolve_edit_script
+from pipeline.shotlist import (
+    beats_from_script,
+    load_tagged_beats,
+    resolve_edit_script,
+    save_tagged_beats,
+)
+from pipeline.stills import apply_stills
 from pipeline.repack import load_run_metadata, repack_studio
 from pipeline.silence_remover import remove_silence
 from pipeline.studio import resolve_title_index, write_studio_package
@@ -154,10 +167,11 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     skip_composite = bool(getattr(args, "skip_composite", False))
     script_path = settings.output_dir / f"{input_path.stem}_edit_script.json"
     meta_path = settings.output_dir / f"{input_path.stem}_youtube_metadata.json"
+    beats_path = settings.output_dir / f"{input_path.stem}_tagged_beats.json"
     reuse_saved_script = (
         not args.edit_script
         and not args.skip_gemini
-        and script_path.is_file()
+        and (script_path.is_file() or beats_path.is_file())
     )
     prefer_trim = bool(args.edit_script) or bool(args.skip_silence) or reuse_saved_script
     reused = resolve_working_cut(
@@ -203,8 +217,17 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         script = EditScript.empty()
         print("[2/5] Gemini skipped (empty edit script).")
     elif reuse_saved_script:
-        script = load_edit_script(script_path)
-        print(f"[2/5] Reusing saved edit script {script_path.name}.")
+        if beats_path.is_file() and not script_path.is_file():
+            script = EditScript.empty()
+            from pipeline.shotlist import apply_tagged_beats
+
+            apply_tagged_beats(script, load_tagged_beats(beats_path))
+            print(f"[2/5] Reusing tagged beats {beats_path.name}.")
+        else:
+            script = load_edit_script(script_path)
+            print(f"[2/5] Reusing saved edit script {script_path.name}.")
+            if beats_path.is_file():
+                print(f"      tagged beats {beats_path.name} (model skipped)")
     else:
         print(f"[2/5] Asking {settings.gemini_model} for a transcript, then a scene plan...")
         transcript_path = Path(args.transcript).expanduser() if args.transcript else None
@@ -228,15 +251,30 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         )
         print(f"      saved edit script {script_path.name} (before slides)")
 
+    script.identity = identity_from_settings(settings)
+    if not script.talk_sheet.title.strip() or not script.talk_sheet.exec_headline.strip():
+        env_sheet = TalkSheet(
+            title=os.getenv("TALK_TITLE", script.talk_sheet.title),
+            exec_headline=os.getenv("TALK_EXEC_HEADLINE", script.talk_sheet.exec_headline),
+            close_kicker=script.talk_sheet.close_kicker,
+            close_headline=script.talk_sheet.close_headline,
+            close_icon=script.talk_sheet.close_icon,
+            open_icon=script.talk_sheet.open_icon,
+        )
+        if env_sheet.title.strip() or env_sheet.exec_headline.strip():
+            if env_sheet.title.strip():
+                script.talk_sheet.title = env_sheet.title
+            if env_sheet.exec_headline.strip():
+                script.talk_sheet.exec_headline = env_sheet.exec_headline
     script = enforce_pacing(script, trim.cut_map.trimmed_duration, settings)
     report = evaluate_pacing(script, trim.cut_map.trimmed_duration, settings)
     print(
-        f"      pacing scenes={report.scene_count} "
+        f"      kit beats={report.scene_count} "
         f"(band {report.expected_min_scenes}-{report.expected_max_scenes} "
-        f"for {report.duration:.0f}s)  micro-resets={report.micro_event_count}"
+        f"for {report.duration:.0f}s)"
     )
     for warning in report.warnings:
-        print(f"      pacing note: {warning}")
+        print(f"      kit note: {warning}")
 
     working_path = trim.output_path
     if script.talking_head_cuts:
@@ -247,16 +285,19 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
     broll_dir = Path(args.broll_dir) if args.broll_dir else None
     if broll_dir is not None:
         apply_local_broll(script, broll_dir)
+        apply_stills(script, broll_dir)
     resolve_edit_script(script)
 
     if args.skip_slides or skip_composite:
-        print("[3/5] Slides skipped.")
+        print("[3/5] Chromium slides skipped (locked kit paints chrome).")
     else:
-        print("[3/5] Rendering 1920x1080 slides...")
+        print("[3/5] Locked kit: no Chromium slides.")
         assets = render_slides(script, settings)
-        print(f"      slides={len(assets)}  dir={settings.slides_dir}")
+        print(f"      chromium jobs={len(assets)}")
 
     write_json(script_path, script.model_dump())
+    save_tagged_beats(beats_from_script(script, trim.cut_map.trimmed_duration), beats_path)
+    print(f"      tagged beats {beats_path.name}")
     title_index = resolve_title_index(
         getattr(args, "title_index", None),
         script.metadata,
@@ -279,7 +320,7 @@ def run_pipeline(args: argparse.Namespace, settings: Settings) -> Path:
         key = scene.layout.value
         layout_counts[key] = layout_counts.get(key, 0) + 1
     layout_note = " ".join(f"{name}={count}" for name, count in layout_counts.items())
-    print(f"[4/5] Compositing {settings.output_width}x{settings.output_height} ({layout_note or 'FULL_FRAME'})...")
+    print(f"[4/5] Compositing {settings.output_width}x{settings.output_height} ({layout_note or 'nothing'})...")
     from pipeline.compositor import render_video
 
     final_path = render_video(

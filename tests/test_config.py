@@ -2,22 +2,23 @@ from pathlib import Path
 
 from pipeline.broll import BrollKind, BrollSpec
 from pipeline.config import Settings, load_settings
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 
 
 def test_default_canvas_and_pip() -> None:
     settings = Settings()
     assert settings.output_width == 1920
     assert settings.output_height == 1080
-    assert settings.pip_scale == 0.25
-    assert abs(settings.split_top_ratio - 2.0 / 3.0) < 1e-9
+    assert settings.bookend_seconds == 10
+    assert settings.host_name == "Scott Mastin"
     assert settings.encode_concurrency == 2
 
 
 def test_layout_values() -> None:
-    assert LayoutKind.FULL_FRAME.value == "FULL_FRAME"
-    assert LayoutKind.PIP_BOTTOM_RIGHT.value == "PIP_BOTTOM_RIGHT"
-    assert LayoutKind.SPLIT_TOP.value == "SPLIT_TOP"
+    assert PictureTag.OVERLAY.value == "overlay"
+    assert PictureTag.PIP.value == "pip"
+    assert PictureTag.NOTHING.value == "nothing"
+    assert PictureTag.LOWER_THIRD.value == "lower_third"
 
 
 def test_broll_spec_defaults_to_slide() -> None:

@@ -54,6 +54,7 @@ datas += collect_data_files("desktop", include_py_files=True)
 datas += collect_data_files("pipeline")
 datas += [
     (str(ROOT / "pipeline" / "broll" / "templates"), "pipeline/broll/templates"),
+    (str(ROOT / "pipeline" / "fonts"), "pipeline/fonts"),
     (str(ROOT / "run.py"), "."),
     (str(ROOT / ".env.example"), "."),
 ]

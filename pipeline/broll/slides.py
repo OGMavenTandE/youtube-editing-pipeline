@@ -49,10 +49,8 @@ def ensure_slide_id(graphic: GraphicCard, layout: LayoutKind) -> str:
 
 
 def slide_variant(layout: LayoutKind, graphic: GraphicCard) -> SlideVariant | None:
-    if layout is LayoutKind.PIP_BOTTOM_RIGHT:
-        return SlideVariant.PIP_LIST if len(graphic.bullets) >= 2 else SlideVariant.PIP_CLAIM
-    if layout is LayoutKind.SPLIT_TOP:
-        return SlideVariant.SPLIT
+    """Chromium slides are retired. The locked kit paints chrome in-process."""
+    del layout, graphic
     return None
 
 
@@ -69,18 +67,11 @@ def slide_filename(slide_id: str, variant: SlideVariant) -> str:
 
 
 def collect_slide_jobs(script: EditScript, dest_dir: Path) -> list[SlideJob]:
-    """Unique slide and lower-third renders for scenes that actually have a card."""
-    jobs: list[SlideJob] = []
-    seen: set[tuple[str, SlideVariant]] = set()
+    """No Chromium slide jobs. Picture-kit PNGs are painted by the compositor."""
+    del dest_dir
     for scene in script.scenes:
         _assign_id(scene)
-        if scene_shows_slide(scene):
-            variant = slide_variant(scene.layout, scene.graphic)
-            if variant is not None:
-                _add_job(jobs, seen, scene, variant, dest_dir)
-        if needs_lower_third(scene.graphic):
-            _add_job(jobs, seen, scene, SlideVariant.LOWER_THIRD, dest_dir)
-    return jobs
+    return []
 
 
 def stamp_slide_paths(script: EditScript, dest_dir: Path) -> None:

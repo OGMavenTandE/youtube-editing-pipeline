@@ -14,15 +14,17 @@ from pipeline.config import Settings, require_ffmpeg
 from pipeline.encoder import NVENC_CODEC, VideoEncoder, select_video_encoder
 from pipeline.hwaccel import HwDecode, gpu_filters_available, select_hw_decode
 from pipeline.layouts import (
-    BORDER_COLOR,
     DARK_RGB,
-    LayoutKind,
+    GOLD,
+    PIP_BORDER,
+    PIP_RADIUS,
+    PictureTag,
     pip_rect,
-    split_webcam_rect,
 )
 from pipeline.media import MediaError, _run_encode, probe_video_stream
-from pipeline.models import EditScript, MicroEvent, Scene
-from pipeline.shotlist import compose_mode, resolved_media_path
+from pipeline.models import EditScript, Scene
+from pipeline.picture_kit import render_bookend, render_overlay, render_pip_type
+from pipeline.shotlist import compose_mode, resolved_still_path
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +66,11 @@ class SceneGraph:
     video_map: str
     audio_from: int | None
     uses_gpu_filters: bool
-    layout: LayoutKind
+    layout: PictureTag
 
 
 def cover_filter(dest_w: int, dest_h: int, zoom: float = 1.0) -> str:
-    """Scale-to-cover then center-crop. Matches MoviePy ``_cover``."""
+    """Scale-to-cover then center-crop. Full-frame host only."""
     width = max(2, dest_w)
     height = max(2, dest_h)
     factor = max(float(zoom), 1.0)
@@ -80,19 +82,19 @@ def cover_filter(dest_w: int, dest_h: int, zoom: float = 1.0) -> str:
     )
 
 
+def fit_filter(dest_w: int, dest_h: int) -> str:
+    """Scale-to-fit the entire frame, then pad. PiP host. Never a face crop."""
+    width = max(2, dest_w)
+    height = max(2, dest_h)
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x080A0E,setsar=1"
+    )
+
+
 def gpu_filters_suitable(scene: Scene) -> bool:
-    """CUDA scale only covers a full-canvas webcam with no extra layers."""
-    if compose_mode(scene) != "talking_head":
-        return False
-    if scene.layout is not LayoutKind.FULL_FRAME:
-        return False
-    if any(event.kind == "punch_in" for event in scene.micro_events):
-        return False
-    if scene.graphic.asset_path:
-        return False
-    if scene.graphic.lower_third_path or scene.graphic.lower_third_title:
-        return False
-    return True
+    """CUDA scale only covers a full-canvas host with no chrome."""
+    return compose_mode(scene) == "nothing" and scene.layout is PictureTag.NOTHING
 
 
 def build_scene_graph(
@@ -109,11 +111,10 @@ def build_scene_graph(
     use_gpu_filters: bool = False,
     hw: HwDecode | None = None,
 ) -> SceneGraph:
-    """Build filter_complex for FULL_FRAME, PIP_BOTTOM_RIGHT, or SPLIT_TOP."""
+    """Build filter_complex for nothing, overlay, pip, or bookend."""
     hold = max(0.04, float(scene.duration))
     width, height = canvas
     dark = _rgb_hex(DARK_RGB)
-    punches = _punch_windows(scene)
     webcam_args = ("-ss", f"{scene.start:.3f}", "-t", f"{hold:.3f}")
     inputs: list[FilterInput] = [FilterInput(path=str(video_path), args=webcam_args)]
 
@@ -150,12 +151,12 @@ def build_scene_graph(
 
     cam_prefix = _cpu_prefix(hw)
 
-    if scene.layout is LayoutKind.PIP_BOTTOM_RIGHT:
+    mode = compose_mode(scene)
+    if mode == "pip":
         if mask is None or border is None:
             raise FFmpegSceneError("PIP layout needs a rounded mask and border PNG")
         return _pip_graph(
             scene=scene,
-            pip_scale=settings.pip_scale,
             canvas=canvas,
             hold=hold,
             fps=fps,
@@ -165,22 +166,6 @@ def build_scene_graph(
             mask=mask,
             border=border,
             overlays=overlays,
-            punches=punches,
-            cam_prefix=cam_prefix,
-        )
-
-    if scene.layout is LayoutKind.SPLIT_TOP:
-        return _split_graph(
-            scene=scene,
-            settings=settings,
-            canvas=canvas,
-            hold=hold,
-            fps=fps,
-            dark=dark,
-            inputs=inputs,
-            graphic=graphic,
-            overlays=overlays,
-            punches=punches,
             cam_prefix=cam_prefix,
         )
 
@@ -194,7 +179,6 @@ def build_scene_graph(
         graphic=graphic,
         graphic_is_video=graphic_is_video,
         overlays=overlays,
-        punches=punches,
         cam_prefix=cam_prefix,
     )
 
@@ -317,55 +301,37 @@ def write_scene_overlay_pngs(
     canvas: tuple[int, int],
     dest_dir: Path,
 ) -> tuple[OverlayLayer, ...]:
-    """Rasterize lower-thirds and callouts that overlap this scene."""
-    from pipeline.compositor import (
-        _clamp_window,
-        _draw_callout,
-        _draw_lower_third,
-        _pil_lower_thirds,
-    )
-
+    """Rasterize locked-kit chrome for this scene."""
     dest_dir.mkdir(parents=True, exist_ok=True)
+    mode = compose_mode(scene)
     hold = scene.duration
-    layers: list[OverlayLayer] = []
-    index = 0
-
-    for overlay_scene in script.scenes:
-        path = overlay_scene.graphic.lower_third_path
-        if not path or not Path(path).is_file():
-            continue
-        window = _shift_to_scene(overlay_scene.start, overlay_scene.end, scene.start, hold)
-        if window is None:
-            continue
-        start, end = window
-        layers.append(OverlayLayer(Path(path), 0, 0, start, end))
-
-    for card in _pil_lower_thirds(script):
-        window = _shift_to_scene(card.start, card.end, scene.start, hold)
-        if window is None:
-            continue
-        image = _draw_lower_third(canvas, card.title, card.subtitle)
-        png = dest_dir / f"lt_{index:02d}.png"
-        Image.fromarray(image).save(png)
-        start, end = window
-        layers.append(OverlayLayer(png, 0, 0, start, end))
-        index += 1
-
-    for callout in script.collected_text_overlays():
-        window = _clamp_window(callout.start, callout.end, scene.end + 0.01)
-        if window is None:
-            continue
-        shifted = _shift_to_scene(callout.start, callout.end, scene.start, hold)
-        if shifted is None:
-            continue
-        image = _draw_callout(canvas, callout.text, callout.kind)
-        png = dest_dir / f"co_{index:02d}.png"
-        Image.fromarray(image).save(png)
-        start, end = shifted
-        layers.append(OverlayLayer(png, 0, 0, start, end))
-        index += 1
-
-    return tuple(layers)
+    if mode == "bookend":
+        image = render_bookend(
+            canvas,
+            identity=script.identity,
+            kicker=scene.graphic.kicker,
+            headline=scene.graphic.title,
+            icon=scene.graphic.icon or ("share" if scene.role == "close" else "bar_chart"),
+        )
+    elif mode == "overlay":
+        image = render_overlay(
+            canvas,
+            kicker=scene.graphic.kicker,
+            headline=scene.graphic.title,
+            icon=scene.graphic.icon or "bar_chart",
+        )
+    elif mode == "pip":
+        image = render_pip_type(
+            canvas,
+            kicker=scene.graphic.kicker,
+            sub=scene.graphic.title,
+            quote=scene.graphic.quote,
+        )
+    else:
+        return ()
+    png = dest_dir / "kit.png"
+    Image.fromarray(image).save(png)
+    return (OverlayLayer(png, 0, 0, 0.0, hold),)
 
 
 def _encode_graph(
@@ -466,30 +432,13 @@ def _full_frame_graph(
     graphic: Path | None,
     graphic_is_video: bool,
     overlays: tuple[OverlayLayer, ...],
-    punches: tuple[PunchWindow, ...],
     cam_prefix: str,
 ) -> SceneGraph:
     width, height = canvas
     filters: list[str] = []
-    if graphic is not None and (
-        graphic_is_video or compose_mode(scene) == "cutaway"
-    ):
-        filters.append(f"[1:v]{cover_filter(width, height)},format=rgba[base]")
-        current = "base"
-    else:
-        filters.append(f"{cam_prefix}{cover_filter(width, height)},format=rgba[cam]")
-        current = "cam"
-        for index, punch in enumerate(punches):
-            label = f"punch{index}"
-            nxt = f"pout{index}"
-            filters.append(
-                f"{cam_prefix}{cover_filter(width, height, punch.scale)},format=rgba[{label}]"
-            )
-            filters.append(
-                f"[{current}][{label}]overlay=0:0:enable='{_between(punch.start, punch.end)}'[{nxt}]"
-            )
-            current = nxt
-
+    del graphic_is_video
+    filters.append(f"{cam_prefix}{cover_filter(width, height)},format=rgba[cam]")
+    current = "cam"
     current, extra = _append_overlays(inputs, overlays, filters, current)
     inputs.extend(extra)
     filters.append(f"[{current}]format=yuv420p[vout]")
@@ -506,7 +455,6 @@ def _full_frame_graph(
 def _pip_graph(
     *,
     scene: Scene,
-    pip_scale: float,
     canvas: tuple[int, int],
     hold: float,
     fps: float,
@@ -516,11 +464,10 @@ def _pip_graph(
     mask: Path,
     border: Path,
     overlays: tuple[OverlayLayer, ...],
-    punches: tuple[PunchWindow, ...],
     cam_prefix: str,
 ) -> SceneGraph:
     width, height = canvas
-    x, y, box_w, box_h = pip_rect(width, height, pip_scale)
+    x, y, box_w, box_h = pip_rect(width, height)
     filters: list[str] = []
     if graphic is not None:
         filters.append(f"[1:v]scale={width}:{height},setsar=1,format=rgba[bg]")
@@ -535,31 +482,12 @@ def _pip_graph(
     border_index = len(inputs)
     inputs.append(FilterInput(path=str(border), args=still_args))
 
-    mask_count = 1 + len(punches)
-    filters.append(f"{cam_prefix}{cover_filter(box_w, box_h)},format=rgba[camrgb]")
-    if mask_count == 1:
-        filters.append(f"[{mask_index}:v]scale={box_w}:{box_h},format=gray[mask0]")
-    else:
-        mask_labels = "".join(f"[mask{i}]" for i in range(mask_count))
-        filters.append(
-            f"[{mask_index}:v]scale={box_w}:{box_h},format=gray,split={mask_count}{mask_labels}"
-        )
+    filters.append(f"{cam_prefix}{fit_filter(box_w, box_h)},format=rgba[camrgb]")
+    filters.append(f"[{mask_index}:v]scale={box_w}:{box_h},format=gray[mask0]")
     filters.append("[camrgb][mask0]alphamerge[pip]")
     filters.append(f"[bg][{border_index}:v]overlay={x}:{y}[bgb]")
     filters.append(f"[bgb][pip]overlay={x}:{y}[base]")
     current = "base"
-
-    for index, punch in enumerate(punches):
-        label = f"punch{index}"
-        nxt = f"pout{index}"
-        filters.append(
-            f"{cam_prefix}{cover_filter(box_w, box_h, punch.scale)},format=rgba[{label}rgb]"
-        )
-        filters.append(f"[{label}rgb][mask{index + 1}]alphamerge[{label}]")
-        filters.append(
-            f"[{current}][{label}]overlay={x}:{y}:enable='{_between(punch.start, punch.end)}'[{nxt}]"
-        )
-        current = nxt
 
     current, extra = _append_overlays(inputs, overlays, filters, current)
     inputs.extend(extra)
@@ -659,18 +587,9 @@ def _cpu_prefix(hw: HwDecode | None) -> str:
 
 
 def _graphic_path(scene: Scene) -> Path | None:
-    mode = compose_mode(scene)
-    if mode == "talking_head":
+    if compose_mode(scene) != "pip":
         return None
-    if mode == "cutaway":
-        return resolved_media_path(scene)
-    path = scene.graphic.asset_path
-    if not path:
-        return None
-    resolved = Path(path)
-    if not resolved.is_file():
-        return None
-    return resolved
+    return resolved_still_path(scene)
 
 
 def _write_pip_assets(
@@ -679,11 +598,12 @@ def _write_pip_assets(
     canvas: tuple[int, int],
     work: Path,
 ) -> tuple[Path | None, Path | None]:
-    if compose_mode(scene) != "card" or scene.layout is not LayoutKind.PIP_BOTTOM_RIGHT:
+    del settings
+    if compose_mode(scene) != "pip":
         return None, None
     width, height = canvas
-    _x, _y, box_w, box_h = pip_rect(width, height, settings.pip_scale)
-    radius = max(16, box_h // 6)
+    _x, _y, box_w, box_h = pip_rect(width, height)
+    radius = max(8, int(round(PIP_RADIUS * (height / 1080))))
     mask = work / "pip_mask.png"
     border = work / "pip_border.png"
     write_rounded_mask(mask, box_w, box_h, radius)
@@ -706,8 +626,8 @@ def write_rounded_border(path: Path, width: int, height: int, radius: int) -> Pa
     draw.rounded_rectangle(
         (0, 0, width - 1, height - 1),
         radius=radius,
-        outline=BORDER_COLOR,
-        width=max(3, height // 70),
+        outline=(*GOLD, 255),
+        width=max(PIP_BORDER, height // 100),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path)
@@ -749,15 +669,8 @@ def _shift_to_scene(
 
 
 def _scene_needs_overlays(script: EditScript, scene: Scene) -> bool:
-    if scene.graphic.lower_third_path or scene.graphic.lower_third_title:
-        return True
-    for card in script.lower_thirds:
-        if card.end > scene.start and card.start < scene.end:
-            return True
-    for callout in script.collected_text_overlays():
-        if callout.end > scene.start and callout.start < scene.end:
-            return True
-    return False
+    del script
+    return compose_mode(scene) in {"overlay", "pip", "bookend"}
 
 
 def _between(start: float, end: float) -> str:

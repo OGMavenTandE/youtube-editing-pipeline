@@ -17,7 +17,7 @@ from pipeline.gemini_director import (
     stitch_director_plans,
     transcribe_audio,
 )
-from pipeline.layouts import LayoutKind
+from pipeline.layouts import PictureTag
 from pipeline.models import (
     ChapterMarker,
     DirectorPlan,
@@ -42,8 +42,8 @@ def test_director_windows_split_after_threshold() -> None:
 
 def test_fit_scenes_shifts_relative_timestamps() -> None:
     scenes = [
-        PlannedScene(start=0, end=12, layout=LayoutKind.FULL_FRAME, reason="open"),
-        PlannedScene(start=12, end=30, layout=LayoutKind.SPLIT_TOP, reason="claim"),
+        PlannedScene(start=0, end=12, layout=PictureTag.NOTHING, reason="open"),
+        PlannedScene(start=12, end=30, layout=PictureTag.OVERLAY, reason="claim"),
     ]
     fitted = fit_scenes_to_window(scenes, 300, 600)
     assert fitted[0].start == 300
@@ -54,8 +54,8 @@ def test_fit_scenes_shifts_relative_timestamps() -> None:
 
 def test_fit_scenes_keeps_absolute_timestamps() -> None:
     scenes = [
-        PlannedScene(start=300, end=318, layout=LayoutKind.PIP_BOTTOM_RIGHT, reason="list"),
-        PlannedScene(start=318, end=340, layout=LayoutKind.FULL_FRAME, reason="aside"),
+        PlannedScene(start=300, end=318, layout=PictureTag.PIP, reason="list"),
+        PlannedScene(start=318, end=340, layout=PictureTag.NOTHING, reason="aside"),
     ]
     fitted = fit_scenes_to_window(scenes, 300, 600)
     assert fitted[0].start == 300
@@ -67,7 +67,7 @@ def test_stitch_fallback_is_talking_head_none() -> None:
     assert len(stitched.scenes) == 1
     scene = stitched.scenes[0]
     assert scene.asset_kind == "none"
-    assert scene.layout is LayoutKind.FULL_FRAME
+    assert scene.layout is PictureTag.NOTHING
     assert scene.graphic.title == ""
     assert scene.graphic.slide_id == ""
 
@@ -164,7 +164,7 @@ def test_plan_from_transcript_uses_full_cut_metadata_pass(monkeypatch) -> None:
                 {
                     "start": 0,
                     "end": 10,
-                    "layout": "FULL_FRAME",
+                    "layout": "nothing",
                     "reason": "talk",
                     "graphic": {"title": "Talk", "slide_id": "s1"},
                 }
