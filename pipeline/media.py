@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from pipeline.config import Settings, require_ffmpeg, require_ffprobe
+from pipeline.encoder import (
+    NVENC_CODEC,
+    VideoEncoder,
+    remember_nvenc_failure,
+    select_video_encoder,
+    software_encoder,
+)
 from pipeline.hidden_process import run_hidden
 
 
@@ -123,37 +131,9 @@ def concat_keep_ranges(
     dest.parent.mkdir(parents=True, exist_ok=True)
     if len(ranges) == 1:
         start, end = ranges[0]
-        cmd = [
-            ffmpeg_bin,
-            "-y",
-            "-ss",
-            f"{start:.3f}",
-            "-to",
-            f"{end:.3f}",
-            "-i",
-            str(video_path),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-            str(dest),
-        ]
-        _run(cmd, f"trim {video_path} -> {dest}")
-        return dest
 
-    work = dest.parent / f"{dest.stem}_parts"
-    work.mkdir(parents=True, exist_ok=True)
-    parts: list[Path] = []
-    try:
-        for index, (start, end) in enumerate(ranges):
-            part = work / f"part_{index:04d}.mp4"
-            cmd = [
+        def build(encoder: VideoEncoder) -> list[str]:
+            return [
                 ffmpeg_bin,
                 "-y",
                 "-ss",
@@ -162,17 +142,47 @@ def concat_keep_ranges(
                 f"{end:.3f}",
                 "-i",
                 str(video_path),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "18",
+                *encoder.ffmpeg_video_args(quality="veryfast"),
                 "-c:a",
                 "aac",
-                str(part),
+                "-movflags",
+                "+faststart",
+                str(dest),
             ]
-            _run(cmd, f"extract part {index}")
+
+        _run_encode(settings, f"trim {video_path} -> {dest}", build)
+        return dest
+
+    work = dest.parent / f"{dest.stem}_parts"
+    work.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    try:
+        for index, (start, end) in enumerate(ranges):
+            part = work / f"part_{index:04d}.mp4"
+
+            def build_part(
+                encoder: VideoEncoder,
+                *,
+                _start: float = start,
+                _end: float = end,
+                _part: Path = part,
+            ) -> list[str]:
+                return [
+                    ffmpeg_bin,
+                    "-y",
+                    "-ss",
+                    f"{_start:.3f}",
+                    "-to",
+                    f"{_end:.3f}",
+                    "-i",
+                    str(video_path),
+                    *encoder.ffmpeg_video_args(quality="veryfast"),
+                    "-c:a",
+                    "aac",
+                    str(_part),
+                ]
+
+            _run_encode(settings, f"extract part {index}", build_part)
             parts.append(part)
         list_file = work / "concat.txt"
         list_file.write_text(
@@ -271,38 +281,40 @@ def concat_scene_files(
         encoding="utf-8",
     )
     target = settings.target_lufs
-    cmd = [
-        ffmpeg_bin,
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(list_file),
-    ]
-    if loudnorm:
-        cmd.extend(
-            [
-                "-af",
-                f"loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "18",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-            ]
-        )
-    else:
-        cmd.extend(["-c", "copy"])
-    cmd.extend(["-movflags", "+faststart", str(dest)])
+
+    def build_concat(encoder: VideoEncoder) -> list[str]:
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+        ]
+        if loudnorm:
+            cmd.extend(
+                [
+                    "-af",
+                    f"loudnorm=I={target:.1f}:TP=-1.5:LRA=11",
+                    *encoder.ffmpeg_video_args(quality="medium"),
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                ]
+            )
+        else:
+            cmd.extend(["-c", "copy"])
+        cmd.extend(["-movflags", "+faststart", str(dest)])
+        return cmd
+
     try:
-        _run(cmd, f"concat scenes -> {dest}")
+        if loudnorm:
+            _run_encode(settings, f"concat scenes -> {dest}", build_concat)
+        else:
+            _run(build_concat(software_encoder()), f"concat scenes -> {dest}")
     finally:
         if list_file.exists():
             list_file.unlink()
@@ -319,29 +331,43 @@ def apply_loudnorm(video_path: Path, dest: Path, settings: Settings) -> Path:
     """Single-pass ffmpeg loudnorm toward settings.target_lufs."""
     ffmpeg_bin = require_ffmpeg(settings)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        ffmpeg_bin,
-        "-y",
-        "-i",
-        str(video_path),
-        "-af",
-        f"loudnorm=I={settings.target_lufs:.1f}:TP=-1.5:LRA=11",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "18",
-        "-c:a",
-        "aac",
-        "-ar",
-        "48000",
-        "-movflags",
-        "+faststart",
-        str(dest),
-    ]
-    _run(cmd, f"loudnorm {video_path} -> {dest}")
+
+    def build(encoder: VideoEncoder) -> list[str]:
+        return [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(video_path),
+            "-af",
+            f"loudnorm=I={settings.target_lufs:.1f}:TP=-1.5:LRA=11",
+            *encoder.ffmpeg_video_args(quality="medium"),
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(dest),
+        ]
+
+    _run_encode(settings, f"loudnorm {video_path} -> {dest}", build)
     return dest
+
+
+def _run_encode(
+    settings: Settings,
+    label: str,
+    build: Callable[[VideoEncoder], list[str]],
+) -> None:
+    """Run an ffmpeg video encode; retry once with libx264 if NVENC fails."""
+    encoder = select_video_encoder(settings)
+    try:
+        _run(build(encoder), label)
+    except MediaError as exc:
+        if encoder.name != NVENC_CODEC:
+            raise
+        remember_nvenc_failure(str(exc))
+        _run(build(software_encoder()), f"{label} (libx264 fallback)")
 
 
 def _run(cmd: list[str], label: str) -> None:
