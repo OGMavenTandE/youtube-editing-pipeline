@@ -1075,9 +1075,16 @@ def _ensure_overlay_slots(
     split_from = available or [
         scene for scene in current if scene.layout is not PictureTag.OVERLAY
     ] or current
-    longest = max(split_from, key=lambda scene: scene.end - scene.start)
-    extra = needed - len(available) + 1
-    parts = _split_scene(longest, max(extra, 2))
+    longest = max(split_from, key=lambda scene: min(scene.end, end) - max(scene.start, start))
+    longest = _clip_scene_to_window(script, longest, start, end)
+    available = [
+        scene
+        for scene in _scenes_in_window(script, start, end)
+        if scene.layout is PictureTag.NOTHING and (not skip_pip or scene.layout is not PictureTag.PIP)
+    ]
+    if len(available) >= needed:
+        return available[:needed]
+    parts = _split_scene(longest, max(needed, 2))
     idx = script.scenes.index(longest)
     script.scenes[idx : idx + 1] = parts
     script.scenes.sort(key=lambda scene: (scene.start, scene.end))
@@ -1089,6 +1096,33 @@ def _ensure_overlay_slots(
     if skip_pip:
         refreshed = [scene for scene in refreshed if scene.layout is not PictureTag.PIP]
     return [scene for scene in refreshed if scene.layout is not PictureTag.OVERLAY][:needed]
+
+
+def _clip_scene_to_window(script: EditScript, scene: Scene, start: float, end: float) -> Scene:
+    """Keep overlay/PiP slot surgery inside the point window. Leave the rest as nothing."""
+    mid_start = max(scene.start, start)
+    mid_end = min(scene.end, end)
+    if mid_end - mid_start < 0.05:
+        return scene
+    if abs(scene.start - mid_start) < 0.02 and abs(scene.end - mid_end) < 0.02:
+        return scene
+    parts: list[Scene] = []
+    if mid_start - scene.start >= 0.05:
+        left = scene.model_copy(deep=True)
+        left.end = mid_start
+        parts.append(left)
+    mid = scene.model_copy(deep=True)
+    mid.start = mid_start
+    mid.end = mid_end
+    parts.append(mid)
+    if scene.end - mid_end >= 0.05:
+        right = scene.model_copy(deep=True)
+        right.start = mid_end
+        parts.append(right)
+    idx = script.scenes.index(scene)
+    script.scenes[idx : idx + 1] = parts
+    script.scenes.sort(key=lambda item: (item.start, item.end))
+    return mid
 
 
 def _insert_nothing(script: EditScript, start: float, end: float) -> Scene:
