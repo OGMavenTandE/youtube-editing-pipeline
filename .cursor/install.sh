@@ -4,10 +4,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# System dependencies: FFmpeg/ffprobe (silence trim, MoviePy, loudnorm) and Tk
-# (the desktop app's customtkinter GUI, imported by the test suite).
+# System dependencies: FFmpeg/ffprobe (silence trim, MoviePy, loudnorm), Tk
+# (the desktop app's customtkinter GUI, imported by the test suite), and
+# python3-venv (ensurepip, required to create the virtual environment).
 sudo apt-get update -qq
-sudo apt-get install -y -qq ffmpeg python3-tk
+sudo apt-get install -y -qq ffmpeg python3-tk python3-venv
 
 # Project virtual environment and Python dependencies.
 python3 -m venv .venv
