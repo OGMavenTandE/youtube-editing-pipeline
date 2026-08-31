@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pipeline.broll.local import VIDEO_SUFFIXES, apply_local_broll
 from pipeline.config import Settings, require_ffmpeg
 from pipeline.encoder import (
+    MIN_PLAYBACK_FPS,
     NVENC_CODEC,
     remember_nvenc_failure,
     select_video_encoder,
@@ -29,7 +30,7 @@ from pipeline.layouts import (
     pip_rect,
     split_webcam_rect,
 )
-from pipeline.media import MediaError, concat_scene_files, probe_duration
+from pipeline.media import MediaError, concat_scene_files, probe_duration, probe_video_stream
 from pipeline.models import EditScript, Scene
 from pipeline.picture_kit import render_bookend, render_overlay, render_pip_type
 from pipeline.shotlist import (
@@ -308,7 +309,13 @@ def _encode_one_scene(
         if a_roll.audio is not None and end > start:
             final = final.with_audio(a_roll.subclipped(start, end).audio)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        _write_composed_clip(final, dest, a_roll.fps or 30, settings)
+        try:
+            _w, _h, fps = probe_video_stream(video_path, settings)
+        except MediaError:
+            fps = float(a_roll.fps or 30)
+        if fps < MIN_PLAYBACK_FPS:
+            fps = 30.0
+        _write_composed_clip(final, dest, fps, settings)
         final.close()
         piece.close()
     if not dest.exists() or dest.stat().st_size == 0:
@@ -367,7 +374,13 @@ def _render_in_memory(
         if base.audio is not None:
             final = final.with_audio(base.audio)
 
-        _write_composed_clip(final, output_path, base.fps or 30, settings)
+        try:
+            _w, _h, fps = probe_video_stream(video_path, settings)
+        except MediaError:
+            fps = float(base.fps or 30)
+        if fps < MIN_PLAYBACK_FPS:
+            fps = 30.0
+        _write_composed_clip(final, output_path, fps, settings)
         final.close()
         composed.close()
         for piece in pieces:
@@ -474,6 +487,8 @@ def _kit_chrome_clip(
 
 def _cover(clip: VideoFileClip, dest_w: int, dest_h: int, zoom: float = 1.0) -> VideoFileClip:
     src_w, src_h = int(clip.w), int(clip.h)
+    if float(zoom) <= 1.0 and src_w == dest_w and src_h == dest_h:
+        return clip
     factor = cover_scale(src_w, src_h, dest_w, dest_h, zoom)
     new_w = max(dest_w, int(round(src_w * factor)))
     new_h = max(dest_h, int(round(src_h * factor)))

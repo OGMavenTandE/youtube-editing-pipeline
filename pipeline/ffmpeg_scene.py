@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw
 
 from pipeline.broll.local import VIDEO_SUFFIXES
 from pipeline.config import Settings, require_ffmpeg
-from pipeline.encoder import NVENC_CODEC, VideoEncoder, select_video_encoder
+from pipeline.encoder import MIN_PLAYBACK_FPS, NVENC_CODEC, VideoEncoder, select_video_encoder
 from pipeline.hwaccel import HwDecode, gpu_filters_available, select_hw_decode
 from pipeline.layouts import (
     DARK_RGB,
@@ -21,7 +21,7 @@ from pipeline.layouts import (
     PictureTag,
     pip_rect,
 )
-from pipeline.media import MediaError, _run_encode, probe_video_stream
+from pipeline.media import MediaError, _run_encode, format_output_fps, probe_video_stream
 from pipeline.models import EditScript, Scene
 from pipeline.picture_kit import render_bookend, render_overlay, render_pip_type
 from pipeline.shotlist import compose_mode, resolved_still_path
@@ -69,15 +69,27 @@ class SceneGraph:
     layout: PictureTag
 
 
-def cover_filter(dest_w: int, dest_h: int, zoom: float = 1.0) -> str:
-    """Scale-to-cover then center-crop. Full-frame host only."""
+def cover_filter(
+    dest_w: int,
+    dest_h: int,
+    zoom: float = 1.0,
+    *,
+    src_w: int = 0,
+    src_h: int = 0,
+) -> str:
+    """Scale-to-cover then center-crop. Full-frame host only.
+
+    Matching source and canvas at zoom 1 is a no-op (no scale-down then up).
+    """
     width = max(2, dest_w)
     height = max(2, dest_h)
+    if float(zoom) <= 1.0 and src_w == width and src_h == height and src_w > 0:
+        return "setsar=1"
     factor = max(float(zoom), 1.0)
     scale_w = max(width, int(round(width * factor)))
     scale_h = max(height, int(round(height * factor)))
     return (
-        f"scale={scale_w}:{scale_h}:force_original_aspect_ratio=increase:flags=bicubic,"
+        f"scale={scale_w}:{scale_h}:force_original_aspect_ratio=increase:flags=lanczos,"
         f"crop={width}:{height},setsar=1"
     )
 
@@ -87,7 +99,7 @@ def fit_filter(dest_w: int, dest_h: int) -> str:
     width = max(2, dest_w)
     height = max(2, dest_h)
     return (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,"
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x080A0E,setsar=1"
     )
 
@@ -110,10 +122,12 @@ def build_scene_graph(
     border: Path | None,
     use_gpu_filters: bool = False,
     hw: HwDecode | None = None,
+    src_size: tuple[int, int] | None = None,
 ) -> SceneGraph:
     """Build filter_complex for nothing, overlay, pip, or bookend."""
     hold = max(0.04, float(scene.duration))
     width, height = canvas
+    src_w, src_h = src_size or (0, 0)
     dark = _rgb_hex(DARK_RGB)
     webcam_args = ("-ss", f"{scene.start:.3f}", "-t", f"{hold:.3f}")
     inputs: list[FilterInput] = [FilterInput(path=str(video_path), args=webcam_args)]
@@ -136,10 +150,13 @@ def build_scene_graph(
             )
 
     if use_gpu_filters and gpu_filters_suitable(scene):
-        filt = (
-            f"[0:v]scale_cuda={width}:{height}:force_original_aspect_ratio=increase,"
-            f"hwdownload,format=nv12,crop={width}:{height},setsar=1,format=yuv420p[vout]"
-        )
+        if src_w == width and src_h == height and src_w > 0:
+            filt = "[0:v]hwdownload,format=nv12,setsar=1,format=yuv420p[vout]"
+        else:
+            filt = (
+                f"[0:v]scale_cuda={width}:{height}:force_original_aspect_ratio=increase,"
+                f"hwdownload,format=nv12,crop={width}:{height},setsar=1,format=yuv420p[vout]"
+            )
         return SceneGraph(
             inputs=tuple(inputs),
             filter_complex=filt,
@@ -167,6 +184,7 @@ def build_scene_graph(
             border=border,
             overlays=overlays,
             cam_prefix=cam_prefix,
+            src_size=(src_w, src_h),
         )
 
     return _full_frame_graph(
@@ -180,6 +198,7 @@ def build_scene_graph(
         graphic_is_video=graphic_is_video,
         overlays=overlays,
         cam_prefix=cam_prefix,
+        src_size=(src_w, src_h),
     )
 
 
@@ -197,11 +216,12 @@ def encode_scene_ffmpeg(
         raise FFmpegSceneError(f"Scene {scene.start:.2f}-{scene.end:.2f} is too short")
 
     try:
-        _width, _height, fps = probe_video_stream(video_path, settings)
+        src_w, src_h, fps = probe_video_stream(video_path, settings)
     except MediaError:
+        src_w, src_h, fps = 0, 0, 30.0
+    if fps < MIN_PLAYBACK_FPS:
         fps = 30.0
-    if fps <= 1.0:
-        fps = 30.0
+    src_size = (src_w, src_h) if src_w >= 16 and src_h >= 16 else None
 
     encoder = select_video_encoder(settings)
     hw = select_hw_decode(
@@ -245,6 +265,7 @@ def encode_scene_ffmpeg(
                     mask=mask,
                     border=border,
                     hold=hold,
+                    src_size=src_size,
                 )
                 return
             except (FFmpegSceneError, MediaError) as exc:
@@ -266,6 +287,7 @@ def encode_scene_ffmpeg(
                 mask=mask,
                 border=border,
                 hold=hold,
+                src_size=src_size,
             )
             return
         except (FFmpegSceneError, MediaError) as exc:
@@ -287,6 +309,7 @@ def encode_scene_ffmpeg(
                 mask=mask,
                 border=border,
                 hold=hold,
+                src_size=src_size,
             )
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -350,6 +373,7 @@ def _encode_graph(
     mask: Path | None,
     border: Path | None,
     hold: float,
+    src_size: tuple[int, int] | None = None,
 ) -> None:
     graph = build_scene_graph(
         video_path=video_path,
@@ -363,6 +387,7 @@ def _encode_graph(
         border=border,
         use_gpu_filters=use_gpu_filters,
         hw=hw,
+        src_size=src_size,
     )
     ffmpeg_bin = require_ffmpeg(settings)
 
@@ -374,6 +399,7 @@ def _encode_graph(
             chosen,
             hw=hw,
             hold=hold,
+            fps=fps,
         )
 
     try:
@@ -392,6 +418,7 @@ def build_ffmpeg_command(
     *,
     hw: HwDecode | None,
     hold: float,
+    fps: float,
 ) -> list[str]:
     cmd: list[str] = [ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error"]
     for index, source in enumerate(graph.inputs):
@@ -407,6 +434,8 @@ def build_ffmpeg_command(
     cmd.extend(encoder.ffmpeg_video_args(quality="medium"))
     cmd.extend(
         [
+            "-r",
+            format_output_fps(fps),
             "-c:a",
             "aac",
             "-t",
@@ -433,11 +462,15 @@ def _full_frame_graph(
     graphic_is_video: bool,
     overlays: tuple[OverlayLayer, ...],
     cam_prefix: str,
+    src_size: tuple[int, int] = (0, 0),
 ) -> SceneGraph:
     width, height = canvas
     filters: list[str] = []
     del graphic_is_video
-    filters.append(f"{cam_prefix}{cover_filter(width, height)},format=rgba[cam]")
+    filters.append(
+        f"{cam_prefix}{cover_filter(width, height, src_w=src_size[0], src_h=src_size[1])},"
+        "format=rgba[cam]"
+    )
     current = "cam"
     current, extra = _append_overlays(inputs, overlays, filters, current)
     inputs.extend(extra)
@@ -465,7 +498,9 @@ def _pip_graph(
     border: Path,
     overlays: tuple[OverlayLayer, ...],
     cam_prefix: str,
+    src_size: tuple[int, int] = (0, 0),
 ) -> SceneGraph:
+    del src_size
     width, height = canvas
     x, y, box_w, box_h = pip_rect(width, height)
     filters: list[str] = []
