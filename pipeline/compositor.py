@@ -11,6 +11,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pipeline.broll.local import VIDEO_SUFFIXES, apply_local_broll
 from pipeline.config import Settings, require_ffmpeg
+from pipeline.encoder import (
+    NVENC_CODEC,
+    remember_nvenc_failure,
+    select_video_encoder,
+    software_encoder,
+)
 from pipeline.layouts import LayoutKind
 from pipeline.media import MediaError, concat_scene_files, probe_duration
 from pipeline.models import (
@@ -149,6 +155,7 @@ def render_video(
 ) -> Path:
     """Encode each scene, concat with ffmpeg, mux H.264/AAC toward -14 LUFS."""
     require_ffmpeg(settings)
+    select_video_encoder(settings)
     video_path = video_path.resolve()
     if not video_path.is_file():
         raise FileNotFoundError(f"Working video not found: {video_path}")
@@ -248,20 +255,31 @@ def _encode_one_scene(
         if a_roll.audio is not None and end > start:
             final = final.with_audio(a_roll.subclipped(start, end).audio)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        final.write_videofile(
-            str(dest),
-            codec="libx264",
-            audio_codec="aac",
-            fps=a_roll.fps or 30,
-            preset="medium",
-            threads=0,
-            logger=None,
-        )
+        _write_composed_clip(final, dest, a_roll.fps or 30, settings)
         final.close()
         piece.close()
     if not dest.exists() or dest.stat().st_size == 0:
         raise CompositorError(f"Scene encode produced no output at {dest}")
     return dest
+
+
+def _write_composed_clip(
+    clip: CompositeVideoClip,
+    dest: Path,
+    fps: float,
+    settings: Settings,
+) -> None:
+    """MoviePy write with NVENC when selected; retry libx264 if NVENC fails."""
+    encoder = select_video_encoder(settings)
+    kwargs = encoder.moviepy_write_kwargs(fps=fps)
+    try:
+        clip.write_videofile(str(dest), **kwargs)
+        return
+    except (OSError, RuntimeError) as exc:
+        if encoder.name != NVENC_CODEC:
+            raise
+        remember_nvenc_failure(str(exc))
+        clip.write_videofile(str(dest), **software_encoder().moviepy_write_kwargs(fps=fps))
 
 
 def _render_in_memory(
@@ -299,15 +317,7 @@ def _render_in_memory(
         if base.audio is not None:
             final = final.with_audio(base.audio)
 
-        final.write_videofile(
-            str(output_path),
-            codec="libx264",
-            audio_codec="aac",
-            fps=base.fps or 30,
-            preset="medium",
-            threads=0,
-            logger=None,
-        )
+        _write_composed_clip(final, output_path, base.fps or 30, settings)
         final.close()
         composed.close()
         for piece in pieces:
