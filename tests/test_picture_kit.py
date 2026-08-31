@@ -3,7 +3,15 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from pipeline.layouts import GOLD, PictureTag, lower_third_rect, overlay_rect, pip_rect
+from pipeline.layouts import (
+    GOLD,
+    OVERLAY_PAD,
+    OVERLAY_W,
+    PictureTag,
+    lower_third_rect,
+    overlay_rect,
+    pip_rect,
+)
 from pipeline.models import (
     BookendCard,
     EditScript,
@@ -16,6 +24,8 @@ from pipeline.models import (
 from pipeline.pacing import apply_bookends, enforce_pacing
 from pipeline.picture_kit import (
     ICON_NAMES,
+    KitScale,
+    _fit_headline,
     draw_icon,
     load_inter,
     render_kit_fixtures,
@@ -360,3 +370,44 @@ def test_filled_still_title_keeps_full_white_content() -> None:
     ys, xs = np.where(alpha > 80)
     assert int(xs.max()) < pip_box[0]
     assert int(ys.max()) < pip_box[1]
+
+
+HUMAN_REQUIRED_BODY = (
+    "Attack drones are still directed by pilots using joysticks and a video feed."
+)
+
+
+def test_human_required_body_wraps_to_plate_width() -> None:
+    """Large type used to drop leftover words at 'using' and leave the plate empty."""
+    inner_w = OVERLAY_W - 2 * OVERLAY_PAD
+    font, lines, size = _fit_headline(
+        HUMAN_REQUIRED_BODY,
+        KitScale(1920, 1080),
+        inner_w,
+        max_lines=2,
+    )
+    joined = " ".join(lines)
+    assert "using" in joined
+    assert "joysticks" in joined
+    assert "feed" in joined
+    assert joined.rstrip(".").endswith("feed") or "video feed" in joined
+    assert size < 40
+    draw = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+    line0_w = draw.textlength(lines[0], font=font)
+    assert line0_w >= inner_w * 0.85
+    chrome = render_overlay(
+        (1920, 1080),
+        kicker="HUMAN REQUIRED",
+        headline=HUMAN_REQUIRED_BODY,
+        icon="bar_chart",
+    )
+    ox, oy, ow, _ = overlay_rect()
+    rgb = chrome[:, :, :3]
+    white_xs = [
+        x
+        for y in range(oy + 28, min(oy + 140, 1080))
+        for x in range(ox, ox + ow)
+        if int(rgb[y, x, 0]) > 230 and int(rgb[y, x, 1]) > 230 and int(rgb[y, x, 2]) > 230
+    ]
+    assert white_xs
+    assert max(white_xs) - min(white_xs) >= int(inner_w * 0.80)

@@ -113,6 +113,44 @@ def _blank(size: tuple[int, int]) -> Image.Image:
     return Image.new("RGBA", size, (0, 0, 0, 0))
 
 
+def _tokens(text: str) -> list[str]:
+    return (text or "").replace("\n", " \n ").split()
+
+
+def _words_fit(
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    max_lines: int,
+) -> bool:
+    """True only if every word lands on a line within max_lines. No silent drop."""
+    tokens = _tokens(text)
+    if not tokens:
+        return True
+    draw = ImageDraw.Draw(_blank((4, 4)))
+    used = 0
+    current = ""
+    for token in tokens:
+        if token == "\n":
+            if current:
+                used += 1
+                current = ""
+            if used > max_lines:
+                return False
+            continue
+        trial = f"{current} {token}".strip()
+        if not current or draw.textlength(trial, font=font) <= max_width:
+            current = trial
+            continue
+        used += 1
+        current = token
+        if used >= max_lines:
+            return False
+    if current:
+        used += 1
+    return used <= max_lines
+
+
 def _wrap_px(
     text: str,
     font: ImageFont.ImageFont,
@@ -120,33 +158,43 @@ def _wrap_px(
     *,
     max_lines: int = 2,
 ) -> list[str]:
-    words = (text or "").replace("\n", " \n ").split()
-    if not words:
+    tokens = _tokens(text)
+    if not tokens:
         return [""]
     lines: list[str] = []
     current = ""
+    leftover: list[str] = []
     draw = ImageDraw.Draw(_blank((4, 4)))
-    for word in words:
-        if word == "\n":
-            lines.append(current)
-            current = ""
+    for i, token in enumerate(tokens):
+        if leftover:
+            break
+        if token == "\n":
+            if current:
+                lines.append(current)
+                current = ""
             if len(lines) >= max_lines:
-                break
+                leftover = [t for t in tokens[i + 1 :] if t != "\n"]
             continue
-        trial = f"{current} {word}".strip()
-        if draw.textlength(trial, font=font) <= max_width or not current:
+        trial = f"{current} {token}".strip()
+        if not current or draw.textlength(trial, font=font) <= max_width:
             current = trial
-        else:
-            lines.append(current)
-            current = word
-            if len(lines) >= max_lines:
-                break
+            continue
+        lines.append(current)
+        current = token
+        if len(lines) >= max_lines:
+            leftover = [current] + [t for t in tokens[i + 1 :] if t != "\n"]
+            current = ""
+            break
     if current and len(lines) < max_lines:
         lines.append(current)
-    elif current and lines:
-        trial = (lines[-1] + " " + current).strip()
-        if draw.textlength(trial, font=font) <= max_width:
-            lines[-1] = trial
+    elif current:
+        leftover = [current] + leftover
+    if leftover:
+        extra = " ".join(leftover)
+        if lines:
+            lines[-1] = f"{lines[-1]} {extra}".strip()
+        else:
+            lines = [extra]
     fitted = [_ellipsis_px(line, font, max_width) for line in lines[:max_lines] if line]
     return fitted or [""]
 
@@ -190,6 +238,8 @@ def _fit_headline(
         return font, [], scale.px(floor)
     for size in range(start, floor - 1, -2):
         font = load_inter(scale.px(size), bold=True)
+        if not _words_fit(text, font, max_width, max_lines):
+            continue
         lines = _wrap_px(text, font, max_width, max_lines=max_lines)
         draw = ImageDraw.Draw(_blank((4, 4)))
         if all(draw.textlength(line, font=font) <= max_width + 1 for line in lines if line):
@@ -218,6 +268,8 @@ def _fit_lines(
     chosen_size = scale.px(floor)
     for size in range(start, floor - 1, -1):
         font = load_inter(scale.px(size), bold=bold)
+        if not _words_fit(text, font, max_width, max_lines):
+            continue
         lines = _wrap_px(text, font, max_width, max_lines=max_lines)
         if all(draw.textlength(line, font=font) <= max_width for line in lines if line):
             chosen_font, chosen_lines, chosen_size = font, lines, scale.px(size)

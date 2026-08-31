@@ -1,13 +1,17 @@
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
 from pipeline.config import Settings
-from pipeline.layouts import PictureTag
+from pipeline.layouts import OVERLAY_PAD, OVERLAY_W, PictureTag
 from pipeline.models import EditScript, GraphicCard, Scene, TalkPoint, TalkSheet, field_is_locked
 from pipeline.pacing import enforce_pacing
 from pipeline.stills import match_local_still
 from pipeline.picture_kit import (
     HEADLINE_CHAR_LIMIT,
     KICKER_CHAR_LIMIT,
+    KitScale,
+    _fit_headline,
     clip_plate_headline,
     clip_plate_kicker,
     render_overlay,
@@ -1077,3 +1081,121 @@ def test_clip_helpers_match_measured_plate() -> None:
     ys, xs = (alpha > 80).nonzero()
     assert int(xs.max()) < pip_box[0]
     assert int(ys.max()) < pip_box[1]
+
+
+HUMAN_REQUIRED_KICKER = "HUMAN REQUIRED"
+HUMAN_REQUIRED_BODY = (
+    "Attack drones are still directed by pilots using joysticks and a video feed."
+)
+
+
+def test_human_required_live_card_pairs_and_wraps_in_full_matrix(tmp_path: Path) -> None:
+    """Scott live overlay: gold HUMAN REQUIRED must keep its own body, wrapped to the plate."""
+    still = tmp_path / "p1.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet()
+    apply_open_form_values(sheet, "OPEN_T", "OPEN_H1", "OPEN_H2", "")
+    apply_point_form_values(
+        sheet.points[0],
+        platform="P1PLAT",
+        image_title="P1ST",
+        image_text="P1SX",
+        titles=[HUMAN_REQUIRED_KICKER, "NOT AUTONOMOUS", "CDAO GAVE ANDURIL 100M"],
+        cards=[
+            HUMAN_REQUIRED_BODY,
+            "Card two body only",
+            "Humans must be in the loop for an attack",
+        ],
+    )
+    sheet.points[0].still_path = str(still)
+    sheet.points[0].still_source = "user"
+    sheet.points[0].platform_source = "user"
+    sheet.points[0].image_title_source = "user"
+    sheet.points[0].image_text_source = "user"
+    sheet.points[0].title_sources = ["user", "user", "user"]
+    sheet.points[0].card_sources = ["user", "user", "user"]
+    for point_i, point in enumerate(sheet.points[1:], start=2):
+        extra = tmp_path / f"p{point_i}.jpg"
+        extra.write_bytes(b"x")
+        apply_point_form_values(
+            point,
+            platform=f"P{point_i}PLAT",
+            image_title=f"P{point_i}ST",
+            image_text=f"P{point_i}SX",
+            titles=[f"P{point_i}C{card + 1}T" for card in range(3)],
+            cards=[f"P{point_i}C{card + 1}B" for card in range(3)],
+        )
+        point.still_path = str(extra)
+        point.still_source = "user"
+        point.platform_source = "user"
+        point.image_title_source = "user"
+        point.image_text_source = "user"
+        point.title_sources = ["user", "user", "user"]
+        point.card_sources = ["user", "user", "user"]
+
+    path = tmp_path / "talk.json"
+    save_talk_sheet(sheet, path)
+    loaded = load_talk_sheet(path)
+    md = talk_sheet_to_markdown(loaded)
+    imported = parse_talk_sheet_markdown(md)
+    for src, dest in zip(loaded.points, imported.points):
+        dest.still_path = src.still_path
+        dest.still_source = src.still_source
+
+    assert paired_card_copy(imported.points[0], 0) == (HUMAN_REQUIRED_KICKER, HUMAN_REQUIRED_BODY)
+    assert paired_card_copy(imported.points[0], 1) == ("NOT AUTONOMOUS", "Card two body only")
+    assert "Card two body only" not in paired_card_copy(imported.points[0], 0)[1]
+    assert HUMAN_REQUIRED_BODY.startswith("Attack drones are still directed by pilots using")
+    assert "joysticks" in HUMAN_REQUIRED_BODY
+
+    script = EditScript.empty()
+    attach_talk_sheet(script, imported)
+    script = enforce_pacing(script, 180.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, script.talk_sheet)
+
+    w0, w1 = point_windows(script)[0]
+    overlays = [
+        scene
+        for scene in script.scenes
+        if scene.role == "body"
+        and scene.layout is PictureTag.OVERLAY
+        and scene.start < w1
+        and scene.end > w0
+    ]
+    assert len(overlays) >= 3
+    assert overlays[0].graphic.kicker == HUMAN_REQUIRED_KICKER
+    assert overlays[0].graphic.title == HUMAN_REQUIRED_BODY
+    assert overlays[1].graphic.kicker == "NOT AUTONOMOUS"
+    assert overlays[1].graphic.title == "Card two body only"
+    assert overlays[0].graphic.title != overlays[1].graphic.title
+    assert "Card two body only" not in overlays[0].graphic.title
+    assert overlays[0].graphic.title.endswith("using") is False
+    assert "joysticks" in overlays[0].graphic.title
+
+    inner_w = OVERLAY_W - 2 * OVERLAY_PAD
+    font, lines, size = _fit_headline(
+        overlays[0].graphic.title,
+        KitScale(1920, 1080),
+        inner_w,
+        max_lines=2,
+    )
+    joined = " ".join(lines)
+    assert "using" in joined
+    assert "joysticks" in joined
+    assert "feed" in joined
+    assert size < 40
+    draw = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+    assert draw.textlength(lines[0], font=font) >= inner_w * 0.85
+
+    chrome = render_overlay(
+        (1920, 1080),
+        kicker=overlays[0].graphic.kicker,
+        headline=overlays[0].graphic.title,
+    )
+    assert chrome[:, :, 3].max() > 80
+    wrong = render_overlay(
+        (1920, 1080),
+        kicker=HUMAN_REQUIRED_KICKER,
+        headline="Card two body only",
+    )
+    assert not (chrome == wrong).all()
