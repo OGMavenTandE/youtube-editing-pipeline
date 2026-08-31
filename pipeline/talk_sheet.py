@@ -364,6 +364,60 @@ def resolve_auto_kicker(
     return derive_kicker(headline, said=said, platform=platform)
 
 
+def _norm_label(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).casefold()
+
+
+def _is_point_image_text(text: str, point: TalkPoint) -> bool:
+    """True when overlay gold is the still title, including a longer typed variant."""
+    image = _norm_label(point.image_text)
+    label = _norm_label(text)
+    if not image or not label:
+        return False
+    if label == image:
+        return True
+    if len(image) < 16 and len(image.split()) < 5:
+        return False
+    return image in label or label in image
+
+
+def _overlay_kicker_for_card(point: TalkPoint, card_i: int, scene: Scene, allowed: str) -> str:
+    """Card Title is the gold kicker. Image text never fills this slot."""
+    headline = point.cards[card_i].strip() or scene.graphic.title
+    if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
+        return point.titles[card_i]
+    candidate = point.titles[card_i].strip()
+    if candidate and _is_point_image_text(candidate, point):
+        candidate = ""
+    return resolve_auto_kicker(
+        candidate,
+        headline=headline,
+        said=scene.said,
+        platform=point.platform,
+        allowed=allowed,
+    )
+
+
+def _strip_image_text_from_overlay(scene: Scene, sheet: TalkSheet) -> None:
+    """Hard wall: still image text cannot be the overlay gold line."""
+    if scene.layout is not PictureTag.OVERLAY or scene.role != "body":
+        return
+    for point in sheet.points:
+        if not _is_point_image_text(scene.graphic.kicker, point):
+            continue
+        replacement = ""
+        for card_i, title in enumerate(point.titles):
+            if point.title_locked(card_i) and title.strip() and not _is_point_image_text(title, point):
+                replacement = title
+                break
+        scene.graphic.kicker = replacement or derive_kicker(
+            point.cards[0].strip() or scene.graphic.title,
+            said=scene.said,
+            platform=point.platform,
+        )
+        return
+
+
 def sheet_source_text(sheet: TalkSheet, transcript: str = "") -> str:
     parts = [sheet.title, sheet.exec_headline, sheet.exec_notes, transcript]
     for point in sheet.points:
@@ -679,7 +733,9 @@ def autofill_talk_sheet(
             if not point.title_locked(card_i):
                 headline = point.cards[card_i] or (scene.graphic.title if scene else "")
                 said = scene.said if scene is not None else ""
-                candidate = point.titles[card_i] or (scene.graphic.kicker if scene else "")
+                candidate = point.titles[card_i].strip()
+                if candidate and _is_point_image_text(candidate, point):
+                    candidate = ""
                 if headline.strip() or candidate.strip():
                     point.titles[card_i] = resolve_auto_kicker(
                         candidate,
@@ -872,6 +928,7 @@ def _ensure_pip_slot(script: EditScript, start: float, end: float, min_hold: flo
     for scene in current:
         if scene.layout is PictureTag.PIP:
             _grow_pip_into_nothing(script, scene, min_hold, window=(start, end))
+            _cap_pip_at_hold(script, scene, min_hold)
             return scene
     nothings = [scene for scene in current if scene.layout is PictureTag.NOTHING]
     host = nothings[0] if nothings else None
@@ -884,8 +941,14 @@ def _ensure_pip_slot(script: EditScript, start: float, end: float, min_hold: flo
     pip_end = pip_start + min(max(min_hold, 0.4), available if available > 0 else max(min_hold, 0.4))
     pip_end = min(pip_end, host.end)
     if pip_end - pip_start < 0.05:
-        host.layout = PictureTag.PIP
-        return host
+        if host.end - host.start <= min_hold + 0.05:
+            host.layout = PictureTag.PIP
+            return host
+        pip_start = max(host.start, start)
+        pip_end = min(host.end, pip_start + max(min_hold, 0.4))
+        if pip_end - pip_start < 0.05:
+            host.layout = PictureTag.PIP
+            return host
     parts: list[Scene] = []
     if pip_start - host.start >= 0.05:
         left = host.model_copy(deep=True)
@@ -913,11 +976,13 @@ def _grow_pip_into_nothing(
     *,
     window: tuple[float, float] | None = None,
 ) -> None:
-    """Lengthen a short PiP using adjacent nothing only. Overlay duration stays put."""
+    """Lengthen a short PiP using adjacent nothing only, never past the hold cap."""
     needed = min_hold - (pip.end - pip.start)
     if needed <= 1e-6:
         return
     w0, w1 = window if window is not None else (0.0, 1e9)
+    max_end = pip.start + min_hold
+    min_start = pip.end - min_hold
     scenes = script.scenes
     try:
         index = scenes.index(pip)
@@ -930,7 +995,7 @@ def _grow_pip_into_nothing(
             and nxt.layout is PictureTag.NOTHING
             and abs(nxt.start - pip.end) < 0.06
         ):
-            take = min(needed, max(0.0, min(nxt.end, w1) - max(nxt.start, pip.end)))
+            take = min(needed, max(0.0, min(nxt.end, w1, max_end) - max(nxt.start, pip.end)))
             if take > 0.04:
                 pip.end += take
                 nxt.start += take
@@ -946,7 +1011,7 @@ def _grow_pip_into_nothing(
             and prev.layout is PictureTag.NOTHING
             and abs(prev.end - pip.start) < 0.06
         ):
-            take = min(needed, max(0.0, min(pip.start, prev.end) - max(prev.start, w0)))
+            take = min(needed, max(0.0, min(pip.start, prev.end) - max(prev.start, w0, min_start)))
             if take > 0.04:
                 pip.start -= take
                 prev.end -= take
@@ -954,15 +1019,49 @@ def _grow_pip_into_nothing(
                     scenes.pop(index - 1)
 
 
+def _cap_pip_at_hold(script: EditScript, pip: Scene, hold: float) -> None:
+    """Cut a long still back to the hold. Remainder becomes full-frame host."""
+    if pip.end - pip.start <= hold + 1e-6:
+        return
+    cut = pip.start + hold
+    try:
+        index = script.scenes.index(pip)
+    except ValueError:
+        return
+    if index + 1 < len(script.scenes):
+        nxt = script.scenes[index + 1]
+        if (
+            nxt.role == "body"
+            and nxt.layout is PictureTag.NOTHING
+            and abs(nxt.start - pip.end) < 0.06
+        ):
+            pip.end = cut
+            nxt.start = cut
+            return
+    tail = pip.model_copy(deep=True)
+    pip.end = cut
+    tail.start = cut
+    tail.layout = PictureTag.NOTHING
+    tail.graphic = GraphicCard()
+    tail.asset_ref = None
+    tail.asset_kind = "none"
+    script.scenes.insert(index + 1, tail)
+
+
 def enforce_pip_holds(script: EditScript, min_hold: float = PIP_HOLD_SECONDS) -> EditScript:
-    """Default still hold is long enough to read the image title twice, then cut."""
+    """Still hold is readable twice, then a hard cut back to full-frame host."""
     hold = max(4.0, float(min_hold or PIP_HOLD_SECONDS))
     for scene in list(script.scenes):
         if scene.role != "body" or scene.layout is not PictureTag.PIP:
             continue
-        if scene.end - scene.start + 1e-6 >= hold:
+        duration = scene.end - scene.start
+        if duration > hold + 1e-6:
+            _cap_pip_at_hold(script, scene, hold)
             continue
-        _grow_pip_into_nothing(script, scene, hold)
+        if duration + 1e-6 < hold:
+            _grow_pip_into_nothing(script, scene, hold)
+            if scene.end - scene.start > hold + 1e-6:
+                _cap_pip_at_hold(script, scene, hold)
     script.scenes.sort(key=lambda item: (item.start, item.end))
     return script
 
@@ -979,19 +1078,13 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
             if scene.layout is PictureTag.OVERLAY
         ]
         for card_i, scene in zip(range(TALK_CARDS_PER_POINT), overlays):
-            if point.title_locked(card_i):
+            scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
+            if point.title_locked(card_i) and not _is_point_image_text(point.titles[card_i], point):
                 scene.graphic.kicker = point.titles[card_i]
-                locked_ids.add(id(scene))
-            elif point.titles[card_i].strip() or scene.graphic.kicker.strip() or scene.graphic.title.strip():
-                scene.graphic.kicker = resolve_auto_kicker(
-                    point.titles[card_i] or scene.graphic.kicker,
-                    headline=point.cards[card_i] or scene.graphic.title,
-                    said=scene.said,
-                    platform=point.platform,
-                    allowed=allowed,
-                )
-                if point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+            elif point.titles[card_i].strip() and point.title_sources[card_i] == "auto":
+                if not _is_point_image_text(scene.graphic.kicker, point):
                     point.titles[card_i] = scene.graphic.kicker
+            locked_ids.add(id(scene))
         for scene in _scenes_in_window(script, w0, w1):
             if scene.layout is not PictureTag.PIP:
                 continue
@@ -1015,12 +1108,15 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
         if scene.role != "body" or id(scene) in locked_ids:
             continue
         if scene.layout is PictureTag.OVERLAY:
-            scene.graphic.kicker = resolve_auto_kicker(
-                scene.graphic.kicker,
-                headline=scene.graphic.title,
-                said=scene.said,
-                allowed=allowed,
-            )
+            if any(_is_point_image_text(scene.graphic.kicker, point) for point in sheet.points):
+                _strip_image_text_from_overlay(scene, sheet)
+            else:
+                scene.graphic.kicker = resolve_auto_kicker(
+                    scene.graphic.kicker,
+                    headline=scene.graphic.title,
+                    said=scene.said,
+                    allowed=allowed,
+                )
         elif scene.layout is PictureTag.PIP:
             scene.graphic.kicker = resolve_auto_kicker(
                 scene.graphic.kicker,
@@ -1029,6 +1125,9 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
                 platform=scene.graphic.still_query,
                 allowed=allowed,
             )
+    for scene in script.scenes:
+        if scene.role == "body" and scene.layout is PictureTag.OVERLAY:
+            _strip_image_text_from_overlay(scene, sheet)
     return script
 
 
@@ -1167,16 +1266,7 @@ def _stamp_overlay(
     headline = point.cards[card_i].strip()
     if headline:
         scene.graphic.title = headline
-    if point.title_locked(card_i):
-        scene.graphic.kicker = point.titles[card_i]
-    else:
-        scene.graphic.kicker = resolve_auto_kicker(
-            point.titles[card_i] or scene.graphic.kicker,
-            headline=headline or scene.graphic.title,
-            said=scene.said,
-            platform=point.platform,
-            allowed=allowed,
-        )
+    scene.graphic.kicker = _overlay_kicker_for_card(point, card_i, scene, allowed)
     if not scene.graphic.kicker.strip():
         scene.graphic.kicker = derive_kicker(
             headline or scene.graphic.title,

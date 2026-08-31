@@ -44,8 +44,8 @@ No third font, no extra colors, no TAKEAWAY pills.
 Full 16:9 still fills the frame (DVIDS named-platform file first).
 Nano Banana 2 is a stub that may fill the **image slot only**. Prefer skip PiP if there is no still.
 Host: entire talking-head frame scaled into a 560x315 16:9 window, margin 40, radius 16, gold 3px border.
-Left third type over a dark left-to-right gradient: gold image text from the talk-sheet still field, white sub, optional quote.
-PiP / still beats hold `PIP_HOLD_SECONDS` (default 8s) so the title can be read twice. Overlay and talking-head defaults stay put. Grow a short PiP into adjacent `nothing` only.
+Same Nate plate as overlay cards: dark rounded box, Inter, gold image text from the talk-sheet still field, white wrap if the title is two lines. No bare gold type on the still. No left-third gradient-only treatment.
+PiP / still beats hold `PIP_HOLD_SECONDS` (default 8s) so the title can be read twice, then a hard cut back to full-frame host. Do not grow into adjacent `nothing` past that cap. Overlay duration stays put. Image text never fills an overlay-card kicker.
 
 ### bookends (open + close)
 

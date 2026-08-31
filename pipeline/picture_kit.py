@@ -27,6 +27,7 @@ from pipeline.layouts import (
     WHITE_RGBA,
     lower_third_rect,
     overlay_rect,
+    pip_rect,
 )
 
 if TYPE_CHECKING:
@@ -137,7 +138,11 @@ def _wrap_px(
     if current and len(lines) < max_lines:
         lines.append(current)
     elif current and lines:
-        lines[-1] = (lines[-1] + " " + current).strip()
+        trial = (lines[-1] + " " + current).strip()
+        if draw.textlength(trial, font=font) <= max_width:
+            lines[-1] = trial
+        else:
+            lines[-1] = lines[-1]
     return lines[:max_lines] or [""]
 
 
@@ -150,14 +155,80 @@ def _fit_headline(
     start: int = 40,
     floor: int = 26,
 ) -> tuple[ImageFont.ImageFont, list[str], int]:
+    text = (text or "").strip()
+    if not text:
+        font = load_inter(scale.px(floor), bold=True)
+        return font, [], scale.px(floor)
     for size in range(start, floor - 1, -2):
         font = load_inter(scale.px(size), bold=True)
         lines = _wrap_px(text, font, max_width, max_lines=max_lines)
         draw = ImageDraw.Draw(_blank((4, 4)))
         if all(draw.textlength(line, font=font) <= max_width + 1 for line in lines if line):
-            return font, lines, scale.px(size)
+            return font, [ln for ln in lines if ln], scale.px(size)
     font = load_inter(scale.px(floor), bold=True)
-    return font, _wrap_px(text, font, max_width, max_lines=max_lines), scale.px(floor)
+    return font, [ln for ln in _wrap_px(text, font, max_width, max_lines=max_lines) if ln], scale.px(floor)
+
+
+def _fit_lines(
+    text: str,
+    scale: KitScale,
+    max_width: int,
+    *,
+    max_lines: int = 2,
+    start: int = 16,
+    floor: int = 12,
+    bold: bool = True,
+) -> list[tuple[ImageFont.ImageFont, str, int]]:
+    """Wrap first. Shrink a leftover long word rather than clip it."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    draw = ImageDraw.Draw(_blank((4, 4)))
+    chosen_font = load_inter(scale.px(floor), bold=bold)
+    chosen_lines = _wrap_px(text, chosen_font, max_width, max_lines=max_lines)
+    chosen_size = scale.px(floor)
+    for size in range(start, floor - 1, -1):
+        font = load_inter(scale.px(size), bold=bold)
+        lines = _wrap_px(text, font, max_width, max_lines=max_lines)
+        if all(draw.textlength(line, font=font) <= max_width for line in lines if line):
+            chosen_font, chosen_lines, chosen_size = font, lines, scale.px(size)
+            break
+    fitted: list[tuple[ImageFont.ImageFont, str, int]] = []
+    for line in chosen_lines:
+        if not line:
+            continue
+        if draw.textlength(line, font=chosen_font) <= max_width:
+            fitted.append((chosen_font, line, chosen_size))
+            continue
+        line_font = load_inter(scale.px(12), bold=bold)
+        line_size = scale.px(12)
+        for size in range(max(int(round(chosen_size / max(scale.s, 1e-6))), 12), 11, -1):
+            font = load_inter(scale.px(size), bold=bold)
+            if draw.textlength(line, font=font) <= max_width + 1:
+                line_font, line_size = font, scale.px(size)
+                break
+        fitted.append((line_font, line, line_size))
+    return fitted
+
+
+def _split_title_for_plate(text: str, scale: KitScale, max_width: int) -> tuple[str, str]:
+    """Short titles stay one gold line. Longer copy wraps: gold first, white rest."""
+    text = (text or "").strip()
+    if not text:
+        return "", ""
+    font = load_inter(scale.px(16), bold=True)
+    draw = ImageDraw.Draw(_blank((4, 4)))
+    words = text.split()
+    comfortable = max(scale.px(80), max_width - scale.px(12))
+    if len(words) <= 4 and draw.textlength(text.upper(), font=font) <= comfortable:
+        return text, ""
+    lines = [ln for ln in _wrap_px(text, font, comfortable, max_lines=3) if ln]
+    if len(lines) <= 1 and len(words) >= 5:
+        mid = max(3, min(5, (len(words) + 1) // 2))
+        return " ".join(words[:mid]), " ".join(words[mid:])
+    if len(lines) <= 1:
+        return text, ""
+    return lines[0], "\n".join(lines[1:])
 
 
 def draw_icon(name: str, size: int) -> Image.Image:
@@ -246,16 +317,26 @@ def render_overlay(
     draw = ImageDraw.Draw(img)
     x0, y0, plate_w, _ = overlay_rect(width, height)
     pad = scale.px(OVERLAY_PAD)
-    icon_s = scale.px(OVERLAY_ICON)
+    show_icon = bool((icon or "").strip())
+    icon_s = scale.px(OVERLAY_ICON) if show_icon else 0
+    inner_w = plate_w - 2 * pad
+    pip_x, pip_y, _, _ = pip_rect(width, height)
+    max_plate_bottom = pip_y - scale.px(24)
+    max_plate_right = min(x0 + plate_w, pip_x - scale.px(24), width - scale.px(24))
+    plate_w = max(scale.px(160), max_plate_right - x0)
     inner_w = plate_w - 2 * pad
 
-    kicker_font = load_inter(scale.px(16), bold=True)
     kicker_text = (kicker or "").strip().upper()
-    head_font, head_lines, head_size = _fit_headline(headline.strip(), scale, inner_w)
+    kicker_lines = _fit_lines(kicker_text, scale, inner_w, max_lines=2, start=16, floor=12)
+    head_font, head_lines, head_size = _fit_headline((headline or "").strip(), scale, inner_w)
     line_gap = max(4, scale.px(8))
-    kicker_h = scale.px(20) if kicker_text else 0
-    head_h = len([ln for ln in head_lines if ln]) * (head_size + line_gap)
-    plate_h = pad + kicker_h + (scale.px(10) if kicker_text else 0) + head_h + scale.px(18) + icon_s + pad
+    kicker_gap = scale.px(10) if kicker_lines and head_lines else 0
+    kicker_h = sum(size + scale.px(4) for _, _, size in kicker_lines)
+    head_h = len(head_lines) * (head_size + line_gap)
+    icon_block = (scale.px(18) + icon_s) if show_icon else 0
+    plate_h = pad + kicker_h + kicker_gap + head_h + icon_block + pad
+    if y0 + plate_h > max_plate_bottom:
+        plate_h = max(pad * 2 + scale.px(40), max_plate_bottom - y0)
 
     draw.rounded_rectangle(
         (x0, y0, x0 + plate_w, y0 + plate_h),
@@ -263,16 +344,19 @@ def render_overlay(
         fill=DARK_PLATE,
     )
     tx, ty = x0 + pad, y0 + pad
-    if kicker_text:
-        draw.text((tx, ty), kicker_text, font=kicker_font, fill=GOLD_RGBA)
-        ty += kicker_h + scale.px(10)
+    for font, line, size in kicker_lines:
+        draw.text((tx, ty), line, font=font, fill=GOLD_RGBA)
+        ty += size + scale.px(4)
+    if kicker_lines and head_lines:
+        ty += kicker_gap
     for line in head_lines:
-        if not line:
-            continue
+        if ty + head_size > y0 + plate_h - pad - (icon_s if show_icon else 0):
+            break
         draw.text((tx, ty), line, font=head_font, fill=WHITE_RGBA)
         ty += head_size + line_gap
-    icon_img = draw_icon(icon, icon_s)
-    img.alpha_composite(icon_img, (x0 + pad, y0 + plate_h - pad - icon_s))
+    if show_icon:
+        icon_img = draw_icon(icon, icon_s)
+        img.alpha_composite(icon_img, (x0 + pad, y0 + plate_h - pad - icon_s))
     return np.array(img)
 
 
@@ -352,50 +436,19 @@ def render_pip_type(
     sub: str,
     quote: str = "",
 ) -> np.ndarray:
-    """Left-third type over a dark left-to-right gradient. No host chrome here."""
+    """Same Nate plate as overlay cards. Image text stays on the plate, never bare type."""
     width, height = size
     scale = KitScale(width, height)
-    img = _blank(size)
-    fade_w = int(width * 0.46)
-    for x in range(fade_w):
-        t = x / max(1, fade_w - 1)
-        alpha = int(200 * (1.0 - t) ** 1.15)
-        if alpha <= 0:
-            continue
-        ImageDraw.Draw(img).line([(x, 0), (x, height)], fill=(8, 10, 14, alpha))
-
-    draw = ImageDraw.Draw(img)
-    bar_x = scale.xx(56)
-    bar_w = scale.px(6)
-    text_x = bar_x + bar_w + scale.px(22)
-    text_w = int(width * 0.38)
-    y = int(height * 0.22)
-
-    draw.rectangle((bar_x, y, bar_x + bar_w, y + scale.yy(280)), fill=GOLD_RGBA)
-
-    kicker_font = load_inter(scale.px(72), bold=True)
-    sub_font = load_inter(scale.px(32), bold=False)
-    quote_font = load_inter(scale.px(22), bold=False)
-
-    kicker_text = (kicker or "").strip()
-    draw.text((text_x, y), kicker_text, font=kicker_font, fill=GOLD_RGBA)
-    y += scale.px(88)
-    if sub.strip():
-        for line in _wrap_px(sub.strip(), sub_font, text_w, max_lines=2):
-            draw.text((text_x, y), line, font=sub_font, fill=WHITE_RGBA)
-            y += scale.px(40)
-    y += scale.px(8)
-    rule_w = scale.px(64)
-    draw.rectangle((text_x, y, text_x + rule_w, y + scale.px(3)), fill=GOLD_RGBA)
-    y += scale.px(18)
-    if quote.strip():
-        q = quote.strip()
-        if not (q.startswith('"') or q.startswith("“")):
-            q = f"“{q}”" if q[-1:] not in {".", "!", "?"} else f"“{q[:-1]}”"
-        for line in _wrap_px(q, quote_font, text_w, max_lines=3):
-            draw.text((text_x, y), line, font=quote_font, fill=WHITE_RGBA)
-            y += scale.px(30)
-    return np.array(img)
+    x0, _, plate_w, _ = overlay_rect(width, height)
+    inner_w = plate_w - 2 * scale.px(OVERLAY_PAD)
+    title = (kicker or "").strip()
+    extra_parts = [part for part in ((sub or "").strip(), (quote or "").strip()) if part]
+    extra = "\n".join(extra_parts)
+    if extra:
+        gold, white = title, extra
+    else:
+        gold, white = _split_title_for_plate(title, scale, inner_w)
+    return render_overlay(size, kicker=gold, headline=white, icon="bar_chart")
 
 
 def default_identity() -> HostIdentity:
