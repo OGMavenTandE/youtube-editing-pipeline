@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from desktop.config_store import AppConfig, load_config, save_config
+from desktop.worker import JobStatus, PendingTalkJob, PipelineWorker, pipeline_argv
+from pipeline.models import TalkSheet
 from desktop.envfile import read_env_value, upsert_env_value
 from desktop.logutil import sanitize_log_line
 from desktop.oauth import OAuthConfigError, parse_client_secret_json
@@ -125,6 +127,142 @@ def test_sanitize_log_redacts_secret_values() -> None:
     assert "[redacted]" in jsonish
     long_token = "token " + ("AbCdEfGh" * 8)
     assert "AbCdEfGh" not in sanitize_log_line(long_token)
+
+
+def test_pipeline_argv_includes_talk_sheet_and_stills(tmp_path: Path) -> None:
+    video = tmp_path / "talk.mp4"
+    sheet = tmp_path / "talk_talk_sheet.json"
+    stills = tmp_path / "stills"
+    argv = pipeline_argv(video, sheet, stills)
+    assert argv == [
+        "--input",
+        str(video),
+        "--talk-sheet",
+        str(sheet),
+        "--broll-dir",
+        str(stills),
+    ]
+
+
+def test_worker_waits_for_talk_sheet_then_continues(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    seen: list[PendingTalkJob] = []
+    worker = PipelineWorker(log=lambda *_: None, status=lambda *_: None, on_talk_sheet=seen.append)
+    pending = PendingTalkJob(
+        file_id="1",
+        name="talk.mp4",
+        stem="talk",
+        video_path=str(tmp_path / "talk.mp4"),
+        stills_dir=str(tmp_path / "stills"),
+        sheet_path=str(tmp_path / "talk_talk_sheet.json"),
+    )
+    result: dict[str, TalkSheet | None] = {}
+
+    def wait() -> None:
+        result["sheet"] = worker._await_talk_sheet(pending, TalkSheet())
+
+    thread = threading.Thread(target=wait, name="await-sheet")
+    thread.start()
+    deadline = time.time() + 2
+    while not seen and time.time() < deadline:
+        time.sleep(0.02)
+    assert seen
+    assert worker.status == JobStatus.TALK_SHEET
+    assert thread.is_alive()
+    filled = TalkSheet(title="FROM FORM", title_source="user")
+    worker.continue_talk_sheet(filled)
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert result["sheet"] is not None
+    assert result["sheet"].title == "FROM FORM"
+
+
+def test_worker_does_not_encode_until_talk_sheet_run(monkeypatch, tmp_path: Path) -> None:
+    import threading
+    import time
+
+    from pipeline.config import Settings
+
+    calls: list[list[str]] = []
+    logs: list[str] = []
+
+    def fake_run(argv: list[str], log) -> int:
+        calls.append(list(argv))
+        studio = tmp_path / "output" / "talk_studio"
+        studio.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    monkeypatch.setattr("desktop.worker.invoke_run_py", fake_run)
+    monkeypatch.setattr("desktop.worker.probe_landscape", lambda *args, **kwargs: True)
+    monkeypatch.setattr("desktop.worker.titles_for_stem", lambda *args, **kwargs: [])
+    monkeypatch.setattr("desktop.worker.last_talk_sheet_path", lambda: tmp_path / "last.json")
+    monkeypatch.setattr("desktop.worker.save_config", lambda cfg: None)
+    monkeypatch.setattr(
+        "desktop.worker.pipeline_settings",
+        lambda: Settings(
+            input_dir=tmp_path / "input",
+            output_dir=tmp_path / "output",
+            work_dir=tmp_path / "work",
+            slides_dir=tmp_path / "slides",
+            scenes_dir=tmp_path / "scenes",
+        ),
+    )
+
+    class Store:
+        def claim(self, *args: object, **kwargs: object) -> bool:
+            return True
+
+        def mark_done(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def mark_error(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def mark_skipped(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    class Client:
+        def claim_file(self, file_id: str) -> bool:
+            return True
+
+        def download_resumable(self, file_id: str, dest: Path, progress=None) -> None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"mp4")
+
+        def upload_studio_package(self, *args: object, **kwargs: object):
+            class Folder:
+                id = "outbox-folder"
+
+            return Folder()
+
+        def move_file(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    class Item:
+        id = "abc"
+        name = "talk.mp4"
+
+    worker = PipelineWorker(log=logs.append, status=lambda *_: None)
+    config = AppConfig(require_talk_sheet=True, broll_dir=str(tmp_path / "stills"))
+    thread = threading.Thread(
+        target=lambda: worker._process(Client(), Store(), config, Item(), "talk"),
+        name="process-job",
+    )
+    thread.start()
+    deadline = time.time() + 3
+    while worker.status != JobStatus.TALK_SHEET and time.time() < deadline:
+        time.sleep(0.02)
+    assert worker.status == JobStatus.TALK_SHEET
+    assert calls == []
+    worker.continue_talk_sheet(TalkSheet())
+    thread.join(timeout=4)
+    assert not thread.is_alive()
+    assert calls
+    assert "--talk-sheet" in calls[0]
+    assert "--broll-dir" in calls[0]
+    assert str(tmp_path / "stills") in calls[0]
 
 
 def test_config_roundtrip(tmp_path: Path) -> None:
