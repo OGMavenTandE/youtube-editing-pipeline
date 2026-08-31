@@ -30,9 +30,9 @@ class Settings(BaseModel):
     gemini_model: str = "gemini-3.6-flash"
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
-    silence_min_duration: float = Field(default=0.7, ge=0.0)
-    silence_padding: float = Field(default=0.15, ge=0.0)
-    silence_threshold_db: float = Field(default=-40.0)
+    silence_min_duration: float = Field(default=1.0, ge=0.0)
+    silence_padding: float = Field(default=0.30, ge=0.0)
+    silence_threshold_db: float = Field(default=-45.0)
     output_width: int = Field(default=1920, ge=16)
     output_height: int = Field(default=1080, ge=16)
     pip_scale: float = Field(default=0.25, gt=0.0, le=0.6)
@@ -104,9 +104,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
         or "gemini-3.6-flash",
         ffmpeg_bin=ffmpeg_bin,
         ffprobe_bin=os.getenv("FFPROBE_PATH") or os.getenv("FFPROBE_BIN") or ffprobe_default,
-        silence_min_duration=float(os.getenv("SILENCE_MIN_DURATION", "0.7")),
-        silence_padding=float(os.getenv("SILENCE_PADDING", "0.15")),
-        silence_threshold_db=float(os.getenv("SILENCE_THRESHOLD_DB", "-40")),
+        silence_min_duration=float(os.getenv("SILENCE_MIN_DURATION", "1.0")),
+        silence_padding=float(os.getenv("SILENCE_PADDING", "0.30")),
+        silence_threshold_db=float(os.getenv("SILENCE_THRESHOLD_DB", "-45")),
         output_width=int(os.getenv("OUTPUT_WIDTH", "1920")),
         output_height=int(os.getenv("OUTPUT_HEIGHT", "1080")),
         pip_scale=float(os.getenv("PIP_SCALE", "0.25")),

@@ -13,6 +13,9 @@ def test_default_canvas_and_pip() -> None:
     assert settings.pip_hold_seconds == 8
     assert settings.host_name == "Scott Mastin"
     assert settings.encode_concurrency == 2
+    assert settings.silence_min_duration == 1.0
+    assert settings.silence_padding == 0.30
+    assert settings.silence_threshold_db == -45.0
 
 
 def test_layout_values() -> None:

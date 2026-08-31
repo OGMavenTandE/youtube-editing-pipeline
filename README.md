@@ -26,7 +26,7 @@ Put your Google AI Studio key in `.env`:
 GEMINI_API_KEY=your_key_here
 ```
 
-Optional env vars: `GEMINI_MODEL` (default `gemini-3.6-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `0.7`), `SILENCE_PADDING` (default `0.15`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`), `TARGET_LUFS` (default `-14`).
+Optional env vars: `GEMINI_MODEL` (default `gemini-3.6-flash`), `FFMPEG_PATH`, `OUTPUT_WIDTH` / `OUTPUT_HEIGHT` (default 1920x1080), `PIP_SCALE` (default `0.25`), `SILENCE_MIN_DURATION` (default `1.0`), `SILENCE_PADDING` (default `0.30`), `SILENCE_THRESHOLD_DB` (default `-45`), `DIRECTOR_CHUNK_THRESHOLD` (default `480`), `DIRECTOR_CHUNK_SECONDS` (default `300`), `TARGET_LUFS` (default `-14`).
 
 ## FFmpeg
 
@@ -163,7 +163,7 @@ Each scene encodes to `work/scenes/<stem>/`. If that file already exists and its
 
 Swapable stages behind `run.py`. They share pydantic models, not implicit dicts.
 
-1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 0.7s, leave 0.15s pad on each side (~0.3s between sentences). Gaps under 0.7s stay. Writes a cut map that matches the file handed to the director. `--auto-editor` is an optional tighter pass; its cut map uses the rendered duration.
+1. `pipeline/silence_remover.py` — pydub energy detect + ffmpeg concat. Strip pauses longer than 1.0s, leave 0.30s pad on each side (~0.6s between sentences). Gaps under 1.0s stay. Energy is measured on a 100ms window so a breath before a word does not eat the onset. Isolated uh/um under 0.35s still drop. Writes a cut map that matches the file handed to the director. `--auto-editor` is an optional tighter pass; its cut map uses the rendered duration.
 2. `pipeline/gemini_director.py` — two Gemini 3.6 Flash passes (`google-genai`, `GEMINI_API_KEY`). First pass transcribes trimmed audio only (inline under 20MB, Files API above that) and writes `*_transcript.json`. Body tags are text-only (`overlay` | `pip` | `nothing`) and do not write YouTube copy. After windows are stitched, a dedicated text-only metadata pass runs on the full transcript and full duration (titles, description, chapters for the whole cut). Bookends are applied in `pacing.py`.
 3. `pipeline/picture_kit.py` — PIL renderer for overlay, PiP type, and bookend chrome. Inter from `pipeline/fonts/`.
 4. `pipeline/stills.py` — DVIDS 16:9 still matcher for PiP. Banana is a stub that may fill the image slot only.
