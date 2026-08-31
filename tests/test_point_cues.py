@@ -154,7 +154,7 @@ def test_point2_locks_to_cue_not_point1(tmp_path: Path) -> None:
     assert point2_pip.end - point2_pip.start <= 8.05
 
     overlays = [scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY]
-    point2_overlays = [scene for scene in overlays if scene.start >= 154]
+    point2_overlays = [scene for scene in overlays if 154 <= scene.start < 200]
     titles = [scene.graphic.title for scene in point2_overlays]
     kickers = [scene.graphic.kicker for scene in point2_overlays]
     assert "point two alpha line" in titles

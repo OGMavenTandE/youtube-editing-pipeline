@@ -19,7 +19,6 @@ from pipeline.models import (
     TALK_POINT_COUNT,
     EditScript,
     GraphicCard,
-    Scene,
     TalkPoint,
     TalkSheet,
     TimedTranscript,
@@ -150,11 +149,14 @@ def find_transcript_hit(
                 continue
             hay = " ".join(item[0] for item in window)
             score = _phrase_score(needle, needle_text, hay)
+            hit_time = window[0][3]
+            if hit_time + 1e-6 < after:
+                hit_time = window[0][1]
             if score > best_score:
                 best_score = score
-                best_time = window[0][1]
+                best_time = hit_time
             if score >= 0.999:
-                return window[0][1]
+                return hit_time
 
     if best_time is not None and best_score >= FUZZY_RATIO:
         return best_time
@@ -296,7 +298,7 @@ def point_windows(
 
 def split_body_at_times(script: EditScript, times: list[float]) -> None:
     """Split body scenes at point boundaries so a long Point 1 pip cannot cover Point 2."""
-    marks = sorted({round(time, 3) for time in times if time > 0})
+    marks = sorted({time for time in times if time > 0})
     for mark in marks:
         _split_body_at(script, mark)
 
@@ -333,8 +335,8 @@ def _word_timeline(
     *,
     after: float,
     before: float,
-) -> list[tuple[str, float, float]]:
-    words: list[tuple[str, float, float]] = []
+) -> list[tuple[str, float, float, float]]:
+    words: list[tuple[str, float, float, float]] = []
     cues = transcript.cues or []
     if not cues and transcript.text.strip():
         cues = [TranscriptCue(start=0.0, end=max(transcript.duration, 0.0), text=transcript.text)]
@@ -349,8 +351,9 @@ def _word_timeline(
         if end <= start:
             continue
         step = (end - start) / max(1, len(tokens))
+        cue_start = cue.start
         for offset, token in enumerate(tokens):
-            words.append((token, start + offset * step, start + (offset + 1) * step))
+            words.append((token, start + offset * step, start + (offset + 1) * step, cue_start))
     return words
 
 
