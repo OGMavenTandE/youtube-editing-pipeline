@@ -19,6 +19,7 @@ from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.media import probe_duration
 from pipeline.models import EditScript, GraphicCard, MicroEvent, Scene
+from pipeline.shotlist import compose_mode, scene_has_visual
 
 
 def test_pip_rect_is_16x9_lower_right() -> None:
@@ -75,13 +76,25 @@ def test_render_three_layouts(tmp_path: Path | None = None) -> None:
                 start=1,
                 end=2,
                 layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                graphic=GraphicCard(title="List", asset_path=str(pip_slide)),
+                asset_kind="card",
+                graphic=GraphicCard(
+                    kicker="List",
+                    title="List",
+                    bullets=["One", "Two"],
+                    asset_path=str(pip_slide),
+                ),
             ),
             Scene(
                 start=2,
                 end=3,
                 layout=LayoutKind.SPLIT_TOP,
-                graphic=GraphicCard(title="Claim", asset_path=str(split_slide)),
+                asset_kind="card",
+                graphic=GraphicCard(
+                    kicker="Claim",
+                    title="Claim",
+                    bullets=["One", "Two"],
+                    asset_path=str(split_slide),
+                ),
             ),
         ]
     )
@@ -151,6 +164,74 @@ def test_two_scenes_do_not_poison_source_audio_reader(
     assert resumed[0] == parts[0]
     assert resumed[1].is_file()
     assert resumed[1].stat().st_size > 0
+
+
+def test_broll_cutaway_is_full_frame_not_pip(tmp_path: Path) -> None:
+    _require_ffmpeg()
+    source = tmp_path / "source.mp4"
+    broll = tmp_path / "dvids-clip.mp4"
+    _write_source_video(source, seconds=2)
+    _write_source_video(broll, seconds=2)
+    settings = Settings(
+        output_width=640,
+        output_height=360,
+        work_dir=tmp_path,
+        output_dir=tmp_path,
+        slides_dir=tmp_path,
+        scenes_dir=tmp_path / "scenes",
+    )
+    scene = Scene(
+        start=0,
+        end=2,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        asset_kind="broll",
+        asset_ref=str(broll),
+        graphic=GraphicCard(title="DVIDS"),
+    )
+    script = EditScript(scenes=[scene])
+    canvas = (settings.output_width, settings.output_height)
+    scene_dir = (settings.scenes_dir / source.stem).resolve()
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    parts = _encode_scenes(source, script, script.scenes, scene_dir, settings, canvas)
+    assert len(parts) == 1
+    assert parts[0].is_file()
+    assert script.scenes[0].asset_kind == "broll"
+    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
+    assert compose_mode(script.scenes[0]) == "cutaway"
+
+
+def test_none_asset_means_no_slide_overlay(tmp_path: Path) -> None:
+    _require_ffmpeg()
+    source = tmp_path / "source.mp4"
+    leftover = tmp_path / "leftover.png"
+    _write_source_video(source, seconds=2)
+    _write_slide(leftover, kind="pip")
+    settings = Settings(
+        output_width=640,
+        output_height=360,
+        work_dir=tmp_path,
+        output_dir=tmp_path,
+        slides_dir=tmp_path,
+        scenes_dir=tmp_path / "scenes",
+    )
+    scene = Scene(
+        start=0,
+        end=2,
+        layout=LayoutKind.PIP_BOTTOM_RIGHT,
+        asset_kind="none",
+        graphic=GraphicCard(title="Empty", asset_path=str(leftover)),
+    )
+    script = EditScript(scenes=[scene])
+    canvas = (settings.output_width, settings.output_height)
+    scene_dir = (settings.scenes_dir / source.stem).resolve()
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    parts = _encode_scenes(source, script, script.scenes, scene_dir, settings, canvas)
+    assert len(parts) == 1
+    assert parts[0].is_file()
+    assert script.scenes[0].asset_kind == "none"
+    assert script.scenes[0].layout is LayoutKind.FULL_FRAME
+    assert not scene_has_visual(script.scenes[0])
+    assert script.scenes[0].graphic.asset_path == ""
 
 
 def test_scene_cache_skips_when_fingerprint_matches() -> None:

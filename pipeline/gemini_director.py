@@ -26,6 +26,7 @@ from pipeline.models import (
     YouTubeMetadata,
 )
 from pipeline.pacing import expected_scene_range
+from pipeline.shotlist import resolve_edit_script
 
 logger = logging.getLogger(__name__)
 
@@ -79,32 +80,53 @@ Do not summarize. Do not invent words that were not spoken.
 """
 
 _DIRECTOR_PROMPT = """\
-You are the director for a talking-head YouTube edit.
+You are the producer/director for a Nate-style talking-head-first YouTube edit.
 
 You receive a timed transcript of the trimmed video. The webcam is a static
 landscape talking-head shot. Do not request video frames.
 
-A scene is a visual beat, usually 8 to 25 seconds. Plan scenes that cover
+v1 bible: full-frame host. Commentary over artifacts. Something appears on
+screen only when you can name a real artifact. Do not rotate FULL / PIP /
+SPLIT for variety. Do not invent title-only slides. Do not invent a browser
+window, site chrome, or Screen Studio / Jack mockup.
+
+A scene is a spoken beat, usually 8 to 25 seconds. Plan scenes that cover
 the assigned window with no gaps and no overlaps. Do not emit one scene for
 the whole file. Do not emit micro-events (punch-in, text flash, extra cuts).
 Those are added later in code.
 
 Use absolute timestamps in seconds on the full video timeline.
 
-Layouts (pick from content, never rotate A-B-C):
-- FULL_FRAME: webcam fills the frame. Default for stories, asides, transitions.
-- PIP_BOTTOM_RIGHT: generated slide fills the frame, webcam as a lower-right
-  bubble. Use when a list, definition, number, or named idea is on screen.
-- SPLIT_TOP: webcam on top two-thirds, graphic on the bottom third. Use for
-  one big claim, a quote, or a named concept.
+For every scene fill the shot list:
+- said: what is spoken on this beat (short, from the transcript)
+- shown: what is on screen, in words (webcam, a named clip, or the card)
+- asset_kind: one of none | broll | site | card
+- asset_ref: optional local file path or URL
 
-Never use the same layout three times in a row.
-Every scene needs a short reason (why this layout here).
-Every scene needs a graphic card:
-- title: 3 to 8 words
-- bullets: 0 to 3 short lines
-- lower_third_title / lower_third_subtitle: optional name lines
-- slide_id: stable id like slide_001
+Asset rules (strict):
+- none: default. You cannot name a real artifact. Layout MUST be FULL_FRAME.
+  graphic may be empty. The compositor shows full-frame webcam and NO slide.
+- broll: only if you can name a local / DVIDS file that exists. Put that
+  path in asset_ref. Layout MUST be FULL_FRAME. The compositor plays that
+  file as a full-frame cutaway (covers the face). Host audio continues.
+  If the file is missing, use none. Do not invent a graphic.
+- site: only if you can name a real company/org URL. If there is no local
+  screenshot file, asset_kind MUST be none. Do not invent a browser.
+- card: only if this beat is a named concept that deserves a dense
+  Nate-style card. Then graphic MUST have:
+  - kicker: short eyebrow (who / what / context)
+  - title: headline
+  - bullets: 2 to 5 facts (not a restated title)
+  Title-only cards are forbidden. If you cannot fill kicker + headline +
+  facts, asset_kind MUST be none. Card is the only additive on-camera
+  graphic (existing HTML slide, PIP or SPLIT).
+
+Layouts:
+- FULL_FRAME: required for none and for broll cutaways.
+- PIP_BOTTOM_RIGHT / SPLIT_TOP: only when asset_kind is card.
+
+Every scene needs a short reason. Talking-head none scenes in a row are
+correct.
 
 Do not write YouTube titles, description, chapters, or tags here.
 Return empty metadata. A later pass writes packaging for the full cut.
@@ -359,7 +381,10 @@ def stitch_director_plans(
                 end=duration,
                 layout=LayoutKind.FULL_FRAME,
                 reason="Fallback: director returned no scenes",
-                graphic=GraphicCard(title="Talking head", slide_id="slide_001"),
+                said="",
+                shown="full-frame webcam",
+                asset_kind="none",
+                graphic=GraphicCard(),
             )
         ]
     # Window metadata is discarded. plan_youtube_metadata owns titles/chapters.
@@ -487,6 +512,10 @@ def _director_user_text(
         f"Plan scenes for this window only: {start:.2f}s to {end:.2f}s.",
         "Use absolute timestamps on the full timeline.",
         f"Aim for about {lo} to {hi} scenes in this window. Cover the window with no gaps.",
+        "Fill said and shown on every scene. Default asset_kind is none.",
+        "Talking-head first. Additive card only for asset_kind card.",
+        "broll with a real file is a FULL_FRAME cutaway. site with no file is none.",
+        "If you cannot name a real artifact, asset_kind is none. No slide.",
         "Omit metadata. Return empty titles, chapters, and tags.",
     ]
     if window_count > 1:
@@ -619,12 +648,13 @@ def plan_from_transcript(
         fallback_title=fallback_title,
         client=api,
     )
-    return EditScript(
+    script = EditScript(
         transcript=transcript.text,
         talking_head_cuts=[],
         scenes=[scene.to_scene() for scene in stitched.scenes],
         metadata=metadata,
     )
+    return resolve_edit_script(script)
 
 
 def plan_youtube_metadata(
@@ -755,14 +785,14 @@ def parse_edit_script(raw: str) -> EditScript:
         if cleaned.startswith("json"):
             cleaned = cleaned[4:].strip()
     try:
-        return EditScript.model_validate_json(cleaned)
+        return resolve_edit_script(EditScript.model_validate_json(cleaned))
     except ValidationError:
         try:
             payload = json.loads(cleaned)
         except json.JSONDecodeError as exc:
             raise GeminiConfigError(f"Gemini JSON was not valid: {exc}") from exc
         try:
-            return EditScript.model_validate(payload)
+            return resolve_edit_script(EditScript.model_validate(payload))
         except ValidationError as exc:
             raise GeminiConfigError(f"Gemini JSON failed schema validation: {exc}") from exc
 

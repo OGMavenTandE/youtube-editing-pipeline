@@ -41,15 +41,8 @@ def test_lazy_three_scene_script_is_split() -> None:
     report = evaluate_pacing(script, duration, settings)
     assert len(script.scenes) >= 50
     assert report.in_band
-    streak = 1
-    max_streak = 1
-    for index in range(1, len(script.scenes)):
-        if script.scenes[index].layout == script.scenes[index - 1].layout:
-            streak += 1
-            max_streak = max(max_streak, streak)
-        else:
-            streak = 1
-    assert max_streak < 3
+    assert all(scene.layout is LayoutKind.FULL_FRAME for scene in script.scenes)
+    assert all(scene.asset_kind == "none" for scene in script.scenes)
 
 
 def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
@@ -62,7 +55,13 @@ def test_pacing_fills_do_not_invent_empty_pip_cards() -> None:
                     start=20,
                     end=40,
                     layout=LayoutKind.PIP_BOTTOM_RIGHT,
-                    graphic=GraphicCard(title="Real card", bullets=["One"], slide_id="real"),
+                    asset_kind="card",
+                    graphic=GraphicCard(
+                        kicker="Real",
+                        title="Real card",
+                        bullets=["One", "Two"],
+                        slide_id="real",
+                    ),
                 )
             ]
         ),

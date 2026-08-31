@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pipeline.broll.base import BrollAsset, BrollKind, BrollSpec
 from pipeline.models import EditScript, Scene
+from pipeline.shotlist import local_asset_path
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 _TOKEN = re.compile(r"[a-z0-9]+")
@@ -93,12 +94,19 @@ def apply_local_broll(script: EditScript, directory: Path | None) -> EditScript:
             cue.asset_path = str(matched.resolve())
 
     for scene in script.scenes:
-        current = scene.graphic.asset_path
-        if current and Path(current).is_file() and Path(current).suffix.lower() in VIDEO_SUFFIXES:
+        if scene.asset_kind not in {"broll", "site"}:
             continue
-        query = scene_broll_query(scene, script)
+        existing = local_asset_path(scene.asset_ref) or local_asset_path(scene.graphic.asset_path)
+        if existing is not None:
+            scene.asset_ref = str(existing)
+            scene.graphic.asset_path = str(existing)
+            continue
+        if scene.asset_kind == "site":
+            continue
+        query = scene.asset_ref or scene.shown or scene_broll_query(scene, script)
         matched = match_local_broll(query, folder)
         if matched is None:
             continue
-        scene.graphic.asset_path = str(matched.resolve())
+        scene.asset_ref = str(matched.resolve())
+        scene.graphic.asset_path = scene.asset_ref
     return script

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pipeline.config import Settings
 from pipeline.layouts import LayoutKind
 from pipeline.models import EditScript, GraphicCard, MicroEvent, MicroEventKind, Scene
+from pipeline.shotlist import scene_has_visual
 
 # Non-repeating cycle. Not A-B-C-A-B-C.
 _LAYOUT_CYCLE = (
@@ -105,7 +106,10 @@ def evaluate_pacing(script: EditScript, duration: float, settings: Settings) -> 
             )
         if index > 0 and scene.layout == scenes[index - 1].layout:
             streak += 1
-            if streak >= settings.max_same_layout_streak:
+            if (
+                streak >= settings.max_same_layout_streak
+                and scene.layout is not LayoutKind.FULL_FRAME
+            ):
                 warnings.append(
                     f"Layout {scene.layout.value} repeats {streak} times starting near {scene.start:.1f}s."
                 )
@@ -228,6 +232,9 @@ def _synthesize_scenes(
                 end=cursor + hold,
                 layout=LayoutKind.FULL_FRAME,
                 reason="pacing-fill",
+                said="",
+                shown="full-frame webcam",
+                asset_kind="none",
                 graphic=graphic.model_copy(deep=True),
             )
         )
@@ -249,8 +256,12 @@ def _split_long_holds(scenes: list[Scene], settings: Settings) -> list[Scene]:
             if scene.end - (cursor + hold) < settings.layout_hold_min:
                 hold = scene.end - cursor
             if part == 0:
-                layout = scene.layout
-            elif graphic_is_real(scene.graphic):
+                layout = (
+                    scene.layout
+                    if scene.asset_kind == "card" and scene_has_visual(scene)
+                    else LayoutKind.FULL_FRAME
+                )
+            elif scene.asset_kind == "card" and scene_has_visual(scene):
                 layout = _next_layout(split[-1].layout if split else scene.layout)
             else:
                 layout = LayoutKind.FULL_FRAME
@@ -272,7 +283,7 @@ def _avoid_triple_layouts(scenes: list[Scene]) -> list[Scene]:
         if scenes[index].layout == scenes[index - 1].layout:
             streak += 1
             if streak >= 3:
-                if graphic_is_real(scenes[index].graphic):
+                if scenes[index].asset_kind == "card" and scene_has_visual(scenes[index]):
                     scenes[index].layout = _next_layout(scenes[index].layout)
                     streak = 1
         else:
