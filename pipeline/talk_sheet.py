@@ -24,6 +24,7 @@ from pipeline.models import (
     Scene,
     TalkPoint,
     TalkSheet,
+    TimedTranscript,
     field_is_locked,
 )
 from pipeline.stills import IMAGE_SUFFIXES, match_local_still
@@ -57,6 +58,10 @@ _IMAGE_TEXT_LINE = re.compile(
 )
 _PLATFORM_LINE = re.compile(
     r"^(?:platform|still(?:\s+query)?|query|hardware)\s*[:\-]\s*(.+)$",
+    re.IGNORECASE,
+)
+_START_CUE_LINE = re.compile(
+    r"^(?:starts?\s+when\s+i\s+say|start(?:s)?\s+cue|spoken\s+cue)\s*[:\-]\s*(.*)$",
     re.IGNORECASE,
 )
 _CARD_LINE = re.compile(r"^(?:card\s*)(\d)\s*[:\-]\s*(.+)$", re.IGNORECASE)
@@ -121,6 +126,7 @@ Title plus the two-line thesis. Not painted.
 
 ## Point 1
 Platform: MQ-9 Reaper
+Starts when I say: first unique opener
 Image title: MQ-9 REAPER
 Image text: Reaper on station
 Title 1: THE MONEY
@@ -132,6 +138,7 @@ Title 3: STACKING
 
 ## Point 2
 Platform: M1 Abrams
+Starts when I say: second unique opener
 Image title: M1 ABRAMS
 Image text: The vehicle is the named still.
 Title 1: NAMED STILL
@@ -140,6 +147,7 @@ Title 1: NAMED STILL
 
 ## Point 3
 Platform: Patriot
+Starts when I say: third unique opener
 Image title: PATRIOT
 Image text: Battery on the pad.
 Title 1: LAST POINT
@@ -456,6 +464,7 @@ def apply_point_form_values(
     point: TalkPoint,
     *,
     platform: str = "",
+    start_cue: str = "",
     image_title: str = "",
     image_text: str = "",
     titles: list[str] | None = None,
@@ -465,6 +474,11 @@ def apply_point_form_values(
     platform, platform_source = collect_form_text(platform, point.platform, point.platform_source)
     point.platform = platform
     point.platform_source = platform_source
+    start_cue, start_cue_source = collect_form_text(
+        start_cue, point.start_cue, point.start_cue_source
+    )
+    point.start_cue = start_cue
+    point.start_cue_source = start_cue_source
     image_title, image_title_source = collect_form_text(
         image_title, point.image_title, point.image_title_source
     )
@@ -579,6 +593,7 @@ def sheet_source_text(sheet: TalkSheet, transcript: str = "") -> str:
     parts = [sheet.title, sheet.exec_headline, sheet.exec_notes, transcript]
     for point in sheet.points:
         parts.append(point.platform)
+        parts.append(point.start_cue)
         parts.append(point.image_title)
         parts.append(point.image_text)
         parts.extend(point.titles)
@@ -603,6 +618,8 @@ def talk_sheet_to_markdown(sheet: TalkSheet) -> str:
         lines.append(f"Spoken notes: {sheet.exec_notes.strip()}")
     for index, point in enumerate(sheet.points, start=1):
         lines.extend(["", f"## Point {index}", f"Platform: {point.platform}".rstrip()])
+        if point.start_cue.strip():
+            lines.append(f"Starts when I say: {point.start_cue}".rstrip())
         lines.append(f"Image title: {point.image_title}".rstrip())
         lines.append(f"Image text: {point.image_text}".rstrip())
         for card_i in range(TALK_CARDS_PER_POINT):
@@ -711,6 +728,13 @@ def parse_talk_sheet_markdown(text: str, *, base: TalkSheet | None = None) -> Ta
             _set_platform(sheet, point_index, platform_match.group(1))
             continue
 
+        cue_match = _START_CUE_LINE.match(stripped)
+        if cue_match and section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
+            leftover_cue = cue_match.group(1).strip()
+            if leftover_cue:
+                _set_start_cue(sheet, point_index, leftover_cue)
+            continue
+
         card_match = _CARD_LINE.match(stripped)
         if card_match and section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
             _set_card(sheet, point_index, int(card_match.group(1)), card_match.group(2))
@@ -801,6 +825,10 @@ def merge_talk_sheet(base: TalkSheet, incoming: TalkSheet) -> TalkSheet:
             if src.image_text.strip():
                 dest.image_text = src.image_text.strip()
                 dest.image_text_source = src.image_text_source
+        if src.start_cue_locked() or (src.start_cue.strip() and not dest.start_cue_locked()):
+            if src.start_cue.strip():
+                dest.start_cue = src.start_cue.strip()
+                dest.start_cue_source = src.start_cue_source
         for card_i in range(TALK_CARDS_PER_POINT):
             if src.card_locked(card_i) or (src.cards[card_i].strip() and not dest.card_locked(card_i)):
                 if src.cards[card_i].strip():
@@ -822,9 +850,31 @@ def attach_talk_sheet(script: EditScript, sheet: TalkSheet) -> EditScript:
     return script
 
 
-def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
-    """Stamp user cards, titles, image text, and user stills onto body beats."""
-    windows = point_windows(script)
+def apply_user_point_locks(
+    script: EditScript,
+    sheet: TalkSheet,
+    transcript: TimedTranscript | None = None,
+) -> EditScript:
+    """Stamp user cards, titles, image text, and user stills onto body beats.
+
+    Point windows lock to the trimmed transcript (cue or first card-line hit).
+    A filled start cue that is missing skips that point's picture.
+    Title[j] stays paired with body[j].
+    """
+    from pipeline.point_align import (
+        card_line_hit,
+        clear_picture_range,
+        resolve_point_alignment,
+        split_body_at_times,
+        timed_transcript_from_script,
+    )
+
+    timed = transcript or timed_transcript_from_script(script)
+    alignment = resolve_point_alignment(script, sheet, timed)
+    windows = alignment.windows
+    split_body_at_times(script, [start for start, end in windows if end > start])
+    for skip0, skip1 in alignment.skip_ranges:
+        clear_picture_range(script, skip0, skip1)
     allowed = sheet_source_text(sheet, script.transcript)
     for index, (point, (w0, w1)) in enumerate(zip(sheet.points, windows)):
         if w1 <= w0:
@@ -844,10 +894,28 @@ def apply_user_point_locks(script: EditScript, sheet: TalkSheet) -> EditScript:
 
         if not needed:
             continue
-        slots = _aligned_overlay_slots(script, w0, w1, max(needed) + 1, skip_pip=need_pip)
+        leftover: list[int] = []
+        cursor = w0
+        placed: set[int] = set()
         for card_i in needed:
-            if card_i < len(slots):
-                _stamp_overlay(slots[card_i], point, index, card_i, allowed)
+            hit = card_line_hit(timed, point, card_i, after=cursor, before=w1)
+            if hit is None:
+                leftover.append(card_i)
+                continue
+            slot_end = min(w1, hit + 6.0)
+            scene = _ensure_overlay_at(script, hit, slot_end, skip_pip=need_pip)
+            _stamp_overlay(scene, point, index, card_i, allowed)
+            placed.add(id(scene))
+            cursor = max(cursor, scene.end, hit + 0.05)
+        if leftover:
+            slots = _aligned_overlay_slots(script, cursor, w1, max(leftover) + 1, skip_pip=need_pip)
+            for card_i in leftover:
+                if card_i >= len(slots):
+                    continue
+                scene = slots[card_i]
+                if id(scene) in placed:
+                    continue
+                _stamp_overlay(scene, point, index, card_i, allowed)
     sanitize_script_kickers(script, sheet)
     enforce_pip_holds(script, PIP_HOLD_SECONDS)
     return script
@@ -859,7 +927,7 @@ def autofill_talk_sheet(
     stills_dir: Path | None = None,
 ) -> TalkSheet:
     """Fill empty slots from the director / local still matcher. Skip user locks."""
-    windows = point_windows(script)
+    windows = point_windows(script, sheet)
     folder = Path(stills_dir) if stills_dir is not None else None
     if not sheet.title_locked() and not sheet.title.strip():
         kicker = script.talk_sheet.open_card.kicker.strip()
@@ -964,17 +1032,15 @@ def collect_form_text(
     return text, "user"
 
 
-def point_windows(script: EditScript) -> list[tuple[float, float]]:
-    body = [scene for scene in script.scenes if scene.role == "body" and scene.end > scene.start]
-    if not body:
-        return [(0.0, 0.0)] * TALK_POINT_COUNT
-    start = min(scene.start for scene in body)
-    end = max(scene.end for scene in body)
-    span = max(0.0, end - start)
-    if span <= 0:
-        return [(start, end)] * TALK_POINT_COUNT
-    third = span / float(TALK_POINT_COUNT)
-    return [(start + i * third, start + (i + 1) * third) for i in range(TALK_POINT_COUNT)]
+def point_windows(
+    script: EditScript,
+    sheet: TalkSheet | None = None,
+    transcript: TimedTranscript | None = None,
+) -> list[tuple[float, float]]:
+    """Point 1–3 windows on the trimmed cut. Transcript-locked when possible."""
+    from pipeline.point_align import point_windows as _align_windows
+
+    return _align_windows(script, sheet or script.talk_sheet, transcript)
 
 
 def _reset_user_import_slots(sheet: TalkSheet) -> None:
@@ -1001,6 +1067,9 @@ def _reset_user_import_slots(sheet: TalkSheet) -> None:
         if not point.image_text_locked():
             point.image_text = ""
             point.image_text_source = "empty"
+        if not point.start_cue_locked():
+            point.start_cue = ""
+            point.start_cue_source = "empty"
         for card_i in range(TALK_CARDS_PER_POINT):
             if not point.card_locked(card_i):
                 point.cards[card_i] = ""
@@ -1059,6 +1128,15 @@ def _set_image_title(sheet: TalkSheet, point_index: int, value: str) -> None:
     point.image_title_source = "user"
 
 
+def _set_start_cue(sheet: TalkSheet, point_index: int, value: str) -> None:
+    point = sheet.points[point_index - 1]
+    text = value.strip()
+    if not text or point.start_cue_locked():
+        return
+    point.start_cue = text
+    point.start_cue_source = "user"
+
+
 def _set_image_text(sheet: TalkSheet, point_index: int, value: str) -> None:
     point = sheet.points[point_index - 1]
     text = value.strip()
@@ -1094,7 +1172,8 @@ def _scenes_in_window(script: EditScript, start: float, end: float) -> list[Scen
     for scene in script.scenes:
         if scene.role != "body":
             continue
-        if scene.end <= start or scene.start >= end:
+        # Touching the end belongs to the next point (43.333 vs 43.333333).
+        if scene.end <= start + 0.02 or scene.start >= end - 0.02:
             continue
         found.append(scene)
     return found
@@ -1104,9 +1183,38 @@ def _pick_pip_scene(script: EditScript, start: float, end: float) -> Scene:
     return _ensure_pip_slot(script, start, end, PIP_HOLD_SECONDS)
 
 
+def _ensure_overlay_at(
+    script: EditScript,
+    start: float,
+    end: float,
+    *,
+    skip_pip: bool,
+) -> Scene:
+    """Overlay slot starting at a transcript hit. Stay inside the point window."""
+    end = max(start + 0.4, end)
+    current = _scenes_in_window(script, start, end)
+    for scene in current:
+        if scene.layout is PictureTag.OVERLAY and scene.start <= start < scene.end:
+            return _clip_scene_to_window(script, scene, start, min(scene.end, end))
+    nothings = [scene for scene in current if scene.layout is PictureTag.NOTHING]
+    if nothings:
+        host = nothings[0]
+        return _clip_scene_to_window(script, host, max(host.start, start), min(host.end, end))
+    if not skip_pip:
+        for scene in current:
+            if scene.layout is not PictureTag.PIP and scene.start <= start < scene.end:
+                return _clip_scene_to_window(script, scene, start, min(scene.end, end))
+    return _insert_nothing(script, start, min(end, start + 5.0))
+
+
 def _ensure_pip_slot(script: EditScript, start: float, end: float, min_hold: float) -> Scene:
     """A PiP beat inside the window. Split from nothing. Do not consume overlays."""
     current = _scenes_in_window(script, start, end)
+    for scene in current:
+        if scene.layout is PictureTag.PIP and (scene.start < start - 0.05 or scene.end > end + 0.05):
+            scene = _clip_scene_to_window(script, scene, start, end)
+            current = _scenes_in_window(script, start, end)
+            break
     for scene in current:
         if scene.layout is PictureTag.PIP:
             _grow_pip_into_nothing(script, scene, min_hold, window=(start, end))
@@ -1251,7 +1359,7 @@ def enforce_pip_holds(script: EditScript, min_hold: float = PIP_HOLD_SECONDS) ->
 def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
     """User titles stay exact. Auto overlay/PiP kickers cannot invent DoD or statutes."""
     allowed = sheet_source_text(sheet, script.transcript)
-    windows = point_windows(script)
+    windows = point_windows(script, sheet)
     locked_ids: set[int] = set()
     for point, (w0, w1) in zip(sheet.points, windows):
         overlays = [
@@ -1366,7 +1474,8 @@ def _ensure_overlay_slots(
     ]
     if skip_pip:
         refreshed = [scene for scene in refreshed if scene.layout is not PictureTag.PIP]
-    return [scene for scene in refreshed if scene.layout is not PictureTag.OVERLAY][:needed]
+    picked = [scene for scene in refreshed if scene.layout is not PictureTag.OVERLAY][:needed]
+    return [_clip_scene_to_window(script, scene, start, end) for scene in picked]
 
 
 def _clip_scene_to_window(script: EditScript, scene: Scene, start: float, end: float) -> Scene:

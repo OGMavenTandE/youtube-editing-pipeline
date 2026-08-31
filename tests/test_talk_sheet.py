@@ -116,13 +116,17 @@ def test_markdown_import_known_sheet_shape() -> None:
     assert "floor" in line1
     assert "program" in line2.lower()
     assert sheet.points[0].platform == "MQ-9 Reaper"
+    assert sheet.points[0].start_cue == "first unique opener"
+    assert sheet.points[0].start_cue_source == "user"
     assert sheet.points[0].image_title == "MQ-9 REAPER"
     assert sheet.points[0].image_text == "Reaper on station"
     assert sheet.points[0].titles[0] == "THE MONEY"
     assert sheet.points[0].cards[0].startswith("$1.5B")
     assert sheet.points[0].cards[2].startswith("Programs")
     assert sheet.points[1].platform == "M1 Abrams"
+    assert sheet.points[1].start_cue == "second unique opener"
     assert sheet.points[2].platform == "Patriot"
+    assert sheet.points[2].start_cue == "third unique opener"
     assert sheet.points[2].cards[2].startswith("Last point, third")
     assert "Spoken" in sheet.exec_notes or "not painted" in sheet.exec_notes.lower()
     assert sheet.close_card.kicker == "WORK WITH ME"

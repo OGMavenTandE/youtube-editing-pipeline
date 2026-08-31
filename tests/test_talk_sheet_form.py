@@ -33,9 +33,9 @@ def _form_stub():
     form._preview_images = [None, None, None]
     form._preview_text = ["No still", "No still", "No still"]
     form._point_vars = [
-        {"platform": SimpleNamespace(get=lambda: "MQ-9 Reaper")},
-        {"platform": SimpleNamespace(get=lambda: "")},
-        {"platform": SimpleNamespace(get=lambda: "")},
+        {"platform": SimpleNamespace(get=lambda: "MQ-9 Reaper"), "start_cue": SimpleNamespace(get=lambda: "")},
+        {"platform": SimpleNamespace(get=lambda: ""), "start_cue": SimpleNamespace(get=lambda: "")},
+        {"platform": SimpleNamespace(get=lambda: ""), "start_cue": SimpleNamespace(get=lambda: "")},
     ]
 
     class _Label:

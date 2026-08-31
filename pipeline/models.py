@@ -148,12 +148,17 @@ class TalkPoint(BaseModel):
     still_path: str = ""
     image_title: str = ""
     image_text: str = ""
+    start_cue: str = Field(
+        default="",
+        description="Optional spoken phrase that starts this point's PiP/overlay window.",
+    )
     cards: list[str] = Field(default_factory=lambda: ["", "", ""])
     titles: list[str] = Field(default_factory=lambda: ["", "", ""])
     platform_source: FieldSource = "empty"
     still_source: FieldSource = "empty"
     image_title_source: FieldSource = "empty"
     image_text_source: FieldSource = "empty"
+    start_cue_source: FieldSource = "empty"
     card_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
     title_sources: list[FieldSource] = Field(default_factory=lambda: ["empty", "empty", "empty"])
 
@@ -162,6 +167,7 @@ class TalkPoint(BaseModel):
         "still_source",
         "image_title_source",
         "image_text_source",
+        "start_cue_source",
         mode="before",
     )
     @classmethod
@@ -189,6 +195,9 @@ class TalkPoint(BaseModel):
 
     def image_text_locked(self) -> bool:
         return field_is_locked(self.image_text_source, self.image_text)
+
+    def start_cue_locked(self) -> bool:
+        return field_is_locked(self.start_cue_source, self.start_cue)
 
     def card_locked(self, index: int) -> bool:
         if index < 0 or index >= TALK_CARDS_PER_POINT:
@@ -259,6 +268,8 @@ class TalkSheet(BaseModel):
                     row["image_title_source"] = "user"
                 if "image_text_source" not in row and str(row.get("image_text") or "").strip():
                     row["image_text_source"] = "user"
+                if "start_cue_source" not in row and str(row.get("start_cue") or "").strip():
+                    row["start_cue_source"] = "user"
                 cards = _pad_str_list(row.get("cards"), TALK_CARDS_PER_POINT)
                 if "card_sources" not in row:
                     row["card_sources"] = ["user" if card.strip() else "empty" for card in cards]
@@ -624,6 +635,10 @@ class EditScript(BaseModel):
     """Director output consumed by the compositor. Timestamps are on the trimmed cut."""
 
     transcript: str = Field(default="", description="Full transcript of the trimmed audio.")
+    transcript_cues: list[TranscriptCue] = Field(
+        default_factory=list,
+        description="Timed Whisper/director cues on the trimmed cut. Used to lock Point 1–3 picture.",
+    )
     scenes: list[Scene] = Field(
         default_factory=list,
         description="Ordered layout beats covering 0..duration. Expect 50-80 on a 20-minute cut.",

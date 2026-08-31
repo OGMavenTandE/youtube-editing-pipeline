@@ -646,6 +646,7 @@ def plan_from_transcript(
     )
     script = EditScript(
         transcript=transcript.text,
+        transcript_cues=list(transcript.cues),
         talking_head_cuts=[],
         scenes=[scene.to_scene() for scene in stitched.scenes],
         metadata=metadata,
