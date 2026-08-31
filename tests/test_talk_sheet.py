@@ -23,8 +23,11 @@ from pipeline.talk_sheet import (
     rewrite_house_style,
     save_talk_sheet,
     sanitize_script_kickers,
+    still_plate_copy,
     talk_sheet_to_markdown,
 )
+
+DRONE_CABLE = "Look at this drone laying cable to keep comms with it's pilot. Adorable."
 
 
 def test_talk_sheet_json_roundtrip(tmp_path: Path) -> None:
@@ -44,7 +47,9 @@ def test_talk_sheet_json_roundtrip(tmp_path: Path) -> None:
                 card_sources=["user", "user", "empty"],
                 titles=["THE MONEY", "EVEN LOW", ""],
                 title_sources=["user", "user", "empty"],
-                image_text="MQ-9 REAPER",
+                image_title="MQ-9 REAPER",
+                image_title_source="user",
+                image_text="Reaper on station",
                 image_text_source="user",
             ),
             TalkPoint(),
@@ -60,9 +65,11 @@ def test_talk_sheet_json_roundtrip(tmp_path: Path) -> None:
     assert loaded.points[0].platform == "MQ-9 Reaper"
     assert loaded.points[0].cards[0] == "User card one."
     assert loaded.points[0].titles[0] == "THE MONEY"
-    assert loaded.points[0].image_text == "MQ-9 REAPER"
+    assert loaded.points[0].image_title == "MQ-9 REAPER"
+    assert loaded.points[0].image_text == "Reaper on station"
     assert loaded.points[0].still_source == "user"
     assert loaded.points[0].title_sources[0] == "user"
+    assert loaded.points[0].image_title_source == "user"
     assert loaded.points[0].image_text_source == "user"
     assert loaded.close_card.kicker == "WORK WITH ME"
     assert "Vendor-agnostic" in loaded.close_card.headline
@@ -93,7 +100,8 @@ def test_markdown_import_known_sheet_shape() -> None:
     assert "floor" in line1
     assert "program" in line2.lower()
     assert sheet.points[0].platform == "MQ-9 Reaper"
-    assert sheet.points[0].image_text == "MQ-9 REAPER"
+    assert sheet.points[0].image_title == "MQ-9 REAPER"
+    assert sheet.points[0].image_text == "Reaper on station"
     assert sheet.points[0].titles[0] == "THE MONEY"
     assert sheet.points[0].cards[0].startswith("$1.5B")
     assert sheet.points[0].cards[2].startswith("Programs")
@@ -213,7 +221,9 @@ def test_apply_user_locks_stamps_cards_and_still(tmp_path: Path) -> None:
                 card_sources=["user", "user", "empty"],
                 titles=["THE MONEY", "EVEN LOW", ""],
                 title_sources=["user", "user", "empty"],
-                image_text="MQ-9 REAPER",
+                image_title="MQ-9 REAPER",
+                image_title_source="user",
+                image_text="Reaper on station",
                 image_text_source="user",
             ),
             TalkPoint(),
@@ -232,6 +242,7 @@ def test_apply_user_locks_stamps_cards_and_still(tmp_path: Path) -> None:
     assert pip
     assert pip[0].graphic.asset_path.endswith("user.jpg")
     assert pip[0].graphic.kicker == "MQ-9 REAPER"
+    assert pip[0].graphic.title == "Reaper on station"
     assert pip[0].end - pip[0].start + 1e-6 >= PIP_HOLD_SECONDS
     kickers = [scene.graphic.kicker for scene in overlays]
     assert "THE MONEY" in kickers
@@ -396,7 +407,7 @@ def test_user_may_type_dod_as_a_title() -> None:
     assert overlay.graphic.kicker == "DoD"
 
 
-def test_user_image_text_is_pip_gold_line(tmp_path: Path) -> None:
+def test_user_image_text_empty_title_is_content_only(tmp_path: Path) -> None:
     still = tmp_path / "user.jpg"
     still.write_bytes(b"x")
     sheet = TalkSheet(
@@ -418,7 +429,8 @@ def test_user_image_text_is_pip_gold_line(tmp_path: Path) -> None:
     script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
     apply_user_point_locks(script, sheet)
     pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
-    assert pip.graphic.kicker == "REAPER ON STATION"
+    assert pip.graphic.kicker == ""
+    assert pip.graphic.title == "REAPER ON STATION"
     assert pip.end - pip.start + 1e-6 >= PIP_HOLD_SECONDS
 
 
@@ -452,12 +464,18 @@ def test_empty_image_text_autofill_from_platform_not_dod() -> None:
         ],
     )
     autofill_talk_sheet(sheet, script)
+    assert sheet.points[0].image_title_source == "auto"
     assert sheet.points[0].image_text_source == "auto"
+    assert "dod" not in sheet.points[0].image_title.casefold()
     assert "dod" not in sheet.points[0].image_text.casefold()
+    assert "3000.09" not in sheet.points[0].image_title
     assert "3000.09" not in sheet.points[0].image_text
     pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
-    assert pip.graphic.kicker == sheet.points[0].image_text
+    assert pip.graphic.kicker == sheet.points[0].image_title
+    assert pip.graphic.title == sheet.points[0].image_text
     assert "dod" not in pip.graphic.kicker.casefold()
+    assert pip.graphic.kicker
+    assert pip.graphic.title
 
 
 def test_markdown_export_includes_card_title_and_image_text() -> None:
@@ -468,7 +486,8 @@ def test_markdown_export_includes_card_title_and_image_text() -> None:
         points=[
             TalkPoint(
                 platform="MQ-9 Reaper",
-                image_text="MQ-9 REAPER",
+                image_title="MQ-9 REAPER",
+                image_text="Reaper on station",
                 titles=["THE MONEY", "", ""],
                 cards=["$1.5B is the floor.", "", ""],
             ),
@@ -477,11 +496,13 @@ def test_markdown_export_includes_card_title_and_image_text() -> None:
         ],
     )
     text = talk_sheet_to_markdown(sheet)
-    assert "Image text: MQ-9 REAPER" in text
+    assert "Image title: MQ-9 REAPER" in text
+    assert "Image text: Reaper on station" in text
     assert "Title 1: THE MONEY" in text
     assert "Card 1: $1.5B is the floor." in text
     imported = parse_talk_sheet_markdown(text)
-    assert imported.points[0].image_text == "MQ-9 REAPER"
+    assert imported.points[0].image_title == "MQ-9 REAPER"
+    assert imported.points[0].image_text == "Reaper on station"
     assert imported.points[0].titles[0] == "THE MONEY"
     assert imported.points[0].cards[0].startswith("$1.5B")
 
@@ -616,7 +637,8 @@ def test_image_text_does_not_drive_overlay_kicker(tmp_path: Path) -> None:
     apply_user_point_locks(script, sheet)
     pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
     overlay = next(scene for scene in script.scenes if scene.layout is PictureTag.OVERLAY)
-    assert pip.graphic.kicker == image
+    assert pip.graphic.kicker == ""
+    assert pip.graphic.title == image
     assert overlay.graphic.kicker == "DOW DIRECTIVE 3000.09"
     assert overlay.graphic.title.startswith("Humans must be in the loop")
     assert "drone laying cable" not in overlay.graphic.kicker.casefold()
@@ -727,3 +749,88 @@ def test_user_still_does_not_turn_whole_body_into_pip(tmp_path: Path) -> None:
     assert 7.5 <= pips[0].end - pips[0].start <= 8.05
     assert nothings
     assert sum(scene.end - scene.start for scene in nothings) > 40
+
+
+def test_still_plate_does_not_split_image_text_on_period(tmp_path: Path) -> None:
+    still = tmp_path / "drone.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                still_path=str(still),
+                still_source="user",
+                image_text=DRONE_CABLE,
+                image_text_source="user",
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, sheet)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    gold, white = still_plate_copy(sheet.points[0])
+    assert gold == ""
+    assert white == DRONE_CABLE
+    assert pip.graphic.kicker == ""
+    assert pip.graphic.title == DRONE_CABLE
+    assert "Adorable" in pip.graphic.title
+    assert "LOOK AT THIS DRONE" not in pip.graphic.kicker
+
+
+def test_filled_image_title_keeps_full_image_text(tmp_path: Path) -> None:
+    still = tmp_path / "drone.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                still_path=str(still),
+                still_source="user",
+                image_title="CABLE DRONE",
+                image_title_source="user",
+                image_text=DRONE_CABLE,
+                image_text_source="user",
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
+    apply_user_point_locks(script, sheet)
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    assert pip.graphic.kicker == "CABLE DRONE"
+    assert pip.graphic.title == DRONE_CABLE
+    assert pip.graphic.title.endswith("Adorable.")
+    assert "pilot" in pip.graphic.title
+
+
+def test_autofill_does_not_split_user_image_text(tmp_path: Path) -> None:
+    still = tmp_path / "point1_cable-drone.jpg"
+    still.write_bytes(b"x")
+    sheet = TalkSheet(
+        points=[
+            TalkPoint(
+                platform="cable drone",
+                platform_source="user",
+                still_path=str(still),
+                still_source="user",
+                image_text=DRONE_CABLE,
+                image_text_source="user",
+            ),
+            TalkPoint(),
+            TalkPoint(),
+        ]
+    )
+    script = enforce_pacing(EditScript.empty(), 120.0, Settings(bookend_seconds=10))
+    autofill_talk_sheet(sheet, script)
+    apply_user_point_locks(script, sheet)
+    assert sheet.points[0].image_text == DRONE_CABLE
+    assert "Adorable" in sheet.points[0].image_text
+    assert "look at this drone" not in sheet.points[0].image_title.casefold()
+    assert "adorable" not in sheet.points[0].image_title.casefold()
+    if sheet.points[0].image_title.strip():
+        assert "dod" not in sheet.points[0].image_title.casefold()
+        assert "3000.09" not in sheet.points[0].image_title
+    pip = next(scene for scene in script.scenes if scene.layout is PictureTag.PIP)
+    assert pip.graphic.title == DRONE_CABLE
+    assert pip.graphic.kicker != DRONE_CABLE.split(".", 1)[0]

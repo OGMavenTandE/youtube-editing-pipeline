@@ -211,26 +211,6 @@ def _fit_lines(
     return fitted
 
 
-def _split_title_for_plate(text: str, scale: KitScale, max_width: int) -> tuple[str, str]:
-    """Short titles stay one gold line. Longer copy wraps: gold first, white rest."""
-    text = (text or "").strip()
-    if not text:
-        return "", ""
-    font = load_inter(scale.px(16), bold=True)
-    draw = ImageDraw.Draw(_blank((4, 4)))
-    words = text.split()
-    comfortable = max(scale.px(80), max_width - scale.px(12))
-    if len(words) <= 4 and draw.textlength(text.upper(), font=font) <= comfortable:
-        return text, ""
-    lines = [ln for ln in _wrap_px(text, font, comfortable, max_lines=3) if ln]
-    if len(lines) <= 1 and len(words) >= 5:
-        mid = max(3, min(5, (len(words) + 1) // 2))
-        return " ".join(words[:mid]), " ".join(words[mid:])
-    if len(lines) <= 1:
-        return text, ""
-    return lines[0], "\n".join(lines[1:])
-
-
 def draw_icon(name: str, size: int) -> Image.Image:
     """Gold line-art in a square. No extra colors."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -309,6 +289,7 @@ def render_overlay(
     kicker: str,
     headline: str,
     icon: str = "bar_chart",
+    max_headline_lines: int = 2,
 ) -> np.ndarray:
     """Top-left Nate plate. Host stays full-frame underneath."""
     width, height = size
@@ -328,7 +309,13 @@ def render_overlay(
 
     kicker_text = (kicker or "").strip().upper()
     kicker_lines = _fit_lines(kicker_text, scale, inner_w, max_lines=2, start=16, floor=12)
-    head_font, head_lines, head_size = _fit_headline((headline or "").strip(), scale, inner_w)
+    head_limit = max(1, int(max_headline_lines or 2))
+    head_font, head_lines, head_size = _fit_headline(
+        (headline or "").strip(),
+        scale,
+        inner_w,
+        max_lines=head_limit,
+    )
     line_gap = max(4, scale.px(8))
     kicker_gap = scale.px(10) if kicker_lines and head_lines else 0
     kicker_h = sum(size + scale.px(4) for _, _, size in kicker_lines)
@@ -436,19 +423,16 @@ def render_pip_type(
     sub: str,
     quote: str = "",
 ) -> np.ndarray:
-    """Same Nate plate as overlay cards. Image text stays on the plate, never bare type."""
-    width, height = size
-    scale = KitScale(width, height)
-    x0, _, plate_w, _ = overlay_rect(width, height)
-    inner_w = plate_w - 2 * scale.px(OVERLAY_PAD)
-    title = (kicker or "").strip()
-    extra_parts = [part for part in ((sub or "").strip(), (quote or "").strip()) if part]
-    extra = "\n".join(extra_parts)
-    if extra:
-        gold, white = title, extra
-    else:
-        gold, white = _split_title_for_plate(title, scale, inner_w)
-    return render_overlay(size, kicker=gold, headline=white, icon="bar_chart")
+    """Same Nate plate as overlay cards. One field, one role. Never split sub on period."""
+    headline_parts = [part for part in ((sub or "").strip(), (quote or "").strip()) if part]
+    headline = "\n".join(headline_parts)
+    return render_overlay(
+        size,
+        kicker=(kicker or "").strip(),
+        headline=headline,
+        icon="bar_chart",
+        max_headline_lines=5,
+    )
 
 
 def default_identity() -> HostIdentity:

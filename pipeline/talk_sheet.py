@@ -41,6 +41,10 @@ _CARD_TITLE_LINE = re.compile(
     re.IGNORECASE,
 )
 _TITLE_INDEX_LINE = re.compile(r"^(?:title|kicker)\s*(\d)\s*[:\-]\s*(.+)$", re.IGNORECASE)
+_IMAGE_TITLE_LINE = re.compile(
+    r"^(?:image[- ]?title|still[- ]?kicker|pip[- ]?kicker)\s*[:\-]\s*(.+)$",
+    re.IGNORECASE,
+)
 _IMAGE_TEXT_LINE = re.compile(
     r"^(?:image[- ]?text|still[- ]?title|pip[- ]?title|on[- ]?still)\s*[:\-]\s*(.+)$",
     re.IGNORECASE,
@@ -111,7 +115,8 @@ Title plus the two-line thesis. Not painted.
 
 ## Point 1
 Platform: MQ-9 Reaper
-Image text: MQ-9 REAPER
+Image title: MQ-9 REAPER
+Image text: Reaper on station
 Title 1: THE MONEY
 - $1.5B in procurements. That's the floor.
 Title 2: EVEN LOW
@@ -121,14 +126,16 @@ Title 3: STACKING
 
 ## Point 2
 Platform: M1 Abrams
-Image text: M1 ABRAMS
+Image title: M1 ABRAMS
+Image text: The vehicle is the named still.
 Title 1: NAMED STILL
 - The vehicle is the named still.
 - Overlay copy stays a spoken sentence.
 
 ## Point 3
 Platform: Patriot
-Image text: PATRIOT
+Image title: PATRIOT
+Image text: Battery on the pad.
 Title 1: LAST POINT
 - Last point, first card.
 - Last point, second card.
@@ -369,16 +376,56 @@ def _norm_label(text: str) -> str:
 
 
 def _is_point_image_text(text: str, point: TalkPoint) -> bool:
-    """True when overlay gold is the still title, including a longer typed variant."""
-    image = _norm_label(point.image_text)
+    """True when overlay gold is still copy (title or text), including a longer typed variant."""
     label = _norm_label(text)
-    if not image or not label:
+    if not label:
         return False
-    if label == image:
-        return True
-    if len(image) < 16 and len(image.split()) < 5:
-        return False
-    return image in label or label in image
+    for image in (_norm_label(point.image_title), _norm_label(point.image_text)):
+        if not image:
+            continue
+        if label == image:
+            return True
+        if len(image) < 16 and len(image.split()) < 5:
+            continue
+        if image in label or label in image:
+            return True
+    return False
+
+
+def still_plate_copy(point: TalkPoint) -> tuple[str, str]:
+    """Gold kicker, white content. Empty title means content-only. Never split image_text."""
+    return (point.image_title or "").strip(), (point.image_text or "").strip()
+
+
+def resolve_auto_image_text(
+    *,
+    cards: list[str] | None = None,
+    said: str = "",
+    platform: str = "",
+    pip_title: str = "",
+    allowed: str = "",
+) -> str:
+    """White still content from the point. Not a short kicker. Never split on period."""
+    for raw in (*(cards or []), pip_title, said, platform):
+        text = rewrite_house_style((raw or "").strip())
+        if not text:
+            continue
+        if is_invented_citation(text, allowed):
+            continue
+        if has_banned_defense_name(text):
+            continue
+        return text
+    return rewrite_house_style((platform or "").strip())
+
+
+def _still_basename_label(path: str) -> str:
+    stem = Path(path or "").stem
+    if not stem:
+        return ""
+    cleaned = re.sub(r"^(?:[\w-]+_)?point\d+_", "", stem, flags=re.I)
+    cleaned = cleaned.replace("-", " ").replace("_", " ")
+    tokens = [token for token in cleaned.split() if token]
+    return " ".join(tokens[:6])
 
 
 def _overlay_kicker_for_card(point: TalkPoint, card_i: int, scene: Scene, allowed: str) -> str:
@@ -422,6 +469,7 @@ def sheet_source_text(sheet: TalkSheet, transcript: str = "") -> str:
     parts = [sheet.title, sheet.exec_headline, sheet.exec_notes, transcript]
     for point in sheet.points:
         parts.append(point.platform)
+        parts.append(point.image_title)
         parts.append(point.image_text)
         parts.extend(point.titles)
         parts.extend(point.cards)
@@ -445,6 +493,7 @@ def talk_sheet_to_markdown(sheet: TalkSheet) -> str:
         lines.append(f"Spoken notes: {sheet.exec_notes.strip()}")
     for index, point in enumerate(sheet.points, start=1):
         lines.extend(["", f"## Point {index}", f"Platform: {point.platform}".rstrip()])
+        lines.append(f"Image title: {point.image_title}".rstrip())
         lines.append(f"Image text: {point.image_text}".rstrip())
         for card_i in range(TALK_CARDS_PER_POINT):
             lines.append(f"Title {card_i + 1}: {point.titles[card_i]}".rstrip())
@@ -527,6 +576,11 @@ def parse_talk_sheet_markdown(text: str, *, base: TalkSheet | None = None) -> Ta
                 int(card_title_match.group(1)),
                 card_title_match.group(2),
             )
+            continue
+
+        image_title_match = _IMAGE_TITLE_LINE.match(stripped)
+        if image_title_match and section == "point" and 1 <= point_index <= TALK_POINT_COUNT:
+            _set_image_title(sheet, point_index, image_title_match.group(1))
             continue
 
         image_match = _IMAGE_TEXT_LINE.match(stripped)
@@ -629,6 +683,10 @@ def merge_talk_sheet(base: TalkSheet, incoming: TalkSheet) -> TalkSheet:
             if src.still_path.strip():
                 dest.still_path = src.still_path.strip()
                 dest.still_source = src.still_source
+        if src.image_title_locked() or (src.image_title.strip() and not dest.image_title_locked()):
+            if src.image_title.strip():
+                dest.image_title = src.image_title.strip()
+                dest.image_title_source = src.image_title_source
         if src.image_text_locked() or (src.image_text.strip() and not dest.image_text_locked()):
             if src.image_text.strip():
                 dest.image_text = src.image_text.strip()
@@ -761,16 +819,24 @@ def autofill_talk_sheet(
                 if query:
                     point.platform = query
                     point.platform_source = "auto"
-        if not point.image_text_locked() and (
-            point.still_path.strip() or pips or point.platform.strip()
-        ):
-            pip = pips[0] if pips else None
-            candidate = point.image_text or (pip.graphic.kicker if pip else "") or point.platform
-            point.image_text = resolve_auto_kicker(
+        pip = pips[0] if pips else None
+        has_still = bool(point.still_path.strip() or pips or point.platform.strip())
+        if not point.image_title_locked() and has_still and not point.image_title.strip():
+            candidate = _still_basename_label(point.still_path) or point.platform
+            point.image_title = resolve_auto_kicker(
                 candidate,
-                headline=point.platform or (point.cards[0] if point.cards else ""),
+                headline=point.platform,
+                said="",
+                platform=point.platform,
+                allowed=allowed,
+            )
+            point.image_title_source = "auto"
+        if not point.image_text_locked() and has_still and not point.image_text.strip():
+            point.image_text = resolve_auto_image_text(
+                cards=point.cards,
                 said=pip.said if pip is not None else "",
                 platform=point.platform,
+                pip_title=pip.graphic.title if pip is not None else "",
                 allowed=allowed,
             )
             point.image_text_source = "auto"
@@ -825,6 +891,9 @@ def _reset_user_import_slots(sheet: TalkSheet) -> None:
         if not point.still_locked():
             point.still_path = ""
             point.still_source = "empty"
+        if not point.image_title_locked():
+            point.image_title = ""
+            point.image_title_source = "empty"
         if not point.image_text_locked():
             point.image_text = ""
             point.image_text_source = "empty"
@@ -875,6 +944,15 @@ def _set_card_title(sheet: TalkSheet, point_index: int, card_index: int, value: 
         return
     point.titles[card_index - 1] = text
     point.title_sources[card_index - 1] = "user"
+
+
+def _set_image_title(sheet: TalkSheet, point_index: int, value: str) -> None:
+    point = sheet.points[point_index - 1]
+    text = value.strip()
+    if not text or point.image_title_locked():
+        return
+    point.image_title = text
+    point.image_title_source = "user"
 
 
 def _set_image_text(sheet: TalkSheet, point_index: int, value: str) -> None:
@@ -1088,21 +1166,7 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
         for scene in _scenes_in_window(script, w0, w1):
             if scene.layout is not PictureTag.PIP:
                 continue
-            if point.image_text_locked():
-                scene.graphic.kicker = point.image_text
-                locked_ids.add(id(scene))
-            else:
-                scene.graphic.kicker = resolve_auto_kicker(
-                    point.image_text or scene.graphic.kicker,
-                    headline=point.platform or scene.graphic.title,
-                    said=scene.said,
-                    platform=point.platform,
-                    allowed=allowed,
-                )
-                if point.image_text_source != "user":
-                    point.image_text = scene.graphic.kicker
-                    if scene.graphic.kicker.strip() and point.image_text_source == "empty":
-                        point.image_text_source = "auto"
+            _stamp_image_text(scene, point, allowed)
             locked_ids.add(id(scene))
     for scene in script.scenes:
         if scene.role != "body" or id(scene) in locked_ids:
@@ -1118,13 +1182,16 @@ def sanitize_script_kickers(script: EditScript, sheet: TalkSheet) -> EditScript:
                     allowed=allowed,
                 )
         elif scene.layout is PictureTag.PIP:
-            scene.graphic.kicker = resolve_auto_kicker(
-                scene.graphic.kicker,
-                headline=scene.graphic.title or scene.graphic.still_query,
-                said=scene.said,
-                platform=scene.graphic.still_query,
-                allowed=allowed,
-            )
+            if any(_is_point_image_text(scene.graphic.kicker, point) for point in sheet.points):
+                scene.graphic.kicker = ""
+            elif scene.graphic.kicker.strip():
+                scene.graphic.kicker = resolve_auto_kicker(
+                    scene.graphic.kicker,
+                    headline=scene.graphic.still_query,
+                    said=scene.said,
+                    platform=scene.graphic.still_query,
+                    allowed=allowed,
+                )
     for scene in script.scenes:
         if scene.role == "body" and scene.layout is PictureTag.OVERLAY:
             _strip_image_text_from_overlay(scene, sheet)
@@ -1278,18 +1345,12 @@ def _stamp_overlay(
 
 
 def _stamp_image_text(scene: Scene, point: TalkPoint, allowed: str) -> None:
-    if point.image_text_locked():
-        scene.graphic.kicker = point.image_text
-        return
-    scene.graphic.kicker = resolve_auto_kicker(
-        point.image_text or scene.graphic.kicker,
-        headline=point.platform or scene.graphic.title,
-        said=scene.said,
-        platform=point.platform,
-        allowed=allowed,
-    )
-    if not scene.graphic.title.strip() and point.platform.strip():
-        scene.graphic.title = point.platform.strip()
+    """Still plate: image_title is gold, image_text is white. Never split image_text."""
+    del allowed
+    kicker, headline = still_plate_copy(point)
+    scene.graphic.kicker = kicker
+    if headline:
+        scene.graphic.title = headline
 
 
 def _first_still_query(script: EditScript, start: float, end: float) -> str:

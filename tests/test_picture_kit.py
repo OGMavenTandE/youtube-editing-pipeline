@@ -306,3 +306,59 @@ def test_overlay_kicker_fits_inside_plate() -> None:
     pip_box = pip_rect()
     assert max(gold_xs) < pip_box[0]
     assert max(gold_ys) < pip_box[1]
+
+
+DRONE_CABLE = "Look at this drone laying cable to keep comms with it's pilot. Adorable."
+
+
+def test_empty_still_title_renders_white_content_only() -> None:
+    chrome = render_pip_type((1920, 1080), kicker="", sub=DRONE_CABLE)
+    expected = render_overlay(
+        (1920, 1080),
+        kicker="",
+        headline=DRONE_CABLE,
+        icon="bar_chart",
+        max_headline_lines=5,
+    )
+    clipped = render_overlay((1920, 1080), kicker="", headline=DRONE_CABLE, icon="bar_chart")
+    assert np.array_equal(chrome, expected)
+    assert not np.array_equal(chrome, clipped)
+    split = render_overlay(
+        (1920, 1080),
+        kicker="Look at this drone laying cable to keep comms with it's pilot.",
+        headline="Adorable.",
+        icon="bar_chart",
+    )
+    assert not np.array_equal(chrome, split)
+    ox, oy, ow, _ = overlay_rect()
+    kicker_band = chrome[oy : oy + 36, ox : ox + ow]
+    gold_hits = sum(1 for px in Image.fromarray(kicker_band).getdata() if _near_gold(px[:3]))
+    assert gold_hits < 8
+
+
+def test_filled_still_title_keeps_full_white_content() -> None:
+    chrome = render_pip_type((1920, 1080), kicker="CABLE DRONE", sub=DRONE_CABLE)
+    expected = render_overlay(
+        (1920, 1080),
+        kicker="CABLE DRONE",
+        headline=DRONE_CABLE,
+        icon="bar_chart",
+        max_headline_lines=5,
+    )
+    assert np.array_equal(chrome, expected)
+    split_content = render_overlay(
+        (1920, 1080),
+        kicker="CABLE DRONE",
+        headline="Adorable.",
+        icon="bar_chart",
+    )
+    assert not np.array_equal(chrome, split_content)
+    ox, oy, ow, _ = overlay_rect()
+    plate = chrome[oy : oy + 220, ox : ox + ow]
+    gold_hits = sum(1 for px in Image.fromarray(plate).getdata() if _near_gold(px[:3]))
+    assert gold_hits > 20
+    pip_box = pip_rect()
+    alpha = chrome[:, :, 3]
+    ys, xs = np.where(alpha > 80)
+    assert int(xs.max()) < pip_box[0]
+    assert int(ys.max()) < pip_box[1]

@@ -247,10 +247,15 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         preview.grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=4)
         self._previews.append(preview)
 
-        image_text = ctk.StringVar()
-        ctk.CTkLabel(box, text="Image text (on still only)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
-        ctk.CTkEntry(box, textvariable=image_text).grid(
+        image_title = ctk.StringVar()
+        ctk.CTkLabel(box, text="Image title (optional)").grid(row=4, column=0, sticky="w", padx=12, pady=4)
+        ctk.CTkEntry(box, textvariable=image_title).grid(
             row=4, column=1, columnspan=2, sticky="ew", padx=12, pady=4
+        )
+        image_text = ctk.StringVar()
+        ctk.CTkLabel(box, text="Image text").grid(row=5, column=0, sticky="w", padx=12, pady=4)
+        ctk.CTkEntry(box, textvariable=image_text).grid(
+            row=5, column=1, columnspan=2, sticky="ew", padx=12, pady=4
         )
 
         cards: list[ctk.StringVar] = []
@@ -259,7 +264,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         for card_i, label in enumerate(labels):
             title_var = ctk.StringVar()
             headline_var = ctk.StringVar()
-            row = 5 + card_i * 2
+            row = 6 + card_i * 2
             ctk.CTkLabel(box, text=f"{label} title (gold on card)").grid(row=row, column=0, sticky="w", padx=12, pady=4)
             ctk.CTkEntry(box, textvariable=title_var).grid(
                 row=row, column=1, columnspan=2, sticky="ew", padx=12, pady=4
@@ -273,6 +278,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         self._point_vars.append(
             {
                 "platform": platform,
+                "image_title": image_title,
                 "image_text": image_text,
                 "t1": titles[0],
                 "t2": titles[1],
@@ -295,6 +301,7 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
         for index, point in enumerate(self._sheet.points):
             vars_ = self._point_vars[index]
             vars_["platform"].set(point.platform)
+            vars_["image_title"].set(point.image_title)
             vars_["image_text"].set(point.image_text)
             vars_["t1"].set(point.titles[0])
             vars_["t2"].set(point.titles[1])
@@ -330,6 +337,11 @@ class TalkSheetForm(ctk.CTkScrollableFrame):
             )
             point.platform = platform
             point.platform_source = platform_source
+            image_title, title_source = collect_form_text(
+                vars_["image_title"].get(), point.image_title, point.image_title_source
+            )
+            point.image_title = image_title
+            point.image_title_source = title_source
             image_text, image_source = collect_form_text(
                 vars_["image_text"].get(), point.image_text, point.image_text_source
             )

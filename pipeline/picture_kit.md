@@ -17,7 +17,7 @@ Most of the file is `nothing`: full-frame host, no chrome.
 The model may tag a **body** beat as `overlay` | `pip` | `nothing` and fill copy:
 
 - `overlay`: gold kicker (talk-sheet card title), 2-line white headline, icon name. **Only** Point 1–3 sub talking points.
-- `pip`: left-type gold image text over the still, white sub, optional quote, plus a still query
+- `pip`: still plate matching overlay cards (optional gold image title, white image text), plus a still query
 - `nothing`: no copy
 
 It must not choose layout, font, colors, zoom, or `lower_third`.
@@ -44,8 +44,8 @@ No third font, no extra colors, no TAKEAWAY pills.
 Full 16:9 still fills the frame (DVIDS named-platform file first).
 Nano Banana 2 is a stub that may fill the **image slot only**. Prefer skip PiP if there is no still.
 Host: entire talking-head frame scaled into a 560x315 16:9 window, margin 40, radius 16, gold 3px border.
-Same Nate plate as overlay cards: dark rounded box, Inter, gold image text from the talk-sheet still field, white wrap if the title is two lines. No bare gold type on the still. No left-third gradient-only treatment.
-PiP / still beats hold `PIP_HOLD_SECONDS` (default 8s) so the title can be read twice, then a hard cut back to full-frame host. Do not grow into adjacent `nothing` past that cap. Overlay duration stays put. Image text never fills an overlay-card kicker.
+Same Nate plate as overlay cards: dark rounded box, Inter, gold `#E0B44A` image title (optional), white `#FFFFFF` image text. Wrap. Stay on-frame. Do not cover the 560×315 bottom-right cam window. Empty image title means white content only. Never invent a title by splitting image text on a period or newline. One field, one role. No left-third gradient-only treatment.
+PiP / still beats hold `PIP_HOLD_SECONDS` (default 8s) so the title can be read twice, then a hard cut back to full-frame host. Do not grow into adjacent `nothing` past that cap. Overlay duration stays put. Still image title and image text never fill an overlay-card kicker.
 
 ### bookends (open + close)
 
@@ -67,4 +67,4 @@ Identity and find-me strings are config. Title / exec / close-card copy come fro
 
 Write `output/<stem>_tagged_beats.json` after tagging and bookends, before encode, so a retry skips the model.
 
-The Windows tray form writes `<stem>_talk_sheet.json` (open title, overview, Point 1–3 platform/still/image text/card titles/card headlines, source flags). Close and identity stay locked. Empty slots may auto-fill a short gold label from the headline, spoken beat, or platform. Auto copy never invents a directive or says DoD. User slots do not get rewritten.
+The Windows tray form writes `<stem>_talk_sheet.json` (open title, overview, Point 1–3 platform/still/image title/image text/card titles/card headlines, source flags). Close and identity stay locked. Empty slots may auto-fill a short image title from the platform or still name, and image text from the point. Auto copy never invents a directive or says DoD. Auto-fill never splits a user-typed image text string. User slots do not get rewritten.
