@@ -17,6 +17,8 @@ def _icon_image(status: JobStatus):
     from PIL import Image, ImageDraw
 
     color = (46, 160, 67) if status != JobStatus.PROCESSING else (218, 165, 32)
+    if status == JobStatus.TALK_SHEET:
+        color = (224, 180, 74)
     if status == JobStatus.ERROR:
         color = (192, 57, 43)
     image = Image.new("RGBA", (64, 64), (20, 24, 28, 255))

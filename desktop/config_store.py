@@ -18,6 +18,7 @@ class AppConfig(BaseModel):
     start_with_windows: bool = False
     poll_seconds: int = Field(default=45, ge=15, le=600)
     broll_dir: str = ""
+    require_talk_sheet: bool = True
     client_secret_path: str = ""
     last_job_name: str = ""
     last_job_finished_at: str = ""

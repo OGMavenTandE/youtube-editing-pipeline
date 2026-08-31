@@ -16,8 +16,16 @@ from typing import Any, Callable
 from .config_store import AppConfig, load_config, save_config
 from .logutil import LogWriter, sanitize_log_line
 from .oauth import build_drive_service, load_saved_credentials
-from .paths import env_path, install_root, processed_ids_path
+from .paths import default_stills_dir, env_path, install_root, last_talk_sheet_path, processed_ids_path
 from pipeline.config import Settings, load_settings
+from pipeline.models import TalkSheet
+from pipeline.talk_sheet import (
+    default_stills_dir as pipeline_stills_dir,
+    discover_talk_sheet,
+    job_talk_sheet_path,
+    materialize_job_stills,
+    persist_talk_sheet,
+)
 from pipeline.drive_io import (
     DriveClient,
     ProcessedIdStore,
@@ -30,15 +38,27 @@ from pipeline.studio import parse_titles_file
 LogFn = Callable[[str], None]
 StatusFn = Callable[["JobStatus", str], None]
 DoneFn = Callable[["JobResult"], None]
+TalkSheetFn = Callable[["PendingTalkJob"], None]
 
 
 class JobStatus(str, Enum):
     IDLE = "Idle"
     WATCHING = "Watching"
     DOWNLOADING = "Downloading"
+    TALK_SHEET = "Talk sheet"
     PROCESSING = "Processing"
     UPLOADING = "Uploading"
     ERROR = "Error"
+
+
+@dataclass
+class PendingTalkJob:
+    file_id: str
+    name: str
+    stem: str
+    video_path: str
+    stills_dir: str
+    sheet_path: str
 
 
 @dataclass
@@ -107,13 +127,18 @@ class PipelineWorker:
         log: LogFn,
         status: StatusFn,
         on_job_done: DoneFn | None = None,
+        on_talk_sheet: TalkSheetFn | None = None,
     ) -> None:
         self._log = log
         self._status = status
         self._on_job_done = on_job_done
+        self._on_talk_sheet = on_talk_sheet
         self._stop = threading.Event()
         self._pause = threading.Event()
         self._run_now = threading.Event()
+        self._talk_ready = threading.Event()
+        self._talk_sheet: TalkSheet | None = None
+        self.pending_talk_job: PendingTalkJob | None = None
         self._thread: threading.Thread | None = None
         self._busy = threading.Lock()
         self.status = JobStatus.IDLE
@@ -129,6 +154,7 @@ class PipelineWorker:
     def stop(self) -> None:
         self._stop.set()
         self._run_now.set()
+        self._talk_ready.set()
 
     def set_paused(self, paused: bool) -> None:
         if paused:
@@ -144,6 +170,18 @@ class PipelineWorker:
 
     def run_once(self) -> None:
         self._run_now.set()
+
+    def continue_talk_sheet(self, sheet: TalkSheet | None = None) -> None:
+        """Unlock a waiting job. Empty sheet is valid: the pipeline fills blanks."""
+        self._talk_sheet = sheet if sheet is not None else TalkSheet()
+        self._talk_ready.set()
+
+    def cancel_talk_sheet(self) -> None:
+        self._talk_sheet = None
+        self._talk_ready.set()
+
+    def is_waiting_talk_sheet(self) -> bool:
+        return self.status == JobStatus.TALK_SHEET and self.pending_talk_job is not None
 
     def log(self, line: str) -> None:
         cleaned = sanitize_log_line(line)
@@ -279,11 +317,14 @@ class PipelineWorker:
                 store.mark_skipped(item.id, name=item.name, stem=stem)
                 return
 
+            sheet, stills_dir = self._gate_talk_sheet(dest, stem, item, config)
+            if sheet is None:
+                self.log(f"Talk sheet wait cancelled for {item.name}.")
+                return
+
             self._set_status(JobStatus.PROCESSING, item.name)
             self.log(f"Running pipeline on {item.name}…")
-            argv = ["--input", str(dest)]
-            if config.broll_dir:
-                argv.extend(["--broll-dir", config.broll_dir])
+            argv = pipeline_argv(dest, job_talk_sheet_path(dest), stills_dir)
             code = invoke_run_py(argv, self.log)
             if code != 0:
                 raise RuntimeError(f"Pipeline exited with status {code}.")
@@ -348,6 +389,68 @@ class PipelineWorker:
                     )
                 )
 
+    def _gate_talk_sheet(
+        self,
+        dest: Path,
+        stem: str,
+        item: Any,
+        config: AppConfig,
+    ) -> tuple[TalkSheet | None, Path]:
+        stills_dir = resolve_stills_dir(config)
+        sheet, _found = discover_talk_sheet(
+            video_path=dest,
+            last_used=last_talk_sheet_path(),
+        )
+        pending = PendingTalkJob(
+            file_id=item.id,
+            name=item.name,
+            stem=stem,
+            video_path=str(dest),
+            stills_dir=str(stills_dir),
+            sheet_path=str(job_talk_sheet_path(dest)),
+        )
+        if not config.require_talk_sheet:
+            prepared = self._materialize_and_save(sheet, dest, stills_dir, stem)
+            return prepared, stills_dir
+
+        accepted = self._await_talk_sheet(pending, sheet)
+        if accepted is None:
+            return None, stills_dir
+        prepared = self._materialize_and_save(accepted, dest, stills_dir, stem)
+        return prepared, stills_dir
+
+    def _await_talk_sheet(self, pending: PendingTalkJob, seed: TalkSheet) -> TalkSheet | None:
+        self.pending_talk_job = pending
+        self._talk_sheet = seed
+        self._talk_ready.clear()
+        self._set_status(JobStatus.TALK_SHEET, pending.name)
+        self.log(f"Talk sheet needed for {pending.name}. Open the form and hit Run.")
+        if self._on_talk_sheet is not None:
+            self._on_talk_sheet(pending)
+        while not self._talk_ready.wait(0.2):
+            if self._stop.is_set():
+                self.pending_talk_job = None
+                return None
+        sheet = self._talk_sheet
+        self.pending_talk_job = None
+        self._talk_ready.clear()
+        return sheet
+
+    def _materialize_and_save(
+        self,
+        sheet: TalkSheet,
+        dest: Path,
+        stills_dir: Path,
+        stem: str,
+    ) -> TalkSheet:
+        prepared = materialize_job_stills(sheet.model_copy(deep=True), stills_dir, stem=stem)
+        persist_talk_sheet(
+            prepared,
+            video_path=dest,
+            last_used=last_talk_sheet_path(),
+        )
+        return prepared
+
     def repack_and_reupload(self, stem: str, title_index: int) -> str:
         if not self._busy.acquire(blocking=False):
             raise RuntimeError("A job is already running.")
@@ -383,6 +486,29 @@ class PipelineWorker:
         self._set_status(JobStatus.WATCHING, "Watching inbox")
         self.log(f"Re-uploaded Studio package. {url}")
         return url
+
+
+def resolve_stills_dir(config: AppConfig | None = None) -> Path:
+    """Folder passed as --broll-dir. Job stills are copied here with point+platform names."""
+    if config is not None and config.broll_dir:
+        path = Path(config.broll_dir).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    try:
+        return default_stills_dir()
+    except OSError:
+        return pipeline_stills_dir(work_dir=install_root() / "work")
+
+
+def pipeline_argv(video_path: Path, talk_sheet_path: Path, stills_dir: Path) -> list[str]:
+    return [
+        "--input",
+        str(video_path),
+        "--talk-sheet",
+        str(talk_sheet_path),
+        "--broll-dir",
+        str(stills_dir),
+    ]
 
 
 def prepare_runtime_env() -> None:
