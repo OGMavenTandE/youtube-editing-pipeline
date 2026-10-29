@@ -99,11 +99,11 @@ def test_buzz_in_the_sentence_is_not_a_banned_sound(tmp_path: Path, rules_root) 
 def test_wpm_outside_the_band_warns_from_the_transcript(tmp_path: Path, rules_root) -> None:
     video = _video(tmp_path, "fast.mp4")
     plan = _base_plan(
-        narration=[NarrationLine(id="n", text="slow words here", start=0.0, end=10.0)]
+        narration=[NarrationLine(id="n", text="one two three", start=0.0, end=10.0)]
     )
     heard = Transcript(
         text="one two three",
-        words=[Word("one", 0.0, 0.1), Word("two", 0.1, 0.2), Word("three", 0.2, 0.4)],
+        words=[Word("one", 2.0, 2.1), Word("two", 2.1, 2.25), Word("three", 2.25, 2.4)],
         word_timestamps=True,
     )
     report = _check(video, plan, rules_root, asr=heard)
@@ -129,6 +129,30 @@ def test_caption_that_leads_speech_fails(tmp_path: Path, rules_root) -> None:
     report = _check(video, plan, rules_root, asr=heard)
     captions = next(check for check in report.checks if check.id == "captions")
     assert any(finding.code == "caption_early" for finding in captions.findings)
+
+
+def test_whisper_holes_inside_a_line_are_not_pauses(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "holes.mp4")
+    words = []
+    cursor = 0.0
+    for index in range(8):
+        words.append(Word(f"w{index}", cursor, cursor + 0.25))
+        cursor += 0.25 + 0.32
+    cursor -= 0.32
+    text = " ".join(word.text for word in words)
+    plan = _base_plan(
+        narration=[NarrationLine(id="n", text=text, start=words[0].start, end=cursor)]
+    )
+    report = _check(
+        video,
+        plan,
+        rules_root,
+        asr=Transcript(text=text, words=words, word_timestamps=True),
+    )
+    wpm = next(item for item in report.checks if item.id == "wpm")
+    assert wpm.measurements["articulation_wpm"] == pytest.approx(
+        wpm.measurements["overall_wpm"], abs=0.05
+    )
 
 
 def test_bracket_transcript_skips_splice_and_articulation(tmp_path: Path, rules_root) -> None:
@@ -271,15 +295,26 @@ def _words_for_rates(count: int, overall: float, articulation: float) -> tuple[f
 
 
 def test_ep01_like_pace_warns_nothing(tmp_path: Path, rules_root) -> None:
-    """166 overall and articulation inside 175-185 is the approved shape. No warning."""
+    """166 overall and articulation inside 175-185 is the approved shape. No warning.
+
+    The pause is a gap between narration lines, not a hole Whisper left
+    between words inside a line.
+    """
     video = _video(tmp_path, "pace.mp4")
     total, words = _words_for_rates(10, 166, 180)
-    text = " ".join(word.text for word in words)
+    pause_at = words[5].start
+    line_break = words[4].end
+    text_a = " ".join(word.text for word in words[:5])
+    text_b = " ".join(word.text for word in words[5:])
     plan = _base_plan(
-        narration=[NarrationLine(id="n", text=text, start=0.0, end=total)],
+        narration=[
+            NarrationLine(id="a", text=text_a, start=0.0, end=line_break),
+            NarrationLine(id="b", text=text_b, start=pause_at, end=total),
+        ],
         segments=[Segment(id="picture", kind="still", source="f.png", start=0.0, duration=total)],
     )
-    report = _check(video, plan, rules_root, asr=Transcript(text=text, words=words))
+    heard = Transcript(text=f"{text_a} {text_b}", words=words)
+    report = _check(video, plan, rules_root, asr=heard)
     wpm = next(check for check in report.checks if check.id == "wpm")
     assert wpm.findings == []
     assert wpm.measurements["overall_wpm"] == pytest.approx(166, abs=0.05)

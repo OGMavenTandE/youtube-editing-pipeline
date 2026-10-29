@@ -9,24 +9,21 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
-from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
+from ytp.ff import probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
 from ytp.splice import (
-    audio_splice_windows,
-    compare_window,
-    narration_word_times,
     normalize_token,
+    stray_near_joins,
     tokenize,
     words_overlapping,
 )
-from ytp.transcribe import Transcript, Word, extract_audio
+from ytp.transcribe import Transcript, Word
 
 CAPTION_LEAD = 0.40
 CAPTION_TRAIL = 0.50
@@ -552,8 +549,29 @@ def _measured_transcript(video: Path, asr: Transcript | None, transcriber) -> Tr
     return heard
 
 
+def _editorial_pause(plan: EditPlan, start: float, end: float, gap_seconds: float) -> float:
+    """Silence between narration lines, when that silence is longer than the threshold.
+
+    Time inside a line stays in the speech clock even if Whisper left a hole
+    there. Only the gap the edit actually left between lines is a pause.
+    """
+    pause = 0.0
+    lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
+    for previous, following in zip(lines, lines[1:]):
+        gap = following.start - previous.end
+        if gap <= gap_seconds:
+            continue
+        left = max(previous.end, start)
+        right = min(following.start, end)
+        if right > left:
+            pause += right - left
+    return pause
+
+
 def _pace_from_transcript(
-    transcript: Transcript | None, gap_seconds: float
+    transcript: Transcript | None,
+    plan: EditPlan,
+    gap_seconds: float,
 ) -> tuple[float | None, float | None, str]:
     """Overall and articulation pace from the video transcript, not the plan text.
 
@@ -574,8 +592,11 @@ def _pace_from_transcript(
         if span <= 0:
             return None, None, "not measured: transcript words have no duration"
         overall = len(spoken) / (span / 60.0)
-        speech = speech_seconds(spoken, gap_seconds)
-        articulation = len(spoken) / (speech / 60.0) if speech > 0 else None
+        # Only editorial pauses (gaps between narration lines) come out.
+        # Whisper's holes between words inside a line are not pauses.
+        pause = _editorial_pause(plan, spoken[0].start, spoken[-1].end, gap_seconds)
+        speech = max(span - pause, 1e-6)
+        articulation = len(spoken) / (speech / 60.0)
         if articulation is not None and articulation + 0.05 < overall:
             return overall, None, "articulation not measured: it would be below overall pace"
         return overall, articulation, ""
@@ -594,7 +615,7 @@ def _pace_from_transcript(
 def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
     source = _pace_source(plan, rules)
     gap_ms = float((rules.lint.get("wpm") or {}).get("pause_gap_ms", 250))
-    pace, articulation, note = _pace_from_transcript(asr, gap_ms / 1000.0)
+    pace, articulation, note = _pace_from_transcript(asr, plan, gap_ms / 1000.0)
     if pace is None:
         return CheckResult("wpm", True, note or "not measured", skipped=True)
     findings: list[Finding] = []
@@ -987,13 +1008,20 @@ def _check_captions(plan: EditPlan, asr: Transcript | None) -> CheckResult:
 
 
 def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -> CheckResult:
+    """Align one transcript of the checked audio to the plan text.
+
+    The voice file on the plan is not read. A second Whisper pass over short
+    clips is not run, so the result does not depend on which narration file
+    the plan names.
+    """
+    del video, transcriber
     span = float(window if window is not None else rules.lint.get("splice_window_seconds", 0.5))
     if not plan.narration:
         return CheckResult("splice_fragments", True, "no narration splices", skipped=True)
-    if asr is not None and transcriber is None and not asr.word_timestamps:
+    if asr is None or not asr.word_timestamps or not asr.words:
         note = (
-            "not measured: bracket transcript has line times only. "
-            "The splice check needs word timestamps."
+            "not measured: the splice check needs one word-timestamp transcript "
+            "of the audio being checked"
         )
         return CheckResult(
             "splice_fragments",
@@ -1001,77 +1029,23 @@ def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -
             note,
             [_warn("splice_fragments", "not_measured", note)],
         )
-    if transcriber is not None and not has_audio(video):
-        return CheckResult(
-            "splice_fragments",
-            False,
-            "video has no audio to transcribe",
-            [_fail("splice_fragments", "no_audio", "video has no audio stream")],
-        )
-    windows = audio_splice_windows(plan, margin=span)
-    expected = narration_word_times(plan)
     findings: list[Finding] = []
-    try:
-        with tempfile.TemporaryDirectory(prefix="ytp-splice-") as work_text:
-            work = Path(work_text)
-            for start, end in windows:
-                splice = (start + end) / 2
-                if asr is not None and transcriber is None:
-                    heard = words_overlapping(asr.words, start, end)
-                    transcript = Transcript(text=" ".join(word.text for word in heard), words=heard)
-                else:
-                    if transcriber is None:
-                        return CheckResult(
-                            "splice_fragments",
-                            False,
-                            "no transcript. Install faster-whisper or pass --asr.",
-                            [
-                                _fail(
-                                    "splice_fragments",
-                                    "transcript_missing",
-                                    "refusing to pass a splice check with no transcript",
-                                    splice,
-                                )
-                            ],
-                        )
-                    clip = work / f"splice-{start:.3f}.wav"
-                    extract_audio(video, clip, start=start, end=end)
-                    try:
-                        local = transcriber.transcribe(clip)
-                    except RuntimeError as exc:
-                        if "faster-whisper" in str(exc):
-                            return CheckResult(
-                                "splice_fragments",
-                                False,
-                                str(exc),
-                                [_fail("splice_fragments", "transcript_missing", str(exc), splice)],
-                            )
-                        raise
-                    transcript = local.shifted(start)
-                approved = words_overlapping(expected, start, end)
-                for code, word in compare_window(approved, transcript.words):
-                    label = word.text.strip()
-                    findings.append(
-                        _fail(
-                            "splice_fragments",
-                            code,
-                            (
-                                f'{code.replace("_", " ")} "{label}" at splice '
-                                f"{format_timestamp(splice)} is not in the approved script"
-                            ),
-                            word.start,
-                            label,
-                        )
-                    )
-    except Exception as exc:
-        return CheckResult(
-            "splice_fragments",
-            False,
-            f"splice check failed: {exc}",
-            [_fail("splice_fragments", "error", str(exc))],
+    for code, word in stray_near_joins(plan, asr.words, margin=span):
+        label = word.text.strip()
+        findings.append(
+            _fail(
+                "splice_fragments",
+                code,
+                (
+                    f'{code.replace("_", " ")} "{label}" near a narration join '
+                    "is not in the approved script"
+                ),
+                word.start,
+                label,
+            )
         )
     findings = _dedupe(findings)
-    summary = f"{len(windows)} narration splice window(s), margin {span:.2f}s"
+    summary = f"aligned to the script; narration joins use a {span:.2f}s margin"
     if findings:
         summary = f"{summary}; {len(findings)} leftover fragment(s)"
     return CheckResult("splice_fragments", not findings, summary, findings)

@@ -1,9 +1,10 @@
-"""Compare a narration splice to the approved script.
+"""Compare narration audio to the approved script.
 
-Picture cuts are not audio splices. A heard word is a fragment only when it
-is not in the expected text near that cut, after number words and digits are
-folded together and fuzzy or phonetic matches are accepted. Low-confidence
-mishearings are ignored.
+Picture cuts are not audio splices. The heard words are aligned to the plan
+text across the whole narration. Digits are spelled out first, so "7" and
+"seven" are the same token. A fuzzy neighbor counts as that script word.
+What is left is an extra word. It is a fragment only when it sits near a
+narration join. Low-confidence mishearings are ignored.
 
 Episode 1 v8 left "It's", the start of removed line 00d_b1, at about 17.48s
 on the splice near 18.045s. The scripted "if" in "And if one comes down" is
@@ -34,8 +35,9 @@ def tokenize(text: str) -> list[str]:
 def narration_word_times(plan: EditPlan) -> list[Word]:
     """Spread each line's words evenly across its start and end.
 
-    The plan has line times, not word times. Even spacing is enough to decide
-    which words belong in a splice window.
+    The plan has line times, not word times. This is only a stand-in clock.
+    The splice check aligns text; it does not treat these times as the words
+    the cut was allowed to say.
     """
     timed: list[Word] = []
     for line in plan.narration:
@@ -114,40 +116,6 @@ def words_overlapping(words: list[Word], start: float, end: float) -> list[Word]
     return [word for word in words if word.end > start and word.start < end]
 
 
-_ONES = {
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-}
-_TEENS = {
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-    "thirteen": 13,
-    "fourteen": 14,
-    "fifteen": 15,
-    "sixteen": 16,
-    "seventeen": 17,
-    "eighteen": 18,
-    "nineteen": 19,
-}
-_TENS = {
-    "twenty": 20,
-    "thirty": 30,
-    "forty": 40,
-    "fifty": 50,
-    "sixty": 60,
-    "seventy": 70,
-    "eighty": 80,
-    "ninety": 90,
-}
 # Whisper words under this probability are treated as mishearings, not fragments.
 CONFIDENCE_MIN = 0.55
 _SOUNDEX_GROUPS = {
@@ -172,42 +140,71 @@ _SOUNDEX_GROUPS = {
 }
 
 
+_SMALL = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+]
+_TENS_WORDS = [
+    "",
+    "",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+]
+
+
+def spell_number(value: int) -> list[str]:
+    """Spell a digit run so '7' and 'seven' compare as the same tokens."""
+    if value < 0:
+        return ["minus", *spell_number(-value)]
+    if value < 20:
+        return [_SMALL[value]]
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        if ones == 0:
+            return [_TENS_WORDS[tens]]
+        return [_TENS_WORDS[tens], _SMALL[ones]]
+    if value < 1000:
+        hundreds, rest = divmod(value, 100)
+        head = [_SMALL[hundreds], "hundred"]
+        return head if rest == 0 else [*head, *spell_number(rest)]
+    return [str(value)]
+
+
 def canonicalize_tokens(tokens: list[str]) -> list[str]:
-    """Fold number words and digits so 'Tip one' and '1' compare equal."""
+    """Spell digits out and keep number words as words."""
     folded: list[str] = []
-    index = 0
-    while index < len(tokens):
-        raw = tokens[index]
+    for raw in tokens:
         token = normalize_token(raw)
         if not token:
-            index += 1
             continue
         if token.isdigit():
-            folded.append(str(int(token)))
-            index += 1
+            folded.extend(spell_number(int(token)))
             continue
-        hyphen = raw.casefold().strip("'")
-        if "-" in hyphen:
-            left, right = hyphen.split("-", 1)
-            if left in _TENS and right in _ONES:
-                folded.append(str(_TENS[left] + _ONES[right]))
-                index += 1
-                continue
-        if token in _TENS and index + 1 < len(tokens):
-            nxt = normalize_token(tokens[index + 1])
-            if nxt in _ONES:
-                folded.append(str(_TENS[token] + _ONES[nxt]))
-                index += 2
-                continue
-        if token in _ONES:
-            folded.append(str(_ONES[token]))
-        elif token in _TEENS:
-            folded.append(str(_TEENS[token]))
-        elif token in _TENS:
-            folded.append(str(_TENS[token]))
-        else:
-            folded.append(token)
-        index += 1
+        folded.append(token)
     return folded
 
 
@@ -229,19 +226,25 @@ def _soundex(token: str) -> str:
     return (first + "".join(digits) + "000")[:4]
 
 
-def _close_to_expected(token: str, expected: list[str]) -> bool:
-    for exp in expected:
-        if token == exp:
+def _tokens_close(left: str, right: str) -> bool:
+    """True when two tokens are the same word, or a fuzzy/phonetic neighbor."""
+    if left == right:
+        return True
+    if len(left) >= 3 and len(right) >= 3:
+        # 0.66 pairs a one-slot mishearing such as "more" and "score".
+        # "is" and "it" are shorter than 3 characters, so they do not absorb "It's".
+        if SequenceMatcher(a=left, b=right, autojunk=False).ratio() >= 0.66:
             return True
-        if len(token) >= 3 and len(exp) >= 3:
-            if SequenceMatcher(a=token, b=exp, autojunk=False).ratio() >= 0.6:
+        if _soundex(left) == _soundex(right) and not _soundex(left).endswith("000"):
+            return True
+        shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+        if len(shorter) >= 3 and longer.startswith(shorter[:3]):
+            if min(len(left), len(right)) / max(len(left), len(right)) >= 0.5:
                 return True
-            if _soundex(token) == _soundex(exp) and not _soundex(token).endswith("000"):
-                return True
-        if len(exp) >= 4 and token.startswith(exp):
-            return True
-        if len(token) >= 4 and exp.startswith(token) and len(token) / len(exp) >= 0.6:
-            return True
+    if len(right) >= 4 and left.startswith(right):
+        return True
+    if len(left) >= 4 and right.startswith(left):
+        return True
     return False
 
 
@@ -251,28 +254,125 @@ def _is_clipped_prefix(token: str, expected: list[str]) -> bool:
     return any(exp.startswith(token) and token != exp and len(token) < 4 for exp in expected)
 
 
-def compare_window(expected: list[Word], actual: list[Word]) -> list[tuple[str, Word]]:
-    """Heard words that are not in the approved text near this splice.
+def _heard_tokens(words: list[Word]) -> list[tuple[str, Word]]:
+    heard: list[tuple[str, Word]] = []
+    for word in words:
+        if word.confidence is not None and word.confidence < CONFIDENCE_MIN:
+            continue
+        for token in canonicalize_tokens(tokenize(word.text)):
+            heard.append((token, word))
+    return heard
 
-    Number words match digits. Fuzzy and phonetic neighbors match. A word
-    below the confidence floor is a mishearing and is not a finding.
+
+def unmatched_asr(plan_tokens: list[str], heard: list[tuple[str, Word]]) -> list[tuple[str, Word]]:
+    """ASR tokens left over after aligning them to the plan text, in order.
+
+    A fuzzy neighbor counts as the script word. Anything else that alignment
+    cannot call that word is leftover: an extra token, or a different word
+    standing in a script slot.
     """
+    plan_n = len(plan_tokens)
+    heard_n = len(heard)
+    insert_cost = 1
+    delete_cost = 1
+    substitute_cost = 4
+    parent = [[0] * (heard_n + 1) for _ in range(plan_n + 1)]
+    previous = [index * insert_cost for index in range(heard_n + 1)]
+    for index in range(1, heard_n + 1):
+        parent[0][index] = 1
+    for plan_index in range(1, plan_n + 1):
+        current = [0] * (heard_n + 1)
+        current[0] = plan_index * delete_cost
+        parent[plan_index][0] = 2
+        plan_token = plan_tokens[plan_index - 1]
+        for heard_index in range(1, heard_n + 1):
+            heard_token = heard[heard_index - 1][0]
+            match_cost = 0 if _tokens_close(heard_token, plan_token) else substitute_cost
+            choices = (
+                (previous[heard_index - 1] + match_cost, 0),
+                (current[heard_index - 1] + insert_cost, 1),
+                (previous[heard_index] + delete_cost, 2),
+            )
+            cost, move = min(choices)
+            current[heard_index] = cost
+            parent[plan_index][heard_index] = move
+        previous = current
+    plan_index, heard_index = plan_n, heard_n
+    unmatched: list[tuple[str, Word]] = []
+    while plan_index > 0 or heard_index > 0:
+        move = parent[plan_index][heard_index]
+        if plan_index > 0 and heard_index > 0 and move == 0:
+            if not _tokens_close(heard[heard_index - 1][0], plan_tokens[plan_index - 1]):
+                unmatched.append(heard[heard_index - 1])
+            plan_index -= 1
+            heard_index -= 1
+        elif heard_index > 0 and (plan_index == 0 or move == 1):
+            unmatched.append(heard[heard_index - 1])
+            heard_index -= 1
+        else:
+            plan_index -= 1
+    unmatched.reverse()
+    return unmatched
+
+
+def _classify(token: str, plan_tokens: list[str]) -> str:
+    if _is_clipped_prefix(token, plan_tokens):
+        return "partial_word"
+    return "stray_fragment"
+
+
+def compare_window(expected: list[Word], actual: list[Word]) -> list[tuple[str, Word]]:
+    """Unmatched heard words after aligning them to the expected words."""
     raw: list[str] = []
     for word in expected:
         raw.extend(tokenize(word.text))
-    expected_tokens = canonicalize_tokens(raw)
+    plan_tokens = canonicalize_tokens(raw)
+    seen: set[int] = set()
     extras: list[tuple[str, Word]] = []
-    for word in actual:
-        if word.confidence is not None and word.confidence < CONFIDENCE_MIN:
+    for token, word in unmatched_asr(plan_tokens, _heard_tokens(actual)):
+        if id(word) in seen:
             continue
-        heard = canonicalize_tokens(tokenize(word.text))
-        if not heard:
-            continue
-        token = heard[0] if len(heard) == 1 else " ".join(heard)
-        if _close_to_expected(token, expected_tokens):
-            continue
-        if len(heard) == 1 and _is_clipped_prefix(heard[0], expected_tokens):
-            extras.append(("partial_word", word))
-        else:
-            extras.append(("stray_fragment", word))
+        seen.add(id(word))
+        extras.append((_classify(token, plan_tokens), word))
     return extras
+
+
+def narration_joins(plan: EditPlan) -> list[float]:
+    lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
+    if not lines:
+        return []
+    points = [lines[0].start]
+    for previous, following in zip(lines, lines[1:]):
+        points.append(previous.end)
+        points.append(following.start)
+    points.append(lines[-1].end)
+    return points
+
+
+def plan_tokens(plan: EditPlan) -> list[str]:
+    raw: list[str] = []
+    for line in sorted(plan.narration, key=lambda item: (item.start, item.end)):
+        raw.extend(tokenize(line.text))
+    return canonicalize_tokens(raw)
+
+
+def stray_near_joins(
+    plan: EditPlan,
+    heard_words: list[Word],
+    *,
+    margin: float,
+) -> list[tuple[str, Word]]:
+    """ASR words near a narration join that alignment could not place in the script."""
+    joins = narration_joins(plan)
+    tokens = plan_tokens(plan)
+    seen: set[int] = set()
+    findings: list[tuple[str, Word]] = []
+    for token, word in unmatched_asr(tokens, _heard_tokens(heard_words)):
+        if id(word) in seen:
+            continue
+        midpoint = (word.start + word.end) / 2
+        if not any(abs(midpoint - join) <= margin for join in joins):
+            continue
+        seen.add(id(word))
+        findings.append((_classify(token, tokens), word))
+    return findings

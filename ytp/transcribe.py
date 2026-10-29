@@ -147,6 +147,11 @@ class FasterWhisperTranscriber(Transcriber):
                 str(path),
                 word_timestamps=True,
                 language=self.forced_language,
+                temperature=0.0,
+                beam_size=5,
+                best_of=1,
+                condition_on_previous_text=False,
+                vad_filter=False,
             )
             for segment in segments:
                 pieces.append(segment.text.strip())

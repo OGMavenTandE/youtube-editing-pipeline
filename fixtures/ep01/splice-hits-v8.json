@@ -1,0 +1,17 @@
+[
+  {"word": "a", "start": 1.24, "end": 1.36},
+  {"word": "next", "start": 10.225, "end": 10.42},
+  {"word": "It's", "start": 17.445, "end": 17.62},
+  {"word": "today.", "start": 18.265, "end": 18.5},
+  {"word": "decides", "start": 52.576, "end": 52.9},
+  {"word": "more", "start": 63.854, "end": 64.05},
+  {"word": "the", "start": 117.747, "end": 117.9},
+  {"word": "empty", "start": 133.129, "end": 133.4},
+  {"word": "those", "start": 150.34, "end": 150.55},
+  {"word": "time", "start": 164.333, "end": 164.55},
+  {"word": "here.", "start": 170.624, "end": 170.8},
+  {"word": "here.", "start": 170.944, "end": 171.1},
+  {"word": "7", "start": 185.406, "end": 185.62},
+  {"word": "Yes.", "start": 224.208, "end": 224.45},
+  {"word": "days,", "start": 247.132, "end": 247.4}
+]
