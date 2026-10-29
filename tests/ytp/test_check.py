@@ -131,7 +131,8 @@ def test_caption_that_leads_speech_fails(tmp_path: Path, rules_root) -> None:
     assert any(finding.code == "caption_early" for finding in captions.findings)
 
 
-def test_whisper_holes_inside_a_line_are_not_pauses(tmp_path: Path, rules_root) -> None:
+def test_word_gaps_over_250ms_are_pauses_inside_one_line(tmp_path: Path, rules_root) -> None:
+    """A single narration line still drops word gaps longer than 250 ms."""
     video = _video(tmp_path, "holes.mp4")
     words = []
     cursor = 0.0
@@ -150,9 +151,10 @@ def test_whisper_holes_inside_a_line_are_not_pauses(tmp_path: Path, rules_root) 
         asr=Transcript(text=text, words=words, word_timestamps=True),
     )
     wpm = next(item for item in report.checks if item.id == "wpm")
-    assert wpm.measurements["articulation_wpm"] == pytest.approx(
-        wpm.measurements["overall_wpm"], abs=0.05
-    )
+    # 8 words, 0.25s each, seven 0.32s gaps. Speech clock is the word time only.
+    assert wpm.measurements["overall_wpm"] == pytest.approx(8 / (4.24 / 60), abs=0.1)
+    assert wpm.measurements["articulation_wpm"] == pytest.approx(8 / (2.0 / 60), abs=0.1)
+    assert wpm.measurements["articulation_wpm"] > wpm.measurements["overall_wpm"]
 
 
 def test_bracket_transcript_skips_splice_and_articulation(tmp_path: Path, rules_root) -> None:
@@ -380,8 +382,8 @@ def _words_for_rates(count: int, overall: float, articulation: float) -> tuple[f
 def test_ep01_like_pace_warns_nothing(tmp_path: Path, rules_root) -> None:
     """166 overall and articulation inside 175-185 is the approved shape. No warning.
 
-    The pause is a gap between narration lines, not a hole Whisper left
-    between words inside a line.
+    The pause is a word gap over 250 ms. On the Episode 1 mix that is about
+    167 overall and 184 while speaking.
     """
     video = _video(tmp_path, "pace.mp4")
     total, words = _words_for_rates(10, 166, 180)
@@ -497,8 +499,8 @@ def test_talking_head_open_line_end_screen_and_description(tmp_path: Path, rules
     plan.segments[0].duration = 12.0
     plan.meta["end_card"]["elements"] = [{"id": "name", "x1": 80, "y1": 80, "x2": 420, "y2": 160}]
     short_tail = _check(video, plan, rules_root, series="talking-head")
-    end_card = next(item for item in short_tail.checks if item.id == "end_card")
-    assert any(item.code == "end_card_duration" for item in end_card.findings)
+    container = next(item for item in short_tail.checks if item.id == "container")
+    assert any(item.code == "duration" for item in container.findings)
 
 
 def test_windows_drive_path_is_not_prefixed_with_the_episode(tmp_path: Path) -> None:

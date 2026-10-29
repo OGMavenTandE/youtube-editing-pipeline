@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
-from ytp.cards import card_box
+from ytp.cards import append_talking_head_end_card, card_box
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
@@ -306,6 +306,8 @@ def check_render(
     episode_dir: Path | None = None,
 ) -> Report:
     rules = load_rules(series, rules_root)
+    # Same end-card tail render adds, so a standalone check matches the file.
+    plan = _plan_with_end_card(plan, rules_root)
     transcript = _measured_transcript(video, asr, transcriber)
     width, height = probe_video_size(video)
     duration = probe_duration(video)
@@ -331,6 +333,14 @@ def check_render(
         passed=passed,
         checks=checks,
     )
+
+
+def _plan_with_end_card(plan: EditPlan, rules_root: Path | None) -> EditPlan:
+    import copy
+
+    cloned = copy.deepcopy(plan)
+    append_talking_head_end_card(cloned, rules_root)
+    return cloned
 
 
 def _check_container(video, plan, width, height, duration, use_short: bool) -> CheckResult:
@@ -558,22 +568,18 @@ def _measured_transcript(video: Path, asr: Transcript | None, transcriber) -> Tr
     return heard
 
 
-def _editorial_pause(plan: EditPlan, start: float, end: float, gap_seconds: float) -> float:
-    """Silence between narration lines, when that silence is longer than the threshold.
+def _word_gap_pause(words: list[Word], gap_seconds: float) -> float:
+    """Silence between transcript words longer than the threshold.
 
-    Time inside a line stays in the speech clock even if Whisper left a hole
-    there. Only the gap the edit actually left between lines is a pause.
+    A single narration line has no between-line gap, so pauses are read from
+    the word times. A gap of 250 ms or less stays in the speech clock.
     """
     pause = 0.0
-    lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
-    for previous, following in zip(lines, lines[1:]):
+    ordered = sorted(words, key=lambda word: (word.start, word.end))
+    for previous, following in zip(ordered, ordered[1:]):
         gap = following.start - previous.end
-        if gap <= gap_seconds:
-            continue
-        left = max(previous.end, start)
-        right = min(following.start, end)
-        if right > left:
-            pause += right - left
+        if gap > gap_seconds:
+            pause += gap
     return pause
 
 
@@ -601,9 +607,7 @@ def _pace_from_transcript(
         if span <= 0:
             return None, None, "not measured: transcript words have no duration"
         overall = len(spoken) / (span / 60.0)
-        # Only editorial pauses (gaps between narration lines) come out.
-        # Whisper's holes between words inside a line are not pauses.
-        pause = _editorial_pause(plan, spoken[0].start, spoken[-1].end, gap_seconds)
+        pause = _word_gap_pause(spoken, gap_seconds)
         speech = max(span - pause, 1e-6)
         articulation = len(spoken) / (speech / 60.0)
         if articulation is not None and articulation + 0.05 < overall:
@@ -704,6 +708,55 @@ def _check_closers(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -
     return CheckResult("closers", _ok(findings), summary, findings)
 
 
+def _open_tokens(text: str) -> list[str]:
+    """Lowercase words. Possessives and punctuation do not count as differences."""
+    cleaned = text.replace("\u2019", "'").replace("\u2018", "'").casefold()
+    cleaned = re.sub(r"'s\b", "", cleaned)
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", cleaned)
+    return [token for token in cleaned.split() if token]
+
+
+def _one_extra_token(longer: list[str], shorter: list[str]) -> bool:
+    """True when ``longer`` is ``shorter`` plus exactly one extra word, in order."""
+    if len(longer) != len(shorter) + 1:
+        return False
+    skipped = 0
+    index = 0
+    for token in longer:
+        if index < len(shorter) and token == shorter[index]:
+            index += 1
+        else:
+            skipped += 1
+            if skipped > 1:
+                return False
+    return index == len(shorter) and skipped == 1
+
+
+def open_line_match(required: str, heard: str) -> tuple[str, str]:
+    """``exact``, ``fuzzy``, or ``miss``, plus the heard phrase when it matched.
+
+    Fuzzy allows one missing or one extra word after possessives are folded.
+    """
+    needle = _open_tokens(required)
+    haystack = _open_tokens(heard)
+    if not needle:
+        return "miss", ""
+    if needle == haystack:
+        return "exact", " ".join(haystack)
+    for length in (len(needle), len(needle) - 1, len(needle) + 1):
+        if length <= 0 or length > len(haystack):
+            continue
+        for start in range(len(haystack) - length + 1):
+            window = haystack[start : start + length]
+            matched = window == needle or _one_extra_token(needle, window) or _one_extra_token(
+                window, needle
+            )
+            if matched:
+                kind = "exact" if window == needle else "fuzzy"
+                return kind, " ".join(window)
+    return "miss", ""
+
+
 def _check_required_open(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
     block = rules.lint.get("required_open") or {}
     required = str(block.get("text") or "").strip()
@@ -712,13 +765,17 @@ def _check_required_open(plan: EditPlan, rules: SeriesRules, asr: Transcript | N
     window = float(block.get("window_seconds", 60))
     if asr is not None and asr.words:
         heard = " ".join(word.text for word in asr.words if word.start < window)
-        parts = [heard]
     else:
-        parts = [line.text for line in plan.narration if line.start < window]
-    haystack = _copy_text(*parts).casefold()
-    needle = _copy_text(required).casefold()
-    if needle in haystack:
+        heard = " ".join(line.text for line in plan.narration if line.start < window)
+    kind, quote = open_line_match(required, heard)
+    if kind == "exact":
         return CheckResult("required_open", True, f"open line is inside the first {window:.0f}s")
+    if kind == "fuzzy":
+        return CheckResult(
+            "required_open",
+            True,
+            f'open line is inside the first {window:.0f}s; heard "{quote}"',
+        )
     return CheckResult(
         "required_open",
         False,
@@ -832,7 +889,13 @@ def _check_end_card(
     image = str((plan.meta or {}).get("end_card", {}).get("image") or block.get("image") or "")
     if image:
         resolved = resolve_episode_path(episode_dir, image)
-        if episode_dir is not None and not resolved.is_file():
+        if not resolved.is_file():
+            from ytp.rules import repo_root
+
+            repo_copy = repo_root() / image.replace("\\", "/")
+            if repo_copy.is_file():
+                resolved = repo_copy
+        if not resolved.is_file():
             findings.append(
                 _warn(
                     "end_card",

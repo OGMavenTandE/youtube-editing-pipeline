@@ -22,6 +22,49 @@ def _overlaps_slot(box, slot) -> bool:
     return box[0] < slot[2] and box[2] > slot[0] and box[1] < slot[3] and box[3] > slot[1]
 
 
+def test_open_line_allows_one_missing_word() -> None:
+    from ytp.check import open_line_match
+
+    required = "These are my own views, not the Department's."
+    heard = "Intro. These are my views, not the Department. Thanks."
+    kind, quote = open_line_match(required, heard)
+    assert kind == "fuzzy"
+    assert quote == "these are my views not the department"
+    assert open_line_match(required, required)[0] == "exact"
+    assert open_line_match(required, "hello there")[0] == "miss"
+
+
+def test_standalone_check_counts_the_end_card_tail(tmp_path: Path, rules_root, monkeypatch) -> None:
+    video = write_clip(tmp_path / "talk.mp4", seconds=0.4, size="320x180")
+    plan = EditPlan(
+        series="talking-head",
+        episode="t",
+        width=1920,
+        height=1080,
+        segments=[Segment(id="a", kind="still", source="frames/a.png", start=0.0, duration=60.0)],
+        narration=[NarrationLine(id="n", text=OPEN, start=0.0, end=60.0)],
+    )
+    monkeypatch.setattr("ytp.check.probe_duration", lambda _path: 66.9)
+    monkeypatch.setattr("ytp.check.probe_video_size", lambda _path: (1920, 1080))
+    report = check_render(
+        video,
+        plan,
+        series="talking-head",
+        rules_root=rules_root,
+        asr=Transcript(
+            text=OPEN,
+            word_timestamps=True,
+            words=[Word("These", 23.0, 23.2), Word("are", 23.2, 23.3)],
+        ),
+        transcriber=None,
+        profile="episode",
+        loudness_fn=lambda _path: (-16.0, -2.0),
+    )
+    container = next(item for item in report.checks if item.id == "container")
+    assert container.passed
+    assert not any(item.code == "duration" for item in container.findings)
+
+
 def test_card_styles_stay_out_of_the_end_screen_slots(rules_root) -> None:
     rules = load_rules("talking-head", rules_root)
     slots = []

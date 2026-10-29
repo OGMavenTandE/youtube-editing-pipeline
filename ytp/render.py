@@ -340,6 +340,12 @@ def _placeholder_end_card(plan, episode_dir, work: Path, warnings: list[str]) ->
         source = resolve_media(segment.source, episode_dir)
         if source is not None and source.is_file():
             return
+        from ytp.rules import repo_root
+
+        repo_copy = repo_root() / str(segment.source).replace("\\", "/")
+        if repo_copy.is_file():
+            segment.source = str(repo_copy)
+            return
         missing = segment.source
         generated = work / "end-card-plain.png"
         run_ffmpeg(
