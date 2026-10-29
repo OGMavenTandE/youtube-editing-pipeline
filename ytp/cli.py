@@ -10,13 +10,16 @@ import yaml
 
 from ytp import __version__
 from ytp.check import check_render, load_asr, write_report
+from ytp.finish import finish_episode
 from ytp.import_ep01 import import_episode
 from ytp.index import index_episode
 from ytp.layout import init_episode
 from ytp.plan import load_plan, save_plan, validate_plan
 from ytp.render import allocate_render_path, infer_episode_dir, render_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
-from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber
+from ytp.selftest import self_test_failed, self_test_lines
+from ytp.take import ingest_take, warn_cpu
+from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber, _cuda_or_cpu
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -129,8 +132,33 @@ def _build_parser() -> argparse.ArgumentParser:
         default="small",
         help="model for the ±1.5s splice windows (default small)",
     )
-    checker.add_argument("--device", default="auto")
+    checker.add_argument("--device", default="cpu", help="splice check stays on CPU")
     checker.set_defaults(func=_cmd_check)
+
+    take = sub.add_parser("take", help="init an episode beside a camera take and transcribe it")
+    take.add_argument("video", type=Path)
+    take.add_argument(
+        "--series",
+        default="talking-head",
+        choices=["talking-head", "ai-survival"],
+    )
+    take.add_argument(
+        "--episode",
+        default=None,
+        help="folder name beside the take (default: the file stem)",
+    )
+    take.set_defaults(func=_cmd_take)
+
+    finish = sub.add_parser("finish", help="validate, render with encoder auto, and check")
+    finish.add_argument("episode", nargs="?", type=Path, default=None)
+    finish.add_argument("--rules-root", type=Path, default=None)
+    finish.set_defaults(func=_cmd_finish)
+
+    probe = sub.add_parser(
+        "self-test",
+        help="print Python, ffmpeg, NVENC, CUDA, and a tiny whisper run",
+    )
+    probe.set_defaults(func=_cmd_self_test)
     return parser
 
 
@@ -288,7 +316,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         out_dir = qc if episode_dir.exists() else args.video.parent
     markdown, payload = write_report(report, out_dir)
     print("PASS" if report.passed else "FAIL")
-    print(markdown)
+    print(_console_text(markdown.read_text(encoding="utf-8")))
     print(payload)
     return 0 if report.passed else 1
 
@@ -303,6 +331,59 @@ def _cmd_rule_list(args: argparse.Namespace) -> int:
             print(f"{rule.id}: {rule.text}")
         print()
     return 0
+
+
+def _cmd_take(args: argparse.Namespace) -> int:
+    video = args.video
+    if not video.is_file():
+        print(f"ytp: take not found: {video}", file=sys.stderr)
+        return 1
+    device = _cuda_or_cpu()
+    if device != "cuda":
+        warn_cpu("CUDA is not available; transcribing on CPU int8")
+        device = "cpu"
+    transcriber = FasterWhisperTranscriber("small", device, "en")
+    try:
+        episode_dir = ingest_take(
+            video,
+            series=args.series,
+            episode=args.episode,
+            transcriber=transcriber,
+        )
+    except RuntimeError as exc:
+        if device == "cuda" and "faster-whisper" not in str(exc):
+            warn_cpu(f"CUDA transcription failed ({exc}); retrying on CPU int8")
+            transcriber = FasterWhisperTranscriber("small", "cpu", "en")
+            episode_dir = ingest_take(
+                video,
+                series=args.series,
+                episode=args.episode,
+                transcriber=transcriber,
+            )
+        else:
+            raise
+    print(f"episode: {episode_dir}")
+    print(f"transcript: {episode_dir / 'edit' / 'transcript.txt'}")
+    print(f"words: {episode_dir / 'edit' / 'words.json'}")
+    return 0
+
+
+def _cmd_finish(args: argparse.Namespace) -> int:
+    episode = args.episode or Path.cwd()
+    return finish_episode(episode, rules_root=args.rules_root)
+
+
+def _cmd_self_test(args: argparse.Namespace) -> int:
+    del args
+    lines = self_test_lines()
+    for line in lines:
+        print(line)
+    return 1 if self_test_failed(lines) else 0
+
+
+def _console_text(text: str) -> str:
+    """PowerShell 5.1 consoles garble a UTF-8 plus-minus sign."""
+    return text.replace("\u00b1", "+/-")
 
 
 def main(argv: list[str] | None = None) -> int:

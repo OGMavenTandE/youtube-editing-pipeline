@@ -36,10 +36,11 @@ def hidden_kwargs() -> dict[str, object]:
     return kwargs
 
 
-def tool_path(env_var: str, fallback_name: str) -> str:
-    override = os.environ.get(env_var, "").strip()
-    if override:
-        return override
+def tool_path(env_var: str, fallback_name: str, *legacy_vars: str) -> str:
+    for key in (env_var, *legacy_vars):
+        override = os.environ.get(key, "").strip().strip('"')
+        if override:
+            return override
     found = shutil.which(fallback_name)
     if not found:
         raise FFmpegError(
@@ -51,11 +52,28 @@ def tool_path(env_var: str, fallback_name: str) -> str:
 
 
 def ffmpeg_bin() -> str:
-    return tool_path("FFMPEG_PATH", "ffmpeg")
+    """ffmpeg from YTP_FFMPEG, then FFMPEG_PATH, then PATH.
+
+    Paths with spaces (``C:\\AI Eval\\...``) are kept as one argument.
+    """
+    return tool_path("YTP_FFMPEG", "ffmpeg", "FFMPEG_PATH")
 
 
 def ffprobe_bin() -> str:
-    return tool_path("FFPROBE_PATH", "ffprobe")
+    """ffprobe beside YTP_FFMPEG when that variable points at ffmpeg."""
+    for key in ("YTP_FFPROBE", "FFPROBE_PATH"):
+        override = os.environ.get(key, "").strip().strip('"')
+        if override:
+            return override
+    ffmpeg = os.environ.get("YTP_FFMPEG", "").strip().strip('"') or os.environ.get(
+        "FFMPEG_PATH", ""
+    ).strip().strip('"')
+    if ffmpeg:
+        probe_name = "ffprobe.exe" if ffmpeg.lower().endswith(".exe") else "ffprobe"
+        sibling = Path(ffmpeg).with_name(probe_name)
+        if sibling.is_file():
+            return str(sibling)
+    return tool_path("YTP_FFPROBE", "ffprobe", "FFPROBE_PATH")
 
 
 def run_cmd(cmd: list[str]) -> subprocess.CompletedProcess[str]:

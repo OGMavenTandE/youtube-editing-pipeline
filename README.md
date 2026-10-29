@@ -2,7 +2,7 @@
 
 ## Booth quickstart (`ytp`)
 
-`ytp` is the script-driven editor for series episodes (AI Survival first). It never publishes a video and never changes a YouTube listing. Python 3 and ffmpeg/ffprobe only. No CapCut, DaVinci, or paid APIs. The same commands run on Linux and on Windows, including WSL on Scott's PC. NVIDIA encode is optional later (`--encoder nvenc` on the RTX 4070 Super); the default encoder is libx264 so a machine without a GPU still renders.
+`ytp` is the script-driven editor for series episodes (AI Survival first). It never publishes a video and never changes a YouTube listing. Python 3 and ffmpeg/ffprobe only. No CapCut, DaVinci, or paid APIs. The same commands run on Linux and on Windows, including Scott's Windows 11 PC. Takes land in `C:\AI Eval\YouTube`. The one-time install is [docs/windows-setup.md](docs/windows-setup.md): `ytp take` transcribes a file in place, and `ytp finish` renders with NVENC when ffmpeg lists it and a trial encode works, otherwise libx264. The splice check stays on CPU.
 
 ```bash
 pip install -e .

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +35,7 @@ class Transcript:
             text=self.text,
             language=self.language,
             word_timestamps=self.word_timestamps,
-            segments=list(self.segments),
+            segments=[(start + offset, end + offset, text) for start, end, text in self.segments],
             words=[
                 Word(word.text, word.start + offset, word.end + offset, word.confidence)
                 for word in self.words
@@ -92,6 +93,55 @@ _WHISPER_VAD = {
 }
 
 
+# Windows wheels ship these under site-packages/nvidia/<name>/bin.
+# nvidia.cublas.lib is not a module in those wheels.
+_NVIDIA_DLL_PACKAGES = ("cublas", "cudnn", "cuda_nvrtc")
+
+
+def nvidia_dll_dirs(search_paths: list[Path] | None = None) -> list[Path]:
+    """bin folders that hold cublas64_12.dll and the matching cuDNN/NVRTC DLLs."""
+    roots = list(search_paths) if search_paths is not None else [Path(entry) for entry in sys.path]
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        nvidia = root / "nvidia"
+        if not nvidia.is_dir():
+            continue
+        for name in _NVIDIA_DLL_PACKAGES:
+            folder = (nvidia / name / "bin").resolve()
+            if folder in seen or not folder.is_dir():
+                continue
+            seen.add(folder)
+            found.append(folder)
+    return found
+
+
+def enable_nvidia_dlls(search_paths: list[Path] | None = None) -> list[str]:
+    """Put CUDA DLL folders on PATH before ctranslate2 is imported.
+
+    ``os.add_dll_directory`` alone does not let ctranslate2 load
+    ``cublas64_12.dll``. Prepending the bin folders to ``PATH`` does.
+    Windows only. The process environment is changed; the user PATH is not.
+    """
+    if sys.platform != "win32":
+        return []
+    folders = nvidia_dll_dirs(search_paths)
+    if not folders:
+        return []
+    texts = [str(folder) for folder in folders]
+    current = os.environ.get("PATH", "")
+    prefix = os.pathsep.join(texts)
+    if not current.startswith(prefix):
+        os.environ["PATH"] = prefix + (os.pathsep + current if current else "")
+    if hasattr(os, "add_dll_directory"):
+        for folder in texts:
+            try:
+                os.add_dll_directory(folder)
+            except OSError:
+                continue
+    return texts
+
+
 def _segment_is_loop(segment: object) -> bool:
     """Drop a window segment the model marked as compressed or repetitive."""
     from ytp.splice import window_is_hallucination
@@ -146,13 +196,13 @@ class FasterWhisperTranscriber(Transcriber):
         cached = self._models.get(model_name)
         if cached is not None:
             return cached
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError as exc:
+        import importlib.util
+
+        if importlib.util.find_spec("faster_whisper") is None:
             raise RuntimeError(
                 "faster-whisper is not installed. "
                 "pip install -r requirements-ytp-whisper.txt"
-            ) from exc
+            )
         device = self.device_request
         if device == "auto":
             device = _cuda_or_cpu()
@@ -160,6 +210,11 @@ class FasterWhisperTranscriber(Transcriber):
         # Pin the pool before CTranslate2 reads it. cpu_threads=0 means "all cores".
         os.environ["OMP_NUM_THREADS"] = str(_CPU_THREADS)
         os.environ["CT2_VERBOSE"] = "0"
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        # PATH first. Importing faster-whisper loads ctranslate2.
+        enable_nvidia_dlls()
+        from faster_whisper import WhisperModel
+
         model = WhisperModel(
             model_name,
             device=device,
@@ -217,7 +272,7 @@ class FasterWhisperTranscriber(Transcriber):
             for segment in segments:
                 if window and _segment_is_loop(segment):
                     continue
-                pieces.append(segment.text.strip())
+                pieces.append((float(segment.start), float(segment.end), segment.text.strip()))
                 segment_words = list(segment.words or [])
                 if segment_words:
                     for token in segment_words:
@@ -236,8 +291,13 @@ class FasterWhisperTranscriber(Transcriber):
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
-        text = " ".join(piece for piece in pieces if piece)
-        transcript = Transcript(text=text, words=words, language=language)
+        text = " ".join(piece for _start, _end, piece in pieces if piece)
+        transcript = Transcript(
+            text=text,
+            words=words,
+            language=language,
+            segments=[(start, end, piece) for start, end, piece in pieces if piece],
+        )
         return transcript.shifted(offset)
 
 
@@ -245,6 +305,7 @@ def _cuda_or_cpu() -> str:
     forced = os.environ.get("YTP_WHISPER_DEVICE", "").strip()
     if forced:
         return forced
+    enable_nvidia_dlls()
     try:
         import ctranslate2
     except ImportError:
