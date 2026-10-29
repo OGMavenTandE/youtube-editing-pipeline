@@ -24,8 +24,20 @@ def test_seed_covers_every_owner(rules_root) -> None:
     assert rules.sections["audio"]
     assert rules.sections["edit"]
     assert rules.sections["script_copy"]
-    assert rules.lint["wpm"]["min"] == 175
-    assert rules.lint["wpm"]["max"] == 185
+    assert rules.raw["confirmation"]["picture"] == "pending_studio_confirmation"
+    picture = rules.sections["picture"]
+    assert picture
+    assert all(rule.status == "pending_studio_confirmation" for rule in picture)
+    assert rules.lint["wpm"]["pause_gap_ms"] == 250
+    assert rules.lint["wpm"]["source_type"] == "narration"
+    assert rules.lint["wpm"]["narration"]["overall"] == {
+        "min": 155,
+        "max": 185,
+        "severity": "warn",
+    }
+    assert rules.lint["wpm"]["narration"]["articulation"]["min"] == 175
+    assert rules.lint["wpm"]["narration"]["articulation"]["max"] == 185
+    assert "like and subscribe" in rules.lint["closers"]
     assert rules.lint["loudness"]["voice_lufs"] == -16
     assert rules.lint["loudness"]["shorts_lufs"] == -14
     assert rules.lint["loudness"]["true_peak_dbtp"] == -1.5
@@ -67,7 +79,7 @@ def test_rule_add_appends_without_dropping_seed(rules_root) -> None:
         root=rules_root,
     )
     after = load_rules("ai-survival", rules_root)
-    assert added.id == "edit-005"
+    assert added.id == "edit-010"
     assert [rule.id for rule in after.sections["edit"]].count("edit-005") == 1
     assert len(after.sections["picture"]) == len(before.sections["picture"])
     assert after.lint["loudness"]["voice_lufs"] == -16
@@ -123,6 +135,42 @@ def test_rule_add_cli_and_rejects_bad_section(rules_root, capsys) -> None:
             ]
         )
     assert exc.value.code == 2
+
+
+def test_talking_head_rules_and_windows_source_path() -> None:
+    rules = load_rules("talking-head")
+    assert rules.lint["wpm"]["source_type"] == "desk"
+    assert rules.lint["required_open"]["window_seconds"] == 60
+    assert "Department's" in rules.lint["required_open"]["text"]
+    slots = rules.lint["end_card"]["clear_slots"]
+    assert slots[0]["id"] == "video"
+    assert [slots[0]["x1"], slots[0]["y1"], slots[0]["x2"], slots[0]["y2"]] == [
+        944,
+        170,
+        1760,
+        629,
+    ]
+    assert [slots[1]["x1"], slots[1]["y1"], slots[1]["x2"], slots[1]["y2"]] == [
+        1242,
+        730,
+        1462,
+        950,
+    ]
+    assert rules.lint["end_card"]["image"] == "assets/end-card/option-C-clean.png"
+    assert rules.lint["description"]["exempt_from_vendor_ban"] is True
+    bans = collected_bans(rules)
+    names = ("Grok", "xAI", "Google", "Gemini", "OpenAI", "ChatGPT", "GPT", "Anthropic", "Claude")
+    for name in names:
+        assert name in bans.vendors
+    assert "CDAO" in bans.phrases
+    assert "former Pentagon" in bans.phrases
+    copy = " ".join(rule.text for rule in rules.sections["script_copy"])
+    assert "4P hook" not in copy
+    assert "Department of War" in copy
+    assert "Spell out an acronym" in copy
+    assert rules.raw["sources"]["raw_takes"] == r"C:\AI Eval\YouTube"
+    edit = " ".join(rule.text for rule in rules.sections["edit"])
+    assert "4P" not in edit
 
 
 def test_new_series_file_includes_vendor_ban(rules_root) -> None:

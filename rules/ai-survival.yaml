@@ -4,56 +4,47 @@ owners:
   audio: Track
   edit: Booth
   script_copy: Galley
+confirmation:
+  picture: pending_studio_confirmation
 picture:
   - id: picture-001
+    status: pending_studio_confirmation
     text: >-
-      The illustrated host is an all-white, ghost-like figure with an olive
-      backward cap and an orange scarf. Never call it a "stick figure".
-    source: booth-handoff-2026-10-27
+      Pending Studio's confirmation. The host is an all-white, ghost-like
+      figure with an olive backward cap and an orange scarf. Never call it a
+      "stick figure".
+    source: studio-via-booth-2026-10-29
     added: "2026-10-29"
   - id: picture-002
+    status: pending_studio_confirmation
     text: >-
-      No name anywhere in an AI Survival video. No name cards, no name on the
-      title card, and no name on the end card.
-    source: booth-handoff-2026-10-27
+      Pending Studio's confirmation. No name anywhere. No name cards, no name
+      on the title card, and no named end card.
+    source: studio-via-booth-2026-10-29
     added: "2026-10-29"
   - id: picture-003
+    status: pending_studio_confirmation
     text: >-
-      The picture track is chapter cards and stills cut to the voice, not a
-      generated talking-head film.
-    source: booth-handoff-2026-10-27
+      Pending Studio's confirmation. The picture track is chapter cards and
+      stills cut to the voice, not a generated talking head.
+    source: studio-via-booth-2026-10-29
     added: "2026-10-29"
   - id: picture-004
+    status: pending_studio_confirmation
     text: >-
-      Desk videos (Skynet, Autonomy Capital) are a different picture from
-      AI Survival. Scott is on camera, face picture-in-picture lower right is
-      required, and full-frame DVIDS B-roll carries number and data cards.
-      No text-on-black cards.
-    source: booth-handoff-2026-10-27
+      Pending Studio's confirmation. B-roll comes from DVIDS first, searched
+      by named platforms, exercises, and units (Sea Hunter, XQ-58A, Task Force
+      59, Project Convergence, Vigilant Hammer). NASA public domain is second.
+      Never use "DCS", "Flight Simulator", "Unreal", "stock HUD", or "movie
+      clips". A spoken film title is allowed.
+    source: studio-via-booth-2026-10-29
     added: "2026-10-29"
   - id: picture-005
+    status: pending_studio_confirmation
     text: >-
-      B-roll is DVIDS first, searched by named platforms, exercises, and units
-      (Sea Hunter, XQ-58A, Task Force 59, Project Convergence, Vigilant Hammer),
-      never abstract terms. NASA public-domain is second. Never use "DCS",
-      "Flight Simulator", or "Unreal" showcases, generic stock HUD, or
-      copyrighted movie clips. Spoken film titles are allowed. Choose each
-      shot after the cut, tightly matched to its spoken beat.
-    source: booth-handoff-2026-10-27
-    added: "2026-10-29"
-  - id: picture-006
-    text: >-
-      Shorts are 1080x1920, under 3 minutes, and aim under about 30 seconds.
-      The first frame is a 3 second hook. Title text is bold. The ffmpeg
-      drawtext font path must contain no commas; copy the font to a temp file
-      such as bold.ttf before drawing.
-    source: booth-handoff-2026-10-27
-    added: "2026-10-29"
-  - id: picture-007
-    text: >-
-      Thumbnails carry one big idea, in three words or less, readable when
-      small. Thumbnail text adds what the title does not already say.
-    source: booth-handoff-2026-10-27
+      Pending Studio's confirmation. Thumbnails carry one idea in three words
+      or fewer.
+    source: studio-via-booth-2026-10-29
     added: "2026-10-29"
 audio:
   - id: audio-001
@@ -65,9 +56,11 @@ audio:
     added: "2026-10-29"
   - id: audio-002
     text: >-
-      The Rafaga voice runs at 175 to 185 words per minute. Use pauses to
-      slow it down.
-    source: rules-seed-2026-10-27
+      Scott's approved pace is 175 to 185 words per minute while the voice is
+      actually speaking. Pauses do the slowing. The approved Episode 1 mix is
+      about 166 words per minute overall (692 words, pauses included). The
+      check reports overall pace and articulation pace. Both are warnings.
+    source: track-2026-10-29
     added: "2026-10-29"
   - id: audio-003
     text: >-
@@ -100,26 +93,58 @@ audio:
 edit:
   - id: edit-001
     text: >-
-      When removing a sentence, remove all of it. Check the transcript around
-      every splice. Episode 1 v8 shipped a stray "if" left from a partial cut.
-    source: booth-handoff-2026-10-27
+      When a sentence comes out, remove all of it, and re-transcribe a window
+      around every splice. Episode 1 v8 left a stray "if".
+    source: booth-2026-10-29
     added: "2026-10-29"
   - id: edit-002
-    text: Rebuild from the current mix. Never splice an old render.
-    source: booth-handoff-2026-10-27
+    text: Rebuild from the current mix every time. Never splice an old render.
+    source: booth-2026-10-29
     added: "2026-10-29"
   - id: edit-003
+    text: >-
+      Record audio first and cut pictures to the voice. Choose each shot after
+      the cut is locked, matched to the spoken beat.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-004
+    text: >-
+      Cut coughs, stumbles, false starts, and dead air from desk takes. Keep
+      natural breaths, and do not over-tighten the pauses between thoughts.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-005
+    text: >-
+      End on the last strong spoken line. No spoken sign-off. Never say "like
+      and subscribe", "thanks for watching", or "leave a comment".
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-006
+    text: >-
+      The first about 20 seconds follow the 4P hook: Promise, Proof, Plan,
+      Persona.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-007
+    text: >-
+      Shorts are 1080x1920 and under 3 minutes, aiming for about 30 seconds.
+      They open on a 3 second hook frame, use bold title text and burned-in
+      captions, and link back to the full video.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-008
     text: >-
       Never name or criticize an AI vendor on camera (Grok, Google, Anthropic,
       ChatGPT, OpenAI, Claude, Gemini, Copilot, Meta AI, Llama, Mistral, xAI,
       DeepSeek, Perplexity). Say "some vendors" instead.
     source: scott-2026-10-29
     added: "2026-10-29"
-  - id: edit-004
+  - id: edit-009
     text: >-
-      Draft only. Bots never publish a video and never change the YouTube
-      listing.
-    source: booth-handoff-2026-10-27
+      Draft only. Renders go to renders/vN, a new version folder every time,
+      and never overwrite a previous render. Nothing is ever uploaded or
+      published.
+    source: booth-2026-10-29
     added: "2026-10-29"
 script_copy:
   - id: script_copy-001
@@ -229,9 +254,37 @@ lint:
     - i-robot
     - lightsaber
     - imperial-march
+  closers:
+    - like and subscribe
+    - smash that like
+    - hit the like
+    - hit subscribe
+    - leave a comment
+    - comment below
+    - thanks for watching
+    - see you next time
+    - don't forget to subscribe
   wpm:
-    min: 175
-    max: 185
+    pause_gap_ms: 250
+    source_type: narration
+    narration:
+      overall:
+        min: 155
+        max: 185
+        severity: warn
+      articulation:
+        min: 175
+        max: 185
+        severity: warn
+    desk:
+      overall:
+        min: 155
+        max: 185
+        severity: warn
+      articulation:
+        min: 175
+        max: 185
+        severity: warn
   loudness:
     voice_lufs: -16
     shorts_lufs: -14

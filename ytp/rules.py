@@ -72,7 +72,29 @@ DEFAULT_LINT: dict[str, Any] = {
         "lightsaber",
         "imperial-march",
     ],
-    "wpm": {"min": 175, "max": 185},
+    "closers": [
+        "like and subscribe",
+        "smash that like",
+        "hit the like",
+        "hit subscribe",
+        "leave a comment",
+        "comment below",
+        "thanks for watching",
+        "see you next time",
+        "don't forget to subscribe",
+    ],
+    "wpm": {
+        "pause_gap_ms": 250,
+        "source_type": "narration",
+        "narration": {
+            "overall": {"min": 155, "max": 185, "severity": "warn"},
+            "articulation": {"min": 175, "max": 185, "severity": "warn"},
+        },
+        "desk": {
+            "overall": {"min": 155, "max": 185, "severity": "warn"},
+            "articulation": {"min": 175, "max": 185, "severity": "warn"},
+        },
+    },
     "loudness": {
         "voice_lufs": -16,
         "shorts_lufs": -14,
@@ -108,6 +130,7 @@ class Rule:
     text: str
     source: str
     added: str
+    status: str = ""
 
 
 @dataclass
@@ -126,6 +149,7 @@ def _as_rule(item: dict[str, Any]) -> Rule:
         text=str(item["text"]),
         source=str(item.get("source") or ""),
         added=str(item.get("added") or ""),
+        status=str(item.get("status") or ""),
     )
 
 
