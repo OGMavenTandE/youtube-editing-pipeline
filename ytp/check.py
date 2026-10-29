@@ -19,10 +19,10 @@ from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
 from ytp.splice import (
+    audio_splice_windows,
     compare_window,
     narration_word_times,
     normalize_token,
-    splice_times,
     tokenize,
     words_overlapping,
 )
@@ -218,17 +218,26 @@ def load_asr(path: Path) -> Transcript:
             rows = data.get("words") or data.get("timestamps") or []
         else:
             rows = []
-        words = [
-            Word(
-                str(item.get("word") or item.get("text") or ""),
-                float(item["start"]),
-                float(item["end"]),
+        words = []
+        for item in rows:
+            confidence = item.get("confidence")
+            if confidence is None:
+                confidence = item.get("probability")
+            words.append(
+                Word(
+                    str(item.get("word") or item.get("text") or ""),
+                    float(item["start"]),
+                    float(item["end"]),
+                    None if confidence is None else float(confidence),
+                )
             )
-            for item in rows
-        ]
-        return Transcript(text=" ".join(word.text for word in words), words=words)
-    words: list[Word] = []
+        return Transcript(
+            text=" ".join(word.text for word in words),
+            words=words,
+            word_timestamps=True,
+        )
     pieces: list[str] = []
+    segments: list[tuple[float, float, str]] = []
     pattern = re.compile(r"^\[\s*([0-9.]+)\s*-\s*([0-9.]+)\s*\]\s*(.*)$")
     for line in raw.splitlines():
         match = pattern.match(line.strip())
@@ -238,15 +247,13 @@ def load_asr(path: Path) -> Transcript:
         end = float(match.group(2))
         sentence = match.group(3).strip()
         pieces.append(sentence)
-        tokens = tokenize(sentence)
-        if not tokens:
-            continue
-        span = max(end - start, 1e-3)
-        step = span / len(tokens)
-        for index, token in enumerate(tokens):
-            word_start = start + step * index
-            words.append(Word(token, word_start, word_start + step))
-    return Transcript(text=" ".join(pieces), words=words)
+        segments.append((start, end, sentence))
+    return Transcript(
+        text=" ".join(pieces),
+        words=[],
+        word_timestamps=False,
+        segments=segments,
+    )
 
 
 def _fail(
@@ -294,20 +301,21 @@ def check_render(
     episode_dir: Path | None = None,
 ) -> Report:
     rules = load_rules(series, rules_root)
+    transcript = _measured_transcript(video, asr, transcriber)
     width, height = probe_video_size(video)
     duration = probe_duration(video)
     use_short = profile == "short" or (profile == "auto" and height > width)
     checks = [
         _check_container(video, plan, width, height, duration, use_short),
         _check_loudness(video, plan, rules, use_short, loudness_fn, episode_dir),
-        _check_wpm(plan, rules, asr),
-        _check_banned(plan, rules, asr),
-        _check_closers(plan, rules, asr),
-        _check_required_open(plan, rules, asr),
+        _check_wpm(plan, rules, transcript),
+        _check_banned(plan, rules, transcript),
+        _check_closers(plan, rules, transcript),
+        _check_required_open(plan, rules, transcript),
         _check_description(plan, rules, episode_dir),
         _check_end_card(plan, rules, episode_dir),
-        _check_captions(plan, asr),
-        _check_splices(video, plan, rules, transcriber, asr, window),
+        _check_captions(plan, transcript),
+        _check_splices(video, plan, rules, transcriber, transcript, window),
     ]
     passed = all(check.passed or check.skipped for check in checks)
     return Report(
@@ -409,14 +417,13 @@ def _check_loudness(video, plan, rules, use_short, loudness_fn, episode_dir) -> 
 
 
 def _resolve(episode_dir: Path | None, value: str | None) -> Path | None:
-    if not value:
+    """Episode-relative paths only. A relative path is never resolved from the CWD."""
+    if not value or episode_dir is None:
         return None
-    path = Path(value)
-    if path.is_file():
-        return path
-    if episode_dir is not None and (episode_dir / value).is_file():
-        return episode_dir / value
-    return None
+    candidate = resolve_episode_path(episode_dir, value)
+    if _DRIVE.match(str(value)) or Path(str(value)).is_absolute():
+        return candidate if candidate.is_file() else None
+    return candidate if candidate.is_file() else None
 
 
 def _check_music_level(
@@ -435,8 +442,19 @@ def _check_music_level(
         if source is not None:
             cues.append((cue, source))
     if voice is None or not cues:
-        measurements["music_under_voice"] = "skipped"
-        return "music-under-voice skipped (no voice stem and cue files together)"
+        measurements["music_under_voice"] = "not measured"
+        named = [cue.source for cue in plan.music if cue.source]
+        if named and not cues:
+            return (
+                "not measured: score files are not on disk "
+                f"({len(named)} cue path(s) under audio/score/). "
+                "A finished mix cannot be split into voice and music, so the "
+                "music-under-voice check did not run."
+            )
+        return (
+            "not measured: no separate voice stem and score files. "
+            "The music-under-voice check did not run."
+        )
     try:
         voice_lufs, _peak = loudness_fn(voice)
     except Exception as exc:
@@ -514,12 +532,71 @@ def _pace_band(rules: SeriesRules, source: str, metric: str) -> tuple[float, flo
     return low, high, severity
 
 
+def _measured_transcript(video: Path, asr: Transcript | None, transcriber) -> Transcript | None:
+    """Word-timed transcript of the video. Whisper fills this in when --asr is absent."""
+    if asr is not None and asr.word_timestamps and asr.words:
+        return asr
+    if transcriber is None:
+        return asr
+    try:
+        heard = transcriber.transcribe(video)
+    except RuntimeError as exc:
+        if "faster-whisper" in str(exc):
+            return asr
+        raise
+    if heard is None:
+        return asr
+    heard.word_timestamps = True
+    if asr is not None and asr.text and not heard.text:
+        heard.text = asr.text
+    return heard
+
+
+def _pace_from_transcript(
+    transcript: Transcript | None, gap_seconds: float
+) -> tuple[float | None, float | None, str]:
+    """Overall and articulation pace from the video transcript, not the plan text.
+
+    Articulation removes pauses, so it cannot be slower than overall. A
+    bracket transcript has no word times: overall can use the line span, and
+    articulation is not measured.
+    """
+    if transcript is None:
+        return None, None, "not measured: no transcript of the video"
+    if transcript.word_timestamps and transcript.words:
+        spoken = sorted(
+            (word for word in transcript.words if normalize_token(word.text)),
+            key=lambda word: (word.start, word.end),
+        )
+        if len(spoken) < 1:
+            return None, None, "not measured: transcript has no words"
+        span = spoken[-1].end - spoken[0].start
+        if span <= 0:
+            return None, None, "not measured: transcript words have no duration"
+        overall = len(spoken) / (span / 60.0)
+        speech = speech_seconds(spoken, gap_seconds)
+        articulation = len(spoken) / (speech / 60.0) if speech > 0 else None
+        if articulation is not None and articulation + 0.05 < overall:
+            return overall, None, "articulation not measured: it would be below overall pace"
+        return overall, articulation, ""
+    if transcript.segments:
+        count = sum(len(tokenize(text)) for _start, _end, text in transcript.segments)
+        span = transcript.segments[-1][1] - transcript.segments[0][0]
+        if count and span > 0:
+            return (
+                count / (span / 60.0),
+                None,
+                "articulation not measured: transcript has no word timestamps",
+            )
+    return None, None, "not measured: transcript has no word timestamps"
+
+
 def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
     source = _pace_source(plan, rules)
-    pace = speaking_wpm(plan)
-    if pace is None:
-        return CheckResult("wpm", True, "no timed narration", skipped=True)
     gap_ms = float((rules.lint.get("wpm") or {}).get("pause_gap_ms", 250))
+    pace, articulation, note = _pace_from_transcript(asr, gap_ms / 1000.0)
+    if pace is None:
+        return CheckResult("wpm", True, note or "not measured", skipped=True)
     findings: list[Finding] = []
     measurements: dict[str, object] = {
         "source_type": source,
@@ -531,11 +608,10 @@ def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> Ch
         message = (
             f"overall pace is {pace:.1f} wpm; {source} band {low:.0f}-{high:.0f} ({severity})"
         )
-        note = _fail if severity == "fail" else _warn
-        findings.append(note("wpm", "overall_wpm", message))
-    articulation = _articulation_wpm(plan, asr, gap_ms / 1000.0)
+        marker = _fail if severity == "fail" else _warn
+        findings.append(marker("wpm", "overall_wpm", message))
     if articulation is None:
-        summary = f"overall {pace:.1f} wpm; articulation not measured (no word timestamps)"
+        summary = f"overall {pace:.1f} wpm; {note or 'articulation not measured'}"
     else:
         measurements["articulation_wpm"] = round(articulation, 2)
         band_low, band_high, band_severity = _pace_band(rules, source, "articulation")
@@ -544,20 +620,10 @@ def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> Ch
                 f"articulation pace is {articulation:.1f} wpm; "
                 f"{source} band {band_low:.0f}-{band_high:.0f} ({band_severity})"
             )
-            note = _fail if band_severity == "fail" else _warn
-            findings.append(note("wpm", "articulation_wpm", message))
+            marker = _fail if band_severity == "fail" else _warn
+            findings.append(marker("wpm", "articulation_wpm", message))
         summary = f"overall {pace:.1f} wpm; articulation {articulation:.1f} wpm"
     return CheckResult("wpm", _ok(findings), summary, findings, measurements=measurements)
-
-
-def _articulation_wpm(plan: EditPlan, asr: Transcript | None, gap_seconds: float) -> float | None:
-    if asr is None or not asr.words:
-        return None
-    spoken = [word for word in asr.words if normalize_token(word.text)]
-    seconds = speech_seconds(spoken, gap_seconds)
-    if not spoken or seconds <= 0:
-        return None
-    return len(spoken) / (seconds / 60.0)
 
 
 _DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
@@ -803,7 +869,7 @@ def _check_banned(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) ->
             findings.append(_fail("banned", "em_dash", "em dash in copy", stamp, "\u2014"))
         if bans.ban_emoji and _EMOJI.search(text):
             findings.append(_fail("banned", "emoji", "emoji in copy", stamp))
-    if asr is not None:
+    if asr is not None and asr.words:
         for phrase in phrases:
             for stamp in _phrase_times(asr.words, phrase):
                 findings.append(
@@ -812,6 +878,18 @@ def _check_banned(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) ->
                         "banned_phrase",
                         f'narration audio contains "{phrase}"',
                         stamp,
+                        phrase,
+                    )
+                )
+    elif asr is not None and asr.text:
+        for phrase in phrases:
+            if _contains(asr.text, phrase):
+                findings.append(
+                    _fail(
+                        "banned",
+                        "banned_phrase",
+                        f'narration audio contains "{phrase}"',
+                        None,
                         phrase,
                     )
                 )
@@ -847,16 +925,17 @@ def _phrase_times(words: list[Word], phrase: str) -> list[float]:
     return found
 
 
-def _speech_words(plan: EditPlan, asr: Transcript | None) -> list[Word]:
-    if asr is not None and asr.words:
-        return asr.words
-    return narration_word_times(plan)
-
-
 def _check_captions(plan: EditPlan, asr: Transcript | None) -> CheckResult:
     if not plan.captions:
         return CheckResult("captions", True, "no captions on the plan", skipped=True)
-    speech = _speech_words(plan, asr)
+    if asr is None or not asr.word_timestamps or not asr.words:
+        return CheckResult(
+            "captions",
+            True,
+            "not measured: caption timing needs a word-timestamp transcript of the video",
+            [_warn("captions", "not_measured", "caption timing was not compared to the audio")],
+        )
+    speech = asr.words
     findings: list[Finding] = []
     for cue in plan.captions:
         heard = words_overlapping(speech, cue.start - 0.15, cue.end + 0.15)
@@ -909,24 +988,34 @@ def _check_captions(plan: EditPlan, asr: Transcript | None) -> CheckResult:
 
 def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -> CheckResult:
     span = float(window if window is not None else rules.lint.get("splice_window_seconds", 0.5))
-    if not plan.narration and not plan.segments:
-        return CheckResult("splice_fragments", True, "no splices", skipped=True)
-    if not has_audio(video):
+    if not plan.narration:
+        return CheckResult("splice_fragments", True, "no narration splices", skipped=True)
+    if asr is not None and transcriber is None and not asr.word_timestamps:
+        note = (
+            "not measured: bracket transcript has line times only. "
+            "The splice check needs word timestamps."
+        )
+        return CheckResult(
+            "splice_fragments",
+            True,
+            note,
+            [_warn("splice_fragments", "not_measured", note)],
+        )
+    if transcriber is not None and not has_audio(video):
         return CheckResult(
             "splice_fragments",
             False,
             "video has no audio to transcribe",
             [_fail("splice_fragments", "no_audio", "video has no audio stream")],
         )
-    splices = splice_times(plan)
+    windows = audio_splice_windows(plan, margin=span)
     expected = narration_word_times(plan)
     findings: list[Finding] = []
     try:
         with tempfile.TemporaryDirectory(prefix="ytp-splice-") as work_text:
             work = Path(work_text)
-            for splice in splices:
-                start = max(0.0, splice - span)
-                end = splice + span
+            for start, end in windows:
+                splice = (start + end) / 2
                 if asr is not None and transcriber is None:
                     heard = words_overlapping(asr.words, start, end)
                     transcript = Transcript(text=" ".join(word.text for word in heard), words=heard)
@@ -982,7 +1071,7 @@ def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -
             [_fail("splice_fragments", "error", str(exc))],
         )
     findings = _dedupe(findings)
-    summary = f"{len(splices)} splice window(s), +/- {span:.2f}s"
+    summary = f"{len(windows)} narration splice window(s), margin {span:.2f}s"
     if findings:
         summary = f"{summary}; {len(findings)} leftover fragment(s)"
     return CheckResult("splice_fragments", not findings, summary, findings)

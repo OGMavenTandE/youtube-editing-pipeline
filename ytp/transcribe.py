@@ -15,6 +15,7 @@ class Word:
     text: str
     start: float
     end: float
+    confidence: float | None = None
 
 
 @dataclass
@@ -22,6 +23,9 @@ class Transcript:
     text: str
     words: list[Word] = field(default_factory=list)
     language: str = ""
+    # False for a bracketed line transcript. Splice and articulation need real word times.
+    word_timestamps: bool = True
+    segments: list[tuple[float, float, str]] = field(default_factory=list)
 
     def shifted(self, offset: float) -> Transcript:
         if not offset:
@@ -29,7 +33,12 @@ class Transcript:
         return Transcript(
             text=self.text,
             language=self.language,
-            words=[Word(word.text, word.start + offset, word.end + offset) for word in self.words],
+            word_timestamps=self.word_timestamps,
+            segments=list(self.segments),
+            words=[
+                Word(word.text, word.start + offset, word.end + offset, word.confidence)
+                for word in self.words
+            ],
         )
 
 
@@ -134,7 +143,11 @@ class FasterWhisperTranscriber(Transcriber):
         words: list[Word] = []
         pieces: list[str] = []
         try:
-            segments, info = model.transcribe(str(path), word_timestamps=True)
+            segments, info = model.transcribe(
+                str(path),
+                word_timestamps=True,
+                language=self.forced_language,
+            )
             for segment in segments:
                 pieces.append(segment.text.strip())
                 segment_words = list(segment.words or [])
@@ -142,7 +155,11 @@ class FasterWhisperTranscriber(Transcriber):
                     for token in segment_words:
                         text = token.word.strip()
                         if text:
-                            words.append(Word(text, float(token.start), float(token.end)))
+                            probability = getattr(token, "probability", None)
+                            confidence = None if probability is None else float(probability)
+                            words.append(
+                                Word(text, float(token.start), float(token.end), confidence)
+                            )
                 elif segment.text.strip():
                     words.append(
                         Word(segment.text.strip(), float(segment.start), float(segment.end))

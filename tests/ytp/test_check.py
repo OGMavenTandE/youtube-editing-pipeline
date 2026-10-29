@@ -96,16 +96,22 @@ def test_buzz_in_the_sentence_is_not_a_banned_sound(tmp_path: Path, rules_root) 
     )
 
 
-def test_wpm_outside_the_band_fails(tmp_path: Path, rules_root) -> None:
+def test_wpm_outside_the_band_warns_from_the_transcript(tmp_path: Path, rules_root) -> None:
     video = _video(tmp_path, "fast.mp4")
     plan = _base_plan(
-        narration=[NarrationLine(id="n", text="one two three", start=0.0, end=0.4)]
+        narration=[NarrationLine(id="n", text="slow words here", start=0.0, end=10.0)]
     )
-    assert speaking_wpm(plan) == pytest.approx(450)
-    report = _check(video, plan, rules_root)
+    heard = Transcript(
+        text="one two three",
+        words=[Word("one", 0.0, 0.1), Word("two", 0.1, 0.2), Word("three", 0.2, 0.4)],
+        word_timestamps=True,
+    )
+    report = _check(video, plan, rules_root, asr=heard)
     wpm = next(check for check in report.checks if check.id == "wpm")
-    assert wpm.passed is True
+    assert wpm.measurements["overall_wpm"] == pytest.approx(450, abs=1)
+    assert wpm.measurements["overall_wpm"] != pytest.approx(speaking_wpm(plan), abs=1)
     assert any(item.severity == "warn" and item.code == "overall_wpm" for item in wpm.findings)
+    assert wpm.passed is True
     assert report.passed is True
 
 
@@ -113,11 +119,76 @@ def test_caption_that_leads_speech_fails(tmp_path: Path, rules_root) -> None:
     video = _video(tmp_path, "cap.mp4")
     plan = _base_plan(
         captions=[CaptionCue(start=0.0, end=1.0, text="one")],
-        narration=[NarrationLine(id="n", text="one two three", start=0.5, end=1.0)],
+        narration=[NarrationLine(id="n", text="one two three", start=0.0, end=1.0)],
     )
-    report = _check(video, plan, rules_root)
+    heard = Transcript(
+        text="one two three",
+        words=[Word("one", 0.5, 0.7), Word("two", 0.7, 0.85), Word("three", 0.85, 1.0)],
+        word_timestamps=True,
+    )
+    report = _check(video, plan, rules_root, asr=heard)
     captions = next(check for check in report.checks if check.id == "captions")
     assert any(finding.code == "caption_early" for finding in captions.findings)
+
+
+def test_bracket_transcript_skips_splice_and_articulation(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "bracket.mp4")
+    plan = _base_plan()
+    asr_path = tmp_path / "asr.txt"
+    asr_path.write_text(
+        "[   0.00-   5.00] You're at a picnic when you hear a buzz\n"
+        "[   5.00-  10.00] In this story the machines have turned\n",
+        encoding="utf-8",
+    )
+    report = _check(video, plan, rules_root, asr=load_asr(asr_path), transcriber=None)
+    splice = next(item for item in report.checks if item.id == "splice_fragments")
+    assert "not measured" in splice.summary
+    assert any(item.code == "not_measured" for item in splice.findings)
+    assert not any(item.word == "You're" for item in splice.findings)
+    wpm = next(item for item in report.checks if item.id == "wpm")
+    assert "articulation_wpm" not in wpm.measurements
+    assert "not measured" in wpm.summary
+
+
+def test_whisper_transcript_is_scanned_for_banned_words(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "vendor.mp4")
+    plan = _base_plan(
+        narration=[NarrationLine(id="n", text="Hello there friend.", start=0.0, end=1.0)]
+    )
+
+    class Vendor:
+        name = "vendor"
+
+        def transcribe(self, media: Path, *, start: float | None = None, end: float | None = None):
+            return Transcript(
+                text="ChatGPT",
+                words=[Word("ChatGPT", 0.2, 0.6, 0.96)],
+                word_timestamps=True,
+            )
+
+    report = _check(video, plan, rules_root, transcriber=Vendor(), asr=None)
+    banned = next(item for item in report.checks if item.id == "banned")
+    assert any(item.word == "ChatGPT" for item in banned.findings)
+
+
+def test_missing_score_files_are_reported(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "mix.mp4")
+    plan = _base_plan(
+        voice="audio/voice/voice.wav",
+        music=[
+            MusicCue(
+                id="bed",
+                sfx="picnic-ambience",
+                at=0.0,
+                gain_db=-34,
+                source="audio/score/picnic-ambience.wav",
+            )
+        ],
+    )
+    report = _check(video, plan, rules_root, episode_dir=tmp_path)
+    loudness = next(item for item in report.checks if item.id == "loudness")
+    assert "not measured" in loudness.summary
+    assert "audio/score" in loudness.summary
 
 
 def test_music_under_voice_math() -> None:
@@ -133,10 +204,12 @@ def test_measure_loudness_reads_ffmpeg(tmp_path: Path) -> None:
     assert true_peak < 0
 
 
-def test_asr_bracket_fixture_matches_ep01() -> None:
+def test_asr_bracket_fixture_has_no_invented_word_times() -> None:
     asr = load_asr(repo_root() / "fixtures" / "ep01" / "asr-mix-v3d.txt")
-    assert asr.words[0].text == "You're"
-    assert asr.words[0].start == 0
+    assert asr.word_timestamps is False
+    assert asr.words == []
+    assert asr.segments[0][2].startswith("You're")
+    assert asr.segments[0][0] == 0
     assert "picnic" in asr.text
 
 
@@ -223,7 +296,12 @@ def test_desk_pace_is_warn_even_if_the_band_says_fail(tmp_path: Path, rules_root
     video = _video(tmp_path, "desk.mp4")
     plan = _base_plan(narration=[NarrationLine(id="n", text="one two three", start=0.0, end=0.4)])
     plan.meta["source_type"] = "desk"
-    report = _check(video, plan, rules_root)
+    heard = Transcript(
+        text="one two three",
+        words=[Word("one", 0.0, 0.1), Word("two", 0.1, 0.2), Word("three", 0.2, 0.4)],
+        word_timestamps=True,
+    )
+    report = _check(video, plan, rules_root, asr=heard)
     wpm = next(check for check in report.checks if check.id == "wpm")
     assert wpm.findings
     assert all(item.severity == "warn" for item in wpm.findings)

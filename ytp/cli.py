@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 from ytp import __version__
 from ytp.check import check_render, load_asr, write_report
 from ytp.import_ep01 import import_episode
@@ -185,11 +187,30 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _series_language(series: str, root: Path | None) -> str:
+    if not series:
+        return "en"
+    try:
+        rules = load_rules(series, root)
+    except FileNotFoundError:
+        return "en"
+    return str(rules.lint.get("language") or "en")
+
+
+def _episode_series(episode_dir: Path) -> str:
+    manifest = episode_dir / "episode.yaml"
+    if not manifest.is_file():
+        return ""
+    data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    return str(data.get("series") or "")
+
+
 def _cmd_index(args: argparse.Namespace) -> int:
     if args.backend == "none":
         transcriber = NullTranscriber()
     else:
-        transcriber = FasterWhisperTranscriber(args.model, args.device)
+        language = _series_language(_episode_series(args.episode_dir), None)
+        transcriber = FasterWhisperTranscriber(args.model, args.device, language)
     roots = [Path(item) for item in args.root] if args.root else None
     document = index_episode(args.episode_dir, transcriber, roots=roots)
     clips = document["clips"]
@@ -234,7 +255,11 @@ def _cmd_check(args: argparse.Namespace) -> int:
     plan = load_plan(args.plan)
     episode_dir = infer_episode_dir(args.plan)
     asr = load_asr(args.asr) if args.asr else None
-    transcriber = None if asr is not None else FasterWhisperTranscriber(args.model, args.device)
+    if asr is not None:
+        transcriber = None
+    else:
+        language = _series_language(args.series, args.rules_root)
+        transcriber = FasterWhisperTranscriber(args.model, args.device, language)
     report = check_render(
         args.video,
         plan,

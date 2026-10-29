@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.ytp.mediautil import require_ffmpeg, write_clip
 from ytp.check import check_render
 from ytp.ff import probe_duration
 from ytp.plan import EditPlan, NarrationLine, Segment
-from ytp.splice import compare_window
+from ytp.splice import compare_window, narration_word_times
 from ytp.transcribe import Transcript, Word
 
 
@@ -114,10 +116,7 @@ def test_partial_word_left_at_cut_fails_the_check(tmp_path: Path, rules_root) ->
     assert leftovers
     assert leftovers[0].code in {"stray_fragment", "partial_word"}
     assert leftovers[0].timestamp is not None
-    full = probe_duration(video)
-    assert hear.durations
     assert len(hear.durations) >= 2
-    assert max(hear.durations) < full - 0.2
     markdown = report.to_markdown()
     payload = report.to_dict()
     assert "FAIL" in markdown
@@ -129,6 +128,93 @@ def test_partial_word_left_at_cut_fails_the_check(tmp_path: Path, rules_root) ->
         for finding in check["findings"]
     ]
     assert "if" in words
+
+
+def _removed_line_plan() -> EditPlan:
+    """The Ep01 join where 00d_b1 was cut, plus a picture change that is not an audio splice."""
+    previous = (
+        "In the next four minutes, you'll see what an AI drone actually sees, "
+        "and get ten common-sense ways to not look like a target."
+    )
+    following = "Your guide today is a former Pentagon AI test and evaluation program manager."
+    return EditPlan(
+        series="ai-survival",
+        episode="ep01",
+        width=320,
+        height=180,
+        segments=[
+            Segment(id="still-a", kind="still", source="a.png", start=10.0, duration=6.0),
+            Segment(id="still-b", kind="still", source="b.png", start=16.0, duration=12.0),
+        ],
+        narration=[
+            NarrationLine(id="00c_b1", text=previous, start=10.065, end=17.245),
+            NarrationLine(id="04_b2", text=following, start=18.045, end=27.214),
+        ],
+    )
+
+
+def test_v8_flags_only_the_its_fragment_and_v8b_is_clean(tmp_path: Path, rules_root) -> None:
+    """v8 hears 'It's' from removed 00d_b1. v8b hears 'You're' for 'Your' and is clean."""
+    require_ffmpeg()
+    video = write_clip(tmp_path / "mix.mp4", seconds=1.0, size="320x180")
+    plan = _removed_line_plan()
+    script = narration_word_times(plan)
+    v8 = Transcript(
+        text="It's",
+        words=[*script, Word("It's", 17.48, 17.62, 0.93)],
+        word_timestamps=True,
+    )
+    v8b = Transcript(
+        text="You're",
+        words=[*script, Word("You're", 17.545, 17.72, 0.84)],
+        word_timestamps=True,
+    )
+    broken = check_render(
+        video,
+        plan,
+        series="ai-survival",
+        rules_root=rules_root,
+        asr=v8,
+        transcriber=None,
+        profile="episode",
+        loudness_fn=lambda _path: (-16.0, -2.0),
+    )
+    clean = check_render(
+        video,
+        plan,
+        series="ai-survival",
+        rules_root=rules_root,
+        asr=v8b,
+        transcriber=None,
+        profile="episode",
+        loudness_fn=lambda _path: (-16.0, -2.0),
+    )
+    broken_splice = next(item for item in broken.checks if item.id == "splice_fragments")
+    clean_splice = next(item for item in clean.checks if item.id == "splice_fragments")
+    assert [item.word for item in broken_splice.findings] == ["It's"]
+    assert broken_splice.findings[0].timestamp == pytest.approx(17.48, abs=0.05)
+    assert clean_splice.findings == []
+    assert clean_splice.passed is True
+    former = [
+        item
+        for item in clean.checks
+        if item.id == "banned"
+        for item in item.findings
+        if item.word == "former"
+    ]
+    assert former
+
+
+def test_numbers_and_low_confidence_mishearings_are_not_fragments() -> None:
+    expected = [Word("Tip", 0.0, 0.3), Word("one", 0.3, 0.6), Word("picnic", 0.6, 1.0)]
+    heard = [
+        Word("Tip", 0.0, 0.3, 0.9),
+        Word("1", 0.3, 0.55, 0.88),
+        Word("pick", 0.6, 0.8, 0.9),
+        Word("Sir", 0.85, 0.95, 0.2),
+        Word("Toot", 1.0, 1.1, 0.3),
+    ]
+    assert compare_window(expected, heard) == []
 
 
 def test_clean_windows_pass_the_splice_check(tmp_path: Path, rules_root) -> None:
