@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ytp.cards import end_card_status
 from ytp.ff import ffmpeg_bin, ffprobe_bin
 from ytp.render import ffmpeg_encoders, reset_encoder_cache
 from ytp.transcribe import _cuda_or_cpu, enable_nvidia_dlls
@@ -48,6 +49,7 @@ def self_test_lines() -> list[str]:
     enable_nvidia_dlls()
     device = _cuda_or_cpu()
     lines.append(f"cuda: {device}")
+    lines.append(end_card_status())
     lines.append(_whisper_line())
     return lines
 

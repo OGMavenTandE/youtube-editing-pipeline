@@ -116,6 +116,21 @@
         }
       }
     },
+    "cards": {
+      "type": "array",
+      "description": "On-screen text cards. style is title, lower-third, or end-card.",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "start", "duration"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "start": { "type": "number" },
+          "duration": { "type": "number" },
+          "style": { "enum": ["title", "lower-third", "end-card"] }
+        }
+      }
+    },
     "shorts": {
       "type": "array",
       "items": {

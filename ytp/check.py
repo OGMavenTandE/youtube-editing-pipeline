@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
+from ytp.cards import append_talking_head_end_card, card_box, end_card_candidates, find_end_card
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
@@ -305,6 +306,8 @@ def check_render(
     episode_dir: Path | None = None,
 ) -> Report:
     rules = load_rules(series, rules_root)
+    # Same end-card tail render adds, so a standalone check matches the file.
+    plan = _plan_with_end_card(plan, rules_root)
     transcript = _measured_transcript(video, asr, transcriber)
     width, height = probe_video_size(video)
     duration = probe_duration(video)
@@ -317,7 +320,8 @@ def check_render(
         _check_closers(plan, rules, transcript),
         _check_required_open(plan, rules, transcript),
         _check_description(plan, rules, episode_dir),
-        _check_end_card(plan, rules, episode_dir),
+        _check_end_card(plan, rules, episode_dir, duration),
+        _check_cards(video, plan, rules),
         _check_captions(plan, transcript),
         _check_splices(video, plan, rules, transcriber, transcript, window),
     ]
@@ -329,6 +333,14 @@ def check_render(
         passed=passed,
         checks=checks,
     )
+
+
+def _plan_with_end_card(plan: EditPlan, rules_root: Path | None) -> EditPlan:
+    import copy
+
+    cloned = copy.deepcopy(plan)
+    append_talking_head_end_card(cloned, rules_root)
+    return cloned
 
 
 def _check_container(video, plan, width, height, duration, use_short: bool) -> CheckResult:
@@ -556,22 +568,18 @@ def _measured_transcript(video: Path, asr: Transcript | None, transcriber) -> Tr
     return heard
 
 
-def _editorial_pause(plan: EditPlan, start: float, end: float, gap_seconds: float) -> float:
-    """Silence between narration lines, when that silence is longer than the threshold.
+def _word_gap_pause(words: list[Word], gap_seconds: float) -> float:
+    """Silence between transcript words longer than the threshold.
 
-    Time inside a line stays in the speech clock even if Whisper left a hole
-    there. Only the gap the edit actually left between lines is a pause.
+    A single narration line has no between-line gap, so pauses are read from
+    the word times. A gap of 250 ms or less stays in the speech clock.
     """
     pause = 0.0
-    lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
-    for previous, following in zip(lines, lines[1:]):
+    ordered = sorted(words, key=lambda word: (word.start, word.end))
+    for previous, following in zip(ordered, ordered[1:]):
         gap = following.start - previous.end
-        if gap <= gap_seconds:
-            continue
-        left = max(previous.end, start)
-        right = min(following.start, end)
-        if right > left:
-            pause += right - left
+        if gap > gap_seconds:
+            pause += gap
     return pause
 
 
@@ -599,9 +607,7 @@ def _pace_from_transcript(
         if span <= 0:
             return None, None, "not measured: transcript words have no duration"
         overall = len(spoken) / (span / 60.0)
-        # Only editorial pauses (gaps between narration lines) come out.
-        # Whisper's holes between words inside a line are not pauses.
-        pause = _editorial_pause(plan, spoken[0].start, spoken[-1].end, gap_seconds)
+        pause = _word_gap_pause(spoken, gap_seconds)
         speech = max(span - pause, 1e-6)
         articulation = len(spoken) / (speech / 60.0)
         if articulation is not None and articulation + 0.05 < overall:
@@ -702,20 +708,74 @@ def _check_closers(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -
     return CheckResult("closers", _ok(findings), summary, findings)
 
 
+def _open_tokens(text: str) -> list[str]:
+    """Lowercase words. Possessives and punctuation do not count as differences."""
+    cleaned = text.replace("\u2019", "'").replace("\u2018", "'").casefold()
+    cleaned = re.sub(r"'s\b", "", cleaned)
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", cleaned)
+    return [token for token in cleaned.split() if token]
+
+
+def _one_extra_token(longer: list[str], shorter: list[str]) -> bool:
+    """True when ``longer`` is ``shorter`` plus exactly one extra word, in order."""
+    if len(longer) != len(shorter) + 1:
+        return False
+    skipped = 0
+    index = 0
+    for token in longer:
+        if index < len(shorter) and token == shorter[index]:
+            index += 1
+        else:
+            skipped += 1
+            if skipped > 1:
+                return False
+    return index == len(shorter) and skipped == 1
+
+
+def open_line_match(required: str, heard: str) -> tuple[str, str]:
+    """``exact``, ``fuzzy``, or ``miss``, plus the heard phrase when it matched.
+
+    Fuzzy allows one missing or one extra word after possessives are folded.
+    """
+    needle = _open_tokens(required)
+    haystack = _open_tokens(heard)
+    if not needle:
+        return "miss", ""
+    if needle == haystack:
+        return "exact", " ".join(haystack)
+    for length in (len(needle), len(needle) - 1, len(needle) + 1):
+        if length <= 0 or length > len(haystack):
+            continue
+        for start in range(len(haystack) - length + 1):
+            window = haystack[start : start + length]
+            matched = window == needle or _one_extra_token(needle, window) or _one_extra_token(
+                window, needle
+            )
+            if matched:
+                kind = "exact" if window == needle else "fuzzy"
+                return kind, " ".join(window)
+    return "miss", ""
+
+
 def _check_required_open(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
     block = rules.lint.get("required_open") or {}
     required = str(block.get("text") or "").strip()
     if not required:
         return CheckResult("required_open", True, "no required open line", skipped=True)
     window = float(block.get("window_seconds", 60))
-    parts = [line.text for line in plan.narration if line.start < window]
-    if asr is not None:
+    if asr is not None and asr.words:
         heard = " ".join(word.text for word in asr.words if word.start < window)
-        parts.append(heard)
-    haystack = _copy_text(*parts).casefold()
-    needle = _copy_text(required).casefold()
-    if needle in haystack:
+    else:
+        heard = " ".join(line.text for line in plan.narration if line.start < window)
+    kind, quote = open_line_match(required, heard)
+    if kind == "exact":
         return CheckResult("required_open", True, f"open line is inside the first {window:.0f}s")
+    if kind == "fuzzy":
+        return CheckResult(
+            "required_open",
+            True,
+            f'open line is inside the first {window:.0f}s; heard "{quote}"',
+        )
     return CheckResult(
         "required_open",
         False,
@@ -793,7 +853,12 @@ def _overlaps(
     return left[0] < right[2] and left[2] > right[0] and left[1] < right[3] and left[3] > right[1]
 
 
-def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None) -> CheckResult:
+def _check_end_card(
+    plan: EditPlan,
+    rules: SeriesRules,
+    episode_dir: Path | None,
+    video_duration: float | None = None,
+) -> CheckResult:
     block = rules.lint.get("end_card") or {}
     if not block:
         return CheckResult("end_card", True, "no end card rule", skipped=True)
@@ -805,7 +870,10 @@ def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None
             [_fail("end_card", "no_narration", "end card needs a last spoken line")],
         )
     last = max(line.end for line in plan.narration)
-    tail = plan.picture_duration() - last
+    end = plan.picture_duration()
+    if video_duration is not None:
+        end = max(end, video_duration)
+    tail = end - last
     low = float(block.get("min_seconds", 5))
     high = float(block.get("max_seconds", 10))
     findings: list[Finding] = []
@@ -819,17 +887,16 @@ def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None
             )
         )
     image = str((plan.meta or {}).get("end_card", {}).get("image") or block.get("image") or "")
-    if image:
-        resolved = resolve_episode_path(episode_dir, image)
-        if episode_dir is not None and not resolved.is_file():
-            findings.append(
-                _warn(
-                    "end_card",
-                    "end_card_image",
-                    f"end card image is not on disk: {resolved}",
-                    last,
-                )
+    if image and find_end_card(episode_dir) is None:
+        expected = " or ".join(str(path) for path in end_card_candidates(episode_dir))
+        findings.append(
+            _warn(
+                "end_card",
+                "end_card_image",
+                f"end card image was not found; a plain card was drawn. Expected at {expected}",
+                last,
             )
+        )
     elements = list(((plan.meta or {}).get("end_card") or {}).get("elements") or [])
     for name, slot in _slots(rules, plan.width, plan.height):
         for element in elements:
@@ -861,6 +928,66 @@ def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None
         findings,
         measurements={"tail_seconds": round(tail, 3)},
     )
+
+
+def _load_card_manifest(video: Path) -> list[dict] | None:
+    path = video.with_name("cards.json")
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cards = data.get("cards") if isinstance(data, dict) else None
+    if not isinstance(cards, list):
+        return None
+    return cards
+
+
+def _check_cards(video: Path, plan: EditPlan, rules: SeriesRules) -> CheckResult:
+    """Card text matches the plan, and no card sits on an end-screen slot."""
+    manifest = _load_card_manifest(video)
+    if not plan.cards and not manifest:
+        return CheckResult("cards", True, "no cards", skipped=True)
+    findings: list[Finding] = []
+    boxes: list[tuple[str, tuple[float, float, float, float]]] = []
+    if manifest is None:
+        for card in plan.cards:
+            boxes.append((card.id, card_box(card.style, plan.width, plan.height)))
+    else:
+        by_id = {str(item.get("id")): item for item in manifest}
+        for card in plan.cards:
+            got = by_id.get(card.id)
+            heard = "" if got is None else str(got.get("text") or "")
+            if got is None or heard != card.text:
+                findings.append(
+                    _fail(
+                        "cards",
+                        "card_text",
+                        f"card {card.id} text does not match the plan",
+                        card.start,
+                        card.id,
+                    )
+                )
+        for item in manifest:
+            box = (
+                float(item.get("x1") or 0),
+                float(item.get("y1") or 0),
+                float(item.get("x2") or 0),
+                float(item.get("y2") or 0),
+            )
+            boxes.append((str(item.get("id") or "card"), box))
+    for name, slot in _slots(rules, plan.width, plan.height):
+        for label, box in boxes:
+            if _overlaps(box, slot):
+                findings.append(
+                    _fail(
+                        "cards",
+                        "end_screen_overlap",
+                        f"{label} overlaps the {name} end-screen slot",
+                        None,
+                        label,
+                    )
+                )
+    summary = f"{len(plan.cards)} card(s)" if not findings else "card check failed"
+    return CheckResult("cards", not findings, summary, findings)
 
 
 def _check_banned(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:

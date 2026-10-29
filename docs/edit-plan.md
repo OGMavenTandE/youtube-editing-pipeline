@@ -41,6 +41,7 @@ Paths in the concat list are stored as written. On a real episode they should be
 - `voice`: the narration or the current mix. Import points this at `audio/mix/` when that folder has audio (`voice-v3d.wav` follows `mix-v3d.wav`, and the wav wins over an mp3 with that stem). `--voice voice` keeps the dry track. `--voice PATH` uses that file. Do not point it at an old render.
 - `captions`: burned in, written as SRT, or both (`captions_mode`).
 - `narration`: the approved words. The splice check compares the render to this text.
+- `cards`: on-screen text. Each card has `text`, `start`, `duration`, and `style` (`title`, `lower-third`, or `end-card`). Talking-head renders place them outside the end-screen slots and append the end card for 7 seconds after the last spoken line.
 - `audio_hook` / `graphics_hook`: optional scripts. Leave them null to use ffmpeg only.
 
 The renderer places `voice` at timeline zero. It does not add `lead_in` a second time; the Episode 1 voice file already contains that second of silence.
