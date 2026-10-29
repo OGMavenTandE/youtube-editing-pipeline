@@ -13,7 +13,7 @@ from ytp.finish import finish_episode
 from ytp.plan import EditPlan, NarrationLine, Segment, save_plan
 from ytp.render import choose_encoder, parse_encoder_list, reset_encoder_cache, resolve_encoder
 from ytp.take import clock, episode_dir_for_take, ingest_take, link_take, transcript_text
-from ytp.transcribe import Transcript, Word, enable_nvidia_dlls
+from ytp.transcribe import Transcript, Word, enable_nvidia_dlls, nvidia_dll_dirs
 
 
 class _Script:
@@ -140,6 +140,49 @@ def test_nvidia_dll_hook_is_a_noop_off_windows() -> None:
     if os.name == "nt":
         pytest.skip("Windows adds DLL directories")
     assert enable_nvidia_dlls() == []
+
+
+def test_nvidia_dll_dirs_come_from_site_packages(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "site-packages"
+    for name, dll in (
+        ("cublas", "cublas64_12.dll"),
+        ("cudnn", "cudnn64_9.dll"),
+        ("cuda_nvrtc", "nvrtc64_120_0.dll"),
+    ):
+        folder = root / "nvidia" / name / "bin"
+        folder.mkdir(parents=True)
+        (folder / dll).write_bytes(b"dll")
+    found = nvidia_dll_dirs([root, tmp_path / "empty"])
+    assert [path.parent.name for path in found] == ["cublas", "cudnn", "cuda_nvrtc"]
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.delenv("PATH", raising=False)
+    added = enable_nvidia_dlls([root])
+    assert added == [str(path) for path in found]
+    assert os.environ["PATH"].split(os.pathsep)[:3] == added
+
+
+def test_self_test_failure_exits_nonzero() -> None:
+    from ytp.selftest import self_test_failed
+
+    assert self_test_failed(["whisper: failed (no model)"])
+    assert self_test_failed(["ffmpeg: missing (not on PATH)"])
+    assert self_test_failed(["whisper: not installed"])
+    assert not self_test_failed(["whisper: ok device=cpu words=1", "nvenc: no"])
+
+
+def test_transcript_is_one_line_per_sentence() -> None:
+    text = transcript_text(
+        Transcript(
+            text="First sentence. Second one.",
+            words=[
+                Word("First", 0.0, 0.3),
+                Word("sentence.", 0.3, 0.8),
+                Word("Second", 1.2, 1.5),
+                Word("one.", 1.5, 1.9),
+            ],
+        )
+    )
+    assert text == "[0:00.00-0:00.80] First sentence.\n[0:01.20-0:01.90] Second one.\n"
 
 
 def test_transcript_line_without_segments() -> None:

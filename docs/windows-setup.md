@@ -31,7 +31,15 @@ powershell -File scripts\setup-windows.ps1
 
 That creates `C:\AI Eval\YouTube\ytp\.venv` with Python 3.11 or 3.12, installs `ytp` with local Whisper, and installs the CUDA 12 libraries that match ctranslate2 4.x (cuBLAS 12 and cuDNN 9). Those DLLs are loaded from the venv when `ytp` starts. Nothing is written to the system PATH.
 
-The script ends with a self-test. It prints the Python version, where ffmpeg was found, whether `h264_nvenc` is listed, whether CUDA is visible, and a tiny Whisper run. A missing GPU is a warning, not a failed install.
+The script ends with a self-test. It prints the Python version, where ffmpeg was found, whether `h264_nvenc` is listed, whether CUDA is visible, and a tiny Whisper run. A missing GPU is a warning. A failed Whisper run, or a pip error, stops the script with a non-zero exit.
+
+Run the tests from the repo with:
+
+```
+pytest tests/ytp
+```
+
+If an older checkout still loads `tests/conftest.py` and complains about dotenv, use `pytest tests/ytp --confcutdir=tests/ytp`. Current `ytp` collects `tests/ytp` without that flag.
 
 To put the venv somewhere else:
 

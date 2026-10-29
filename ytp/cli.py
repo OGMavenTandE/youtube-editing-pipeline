@@ -17,7 +17,7 @@ from ytp.layout import init_episode
 from ytp.plan import load_plan, save_plan, validate_plan
 from ytp.render import allocate_render_path, infer_episode_dir, render_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
-from ytp.selftest import self_test_lines
+from ytp.selftest import self_test_failed, self_test_lines
 from ytp.take import ingest_take, warn_cpu
 from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber, _cuda_or_cpu
 
@@ -375,9 +375,10 @@ def _cmd_finish(args: argparse.Namespace) -> int:
 
 def _cmd_self_test(args: argparse.Namespace) -> int:
     del args
-    for line in self_test_lines():
+    lines = self_test_lines()
+    for line in lines:
         print(line)
-    return 0
+    return 1 if self_test_failed(lines) else 0
 
 
 def main(argv: list[str] | None = None) -> int:

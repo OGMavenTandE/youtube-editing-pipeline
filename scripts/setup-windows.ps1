@@ -6,8 +6,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# huggingface_hub writes this to stderr. PowerShell turns that into a red NativeCommandError.
+$env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
 if (-not $Repo) {
     $Repo = Split-Path -Parent $PSScriptRoot
+}
+
+function Invoke-Native {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Command)
+    & $Command[0] $Command[1..($Command.Length - 1)]
+    if ($LASTEXITCODE -ne 0) {
+        throw "command failed (${LASTEXITCODE}): $($Command -join ' ')"
+    }
 }
 
 $spec = $null
@@ -29,14 +39,11 @@ if (-not (Test-Path -LiteralPath $python)) {
     throw "venv python was not created: $python"
 }
 
-& $python -m pip install --upgrade pip
+Invoke-Native $python -m pip install --upgrade pip
 # faster-whisper pins ctranslate2>=4,<5. Those CUDA 12 wheels need cuBLAS 12 and cuDNN 9.
-& $python -m pip install -e ($Repo + "[whisper]")
-& $python -m pip install "nvidia-cublas-cu12>=12.4,<13" "nvidia-cudnn-cu12>=9.1,<10"
-& $python -c "import importlib.metadata as m; print('ctranslate2', m.version('ctranslate2')); print('cublas', m.version('nvidia-cublas-cu12')); print('cudnn', m.version('nvidia-cudnn-cu12'))"
+Invoke-Native $python -m pip install -e ($Repo + "[whisper]")
+Invoke-Native $python -m pip install "nvidia-cublas-cu12>=12.4,<13" "nvidia-cudnn-cu12>=9.1,<10"
+Invoke-Native $python -c "import importlib.metadata as m; print('ctranslate2', m.version('ctranslate2')); print('cublas', m.version('nvidia-cublas-cu12')); print('cudnn', m.version('nvidia-cudnn-cu12'))"
 
 Write-Host "self-test"
-& $python -m ytp self-test
-if ($LASTEXITCODE -ne 0) {
-    throw "self-test failed"
-}
+Invoke-Native $python -m ytp self-test

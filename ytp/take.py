@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ytp.index import INDEX_JSON, INDEX_MD, _clip_id, _markdown
 from ytp.layout import init_episode
-from ytp.transcribe import Transcriber, Transcript
+from ytp.transcribe import Transcriber, Transcript, Word
 
 
 def episode_dir_for_take(video: Path, episode: str | None) -> Path:
@@ -60,19 +60,53 @@ def clock(seconds: float) -> str:
     return f"{int(minutes)}:{rest:05.2f}"
 
 
-def transcript_text(transcript: Transcript) -> str:
-    """Plain lines with a timestamp range. Segments when we have them, else one line."""
+def _sentence_rows(words: list[Word]) -> list[tuple[float, float, str]]:
+    """One row per sentence. A word ending in . ! or ? closes the sentence."""
     rows: list[tuple[float, float, str]] = []
-    if transcript.segments:
-        rows = [
-            (start, end, text.strip())
-            for start, end, text in transcript.segments
-            if text.strip()
-        ]
-    elif transcript.text.strip() and transcript.words:
-        rows = [(transcript.words[0].start, transcript.words[-1].end, transcript.text.strip())]
-    elif transcript.text.strip():
-        rows = [(0.0, 0.0, transcript.text.strip())]
+    bucket: list[Word] = []
+    for word in words:
+        text = word.text.strip()
+        if not text:
+            continue
+        bucket.append(word)
+        if text.endswith((".", "!", "?")):
+            rows.append(
+                (
+                    bucket[0].start,
+                    bucket[-1].end,
+                    " ".join(item.text.strip() for item in bucket),
+                )
+            )
+            bucket = []
+    if bucket:
+        rows.append(
+            (bucket[0].start, bucket[-1].end, " ".join(item.text.strip() for item in bucket))
+        )
+    return rows
+
+
+def transcript_rows(transcript: Transcript) -> list[tuple[float, float, str]]:
+    """One line per Whisper segment, or per sentence when the file is one segment."""
+    segments = [
+        (start, end, text.strip()) for start, end, text in transcript.segments if text.strip()
+    ]
+    sentences = _sentence_rows(transcript.words)
+    if len(segments) > 1:
+        return segments
+    if len(sentences) > 1:
+        return sentences
+    if segments:
+        return segments
+    if sentences:
+        return sentences
+    if transcript.text.strip():
+        return [(0.0, 0.0, transcript.text.strip())]
+    return []
+
+
+def transcript_text(transcript: Transcript) -> str:
+    """Plain lines with a timestamp range. One line per segment or sentence."""
+    rows = transcript_rows(transcript)
     lines = [f"[{clock(start)}-{clock(end)}] {text}" for start, end, text in rows]
     return "\n".join(lines) + ("\n" if lines else "")
 

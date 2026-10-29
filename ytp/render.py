@@ -129,7 +129,7 @@ def nvenc_works() -> bool:
                 "-f",
                 "lavfi",
                 "-i",
-                "color=c=black:s=64x64:d=0.1",
+                "color=c=black:s=256x256:d=0.1",
                 "-c:v",
                 "h264_nvenc",
                 "-f",

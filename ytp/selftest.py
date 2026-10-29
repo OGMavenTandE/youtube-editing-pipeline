@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -9,6 +10,18 @@ from pathlib import Path
 from ytp.ff import ffmpeg_bin, ffprobe_bin
 from ytp.render import ffmpeg_encoders, reset_encoder_cache
 from ytp.transcribe import _cuda_or_cpu, enable_nvidia_dlls
+
+
+def self_test_failed(lines: list[str]) -> bool:
+    """True when ffmpeg is missing or the tiny Whisper run did not succeed."""
+    for line in lines:
+        if line.startswith("ffmpeg: missing"):
+            return True
+        if line.startswith("whisper: failed"):
+            return True
+        if line.startswith("whisper: not installed"):
+            return True
+    return False
 
 
 def self_test_lines() -> list[str]:
@@ -29,6 +42,7 @@ def self_test_lines() -> list[str]:
         lines.append(f"nvenc: {'yes' if 'h264_nvenc' in listed else 'no'}")
     except Exception as exc:
         lines.append(f"nvenc: unknown ({exc})")
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     enable_nvidia_dlls()
     device = _cuda_or_cpu()
     lines.append(f"cuda: {device}")
