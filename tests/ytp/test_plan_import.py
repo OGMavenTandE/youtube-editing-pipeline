@@ -77,6 +77,30 @@ def test_import_ep01_matches_the_shipped_artifacts(tmp_path: Path) -> None:
     assert load_plan(json_out).narration[0].id == "00e_b1"
 
 
+def test_import_prefers_mix_when_present(tmp_path: Path) -> None:
+    episode = tmp_path / "ep01"
+    mix = episode / "audio" / "mix"
+    mix.mkdir(parents=True)
+    (mix / "mix-v3d.wav").write_bytes(b"mix")
+    (episode / "audio" / "voice").mkdir()
+    (episode / "audio" / "voice" / "voice-v3d.wav").write_bytes(b"dry")
+    plan = import_episode(
+        timeline_path=FIXTURES / "timeline-v3d.json",
+        concat_path=FIXTURES / "rc8b-concat.txt",
+        score_path=FIXTURES / "score-cues-v3d.md",
+        episode_dir=episode,
+    )
+    assert plan.voice == "audio/mix/mix-v3d.wav"
+    forced = import_episode(
+        timeline_path=FIXTURES / "timeline-v3d.json",
+        concat_path=FIXTURES / "rc8b-concat.txt",
+        score_path=FIXTURES / "score-cues-v3d.md",
+        episode_dir=episode,
+        voice_preference="voice",
+    )
+    assert forced.voice == "audio/voice/voice-v3d.wav"
+
+
 def test_import_warns_when_layout_files_are_missing(tmp_path: Path) -> None:
     episode = tmp_path / "ep01"
     (episode / "frames").mkdir(parents=True)

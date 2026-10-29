@@ -66,6 +66,11 @@ def _build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--episode", default="ep01")
     importer.add_argument("--title", default="How to Survive an AI Drone")
     importer.add_argument("--episode-dir", type=Path, default=None)
+    importer.add_argument(
+        "--voice",
+        default=None,
+        help="mix (default when audio/mix has files), voice, or a relative path",
+    )
     importer.add_argument("--out", type=Path, required=True)
     importer.set_defaults(func=_cmd_plan_import)
 
@@ -102,6 +107,7 @@ def _cmd_plan_import(args: argparse.Namespace) -> int:
         episode=args.episode,
         title=args.title,
         episode_dir=episode_dir,
+        voice_preference=args.voice,
     )
     errors = validate_plan(plan)
     for error in errors:

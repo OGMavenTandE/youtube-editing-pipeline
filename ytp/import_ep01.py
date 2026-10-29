@@ -125,6 +125,44 @@ def layout_media_path(source: str) -> str:
     return name
 
 
+_AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
+
+
+def choose_voice(
+    timeline_file: str,
+    episode_dir: Path | None,
+    preference: str | None = None,
+) -> str | None:
+    """Pick the narration file. Prefer ``audio/mix/`` when that folder has audio.
+
+    ``preference`` is ``mix``, ``voice``, or an explicit episode-relative path.
+    """
+    name = Path(timeline_file.replace("\\", "/")).name if timeline_file else ""
+    voice_rel = f"audio/voice/{name}" if name else None
+    if preference and preference not in {"mix", "voice"}:
+        return preference.replace("\\", "/")
+    if preference == "voice":
+        return voice_rel
+    if episode_dir is not None and preference != "voice":
+        mix_dir = episode_dir / "audio" / "mix"
+        if mix_dir.is_dir():
+            files = sorted(
+                path
+                for path in mix_dir.iterdir()
+                if path.is_file() and path.suffix.lower() in _AUDIO_SUFFIXES
+            )
+            if files:
+                stem = Path(name).stem.replace("voice", "mix") if name else ""
+                for path in files:
+                    if stem and path.stem == stem:
+                        return f"audio/mix/{path.name}"
+                for path in files:
+                    if "mix" in path.stem.casefold():
+                        return f"audio/mix/{path.name}"
+                return f"audio/mix/{files[0].name}"
+    return voice_rel
+
+
 def missing_media(paths: list[str], episode_dir: Path | None) -> list[str]:
     if episode_dir is None:
         return []
@@ -150,6 +188,7 @@ def import_episode(
     episode: str = "ep01",
     title: str = "How to Survive an AI Drone",
     episode_dir: Path | None = None,
+    voice_preference: str | None = None,
 ) -> EditPlan:
     timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
     concat_entries = parse_concat(concat_path.read_text(encoding="utf-8"))
@@ -235,7 +274,7 @@ def import_episode(
     ]
     captions = [CaptionCue(start=line.start, end=line.end, text=line.text) for line in narration]
     voice_name = str(timeline.get("file") or "")
-    voice = f"audio/voice/{Path(voice_name).name}" if voice_name else None
+    voice = choose_voice(voice_name, episode_dir, voice_preference)
     referenced = [segment.source for segment in segments]
     if voice:
         referenced.append(voice)
