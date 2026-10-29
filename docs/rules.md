@@ -30,7 +30,7 @@ python -m ytp rule list --series ai-survival --section script_copy
 
 ## What the check enforces by itself
 
-`ytp check` reads the rules file. It fails a render when it finds any of these:
+`ytp check VIDEO --plan PLAN --series ai-survival` reads the rules file and writes `qc/check-report.md` and `qc/check-report.json`. The process exits 1 when the report fails. It fails a render when it finds any of these:
 
 - A quoted ban in a sentence that says never, do not, banned, or forbid. `Never say "widget".` becomes a banned phrase. Words after `instead` are the replacement, not a ban, so `Say "some vendors" instead.` does not ban that line.
 - A parenthetical vendor list on a sentence that says not to name vendors. The on-camera line is **some vendors**.

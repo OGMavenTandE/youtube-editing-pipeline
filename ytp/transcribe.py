@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -120,24 +121,39 @@ class FasterWhisperTranscriber(Transcriber):
         end: float | None = None,
     ) -> Transcript:
         model = self._load()
-        segments, info = model.transcribe(str(media), word_timestamps=True)
+        path = media
+        offset = 0.0
+        temporary: Path | None = None
+        if start is not None or end is not None:
+            handle, name = tempfile.mkstemp(suffix=".wav", prefix="ytp-whisper-")
+            os.close(handle)
+            temporary = Path(name)
+            offset = float(start or 0.0)
+            extract_audio(media, temporary, start=start, end=end)
+            path = temporary
         words: list[Word] = []
         pieces: list[str] = []
-        for segment in segments:
-            pieces.append(segment.text.strip())
-            segment_words = list(segment.words or [])
-            if segment_words:
-                for token in segment_words:
-                    text = token.word.strip()
-                    if text:
-                        words.append(Word(text, float(token.start), float(token.end)))
-            elif segment.text.strip():
-                words.append(
-                    Word(segment.text.strip(), float(segment.start), float(segment.end))
-                )
-        language = getattr(info, "language", "") or ""
+        try:
+            segments, info = model.transcribe(str(path), word_timestamps=True)
+            for segment in segments:
+                pieces.append(segment.text.strip())
+                segment_words = list(segment.words or [])
+                if segment_words:
+                    for token in segment_words:
+                        text = token.word.strip()
+                        if text:
+                            words.append(Word(text, float(token.start), float(token.end)))
+                elif segment.text.strip():
+                    words.append(
+                        Word(segment.text.strip(), float(segment.start), float(segment.end))
+                    )
+            language = getattr(info, "language", "") or ""
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         text = " ".join(piece for piece in pieces if piece)
-        return Transcript(text=text, words=words, language=language)
+        transcript = Transcript(text=text, words=words, language=language)
+        return transcript.shifted(offset)
 
 
 def _cuda_or_cpu() -> str:

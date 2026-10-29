@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from ytp import __version__
+from ytp.check import check_render, load_asr, write_report
 from ytp.import_ep01 import import_episode
 from ytp.index import index_episode
 from ytp.layout import init_episode
@@ -105,6 +106,24 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument("--graphics-hook", type=Path, default=None, help="Studio's template script")
     render.add_argument("--short", default=None, help="also write this short id from the plan")
     render.set_defaults(func=_cmd_render)
+
+    checker = sub.add_parser("check", help="pass/fail a render against the plan and series rules")
+    checker.add_argument("video", type=Path)
+    checker.add_argument("--plan", type=Path, required=True)
+    checker.add_argument("--series", required=True)
+    checker.add_argument("--rules-root", type=Path, default=None)
+    checker.add_argument(
+        "--asr",
+        type=Path,
+        default=None,
+        help="word JSON or [start-end] transcript",
+    )
+    checker.add_argument("--window", type=float, default=None, help="seconds each side of a splice")
+    checker.add_argument("--profile", choices=["auto", "episode", "short"], default="auto")
+    checker.add_argument("--out-dir", type=Path, default=None)
+    checker.add_argument("--model", default="base")
+    checker.add_argument("--device", default="auto")
+    checker.set_defaults(func=_cmd_check)
     return parser
 
 
@@ -209,6 +228,34 @@ def _cmd_render(args: argparse.Namespace) -> int:
     for warning in result.warnings:
         print(f"warning: {warning}")
     return 0
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    episode_dir = infer_episode_dir(args.plan)
+    asr = load_asr(args.asr) if args.asr else None
+    transcriber = None if asr is not None else FasterWhisperTranscriber(args.model, args.device)
+    report = check_render(
+        args.video,
+        plan,
+        series=args.series,
+        plan_path=args.plan,
+        rules_root=args.rules_root,
+        transcriber=transcriber,
+        asr=asr,
+        window=args.window,
+        profile=args.profile,
+        episode_dir=episode_dir,
+    )
+    out_dir = args.out_dir
+    if out_dir is None:
+        qc = episode_dir / "qc"
+        out_dir = qc if episode_dir.exists() else args.video.parent
+    markdown, payload = write_report(report, out_dir)
+    print("PASS" if report.passed else "FAIL")
+    print(markdown)
+    print(payload)
+    return 0 if report.passed else 1
 
 
 def _cmd_rule_list(args: argparse.Namespace) -> int:

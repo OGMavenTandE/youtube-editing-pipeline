@@ -17,10 +17,61 @@ python -m ytp plan import \
   --out path/to/ep01/edit/plan.yaml
 python -m ytp plan validate path/to/ep01/edit/plan.yaml
 python -m ytp index path/to/ep01
-python -m ytp render path/to/ep01/edit/plan.yaml --out path/to/ep01/renders/cut.mp4
+python -m ytp render path/to/ep01/edit/plan.yaml \
+  --out path/to/ep01/renders/cut.mp4 \
+  --captions both
+python -m ytp check path/to/ep01/renders/cut.mp4 \
+  --plan path/to/ep01/edit/plan.yaml \
+  --series ai-survival
 ```
 
-`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md). `index` transcribes clips under `source/` with local faster-whisper (`pip install -r requirements-ytp-whisper.txt`); `--backend none` writes durations only. `render` concats the picture, overlays B-roll, writes captions, and ducks music. Pass `--audio-hook` for Track's mix script and `--graphics-hook` for a Studio template script; the stubs in `ytp/stub_hooks/` show the argv and are not those tools. `--encoder nvenc` uses the RTX 4070 Super when the driver is present. The render check is the last command in this quickstart.
+`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md).
+
+`index` transcribes every clip under `source/` with local faster-whisper (`pip install -r requirements-ytp-whisper.txt`) and writes `edit/clip-index.json` plus `edit/clip-index.md` (path, duration, word timestamps, transcript, description). A description you already filled in is kept. `--backend none` records durations only.
+
+`render` concats stills and clips, overlays B-roll (`full` or `pip-lower-right`), ducks music under the voice, and writes captions as a sidecar SRT, a burn-in, or both. `--encoder nvenc` (or `auto`) uses the RTX 4070 Super when that encode actually succeeds; otherwise the render stays on libx264. `--audio-hook` calls Track's mix script unchanged. `--graphics-hook` calls a Studio template script for any segment that sets `template`. The files in `ytp/stub_hooks/` are argv stubs for tests, not those tools.
+
+`check` writes `qc/check-report.md` and `qc/check-report.json`. It fails the render for caption drift, loudness (voice -16 LUFS, Shorts -14, true peak at or below -1.5 dBTP, music about 17 dB under the voice when stems are on disk), pace outside 175–185 words per minute, banned words and vendor names, banned sound-effect ids, and leftover words at splices. The splice pass re-transcribes a short window around every cut. A stray fragment such as the "if" left in Episode 1 v8 fails the report and the process exits 1. Pass `--asr` with a word JSON or an `[start-end]` transcript when you already have one; otherwise install faster-whisper so the check can listen itself.
+
+Run the suite (Whisper tests stay out of CI):
+
+```bash
+python -m pytest tests/ytp -m "not whisper" --confcutdir=tests/ytp
+```
+
+### Full pass on an existing episode folder
+
+Put the voice, mix, and score under `audio/`, stills under `frames/`, and raw clips under `source/`. `init` only adds folders; it does not move or delete media. From the repo:
+
+```bash
+python -m ytp init /path/to/ep01 --series ai-survival
+python -m ytp index /path/to/ep01
+python -m ytp plan import \
+  --timeline /path/to/ep01/timeline-v3d.json \
+  --concat /path/to/ep01/rc8b-concat.txt \
+  --score /path/to/ep01/score-cues-v3d.md \
+  --lines /path/to/ep01/lines.json \
+  --out /path/to/ep01/edit/plan.yaml
+python -m ytp plan validate /path/to/ep01/edit/plan.yaml
+python -m ytp render /path/to/ep01/edit/plan.yaml \
+  --out /path/to/ep01/renders/cut.mp4 \
+  --captions both \
+  --encoder auto
+python -m ytp check /path/to/ep01/renders/cut.mp4 \
+  --plan /path/to/ep01/edit/plan.yaml \
+  --series ai-survival
+```
+
+To check a cut you already have, skip render and pass the mix transcript if Whisper is not installed:
+
+```bash
+python -m ytp check /path/to/ep01/renders/rough-cut-v8b.mp4 \
+  --plan /path/to/ep01/edit/plan.yaml \
+  --series ai-survival \
+  --asr /path/to/ep01/asr-mix-v3d.txt
+```
+
+Point `voice` in the plan at the current mix before rendering. Do not point it at an older render. Nothing here publishes or edits the YouTube listing.
 
 ## Webcam desk pipeline
 
