@@ -16,9 +16,11 @@ python -m ytp plan import \
   --lines path/to/lines.json \
   --out path/to/ep01/edit/plan.yaml
 python -m ytp plan validate path/to/ep01/edit/plan.yaml
+python -m ytp index path/to/ep01
+python -m ytp render path/to/ep01/edit/plan.yaml --out path/to/ep01/renders/cut.mp4
 ```
 
-`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md). Clip index, render, and the render check are the following commands in this quickstart.
+`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md). `index` transcribes clips under `source/` with local faster-whisper (`pip install -r requirements-ytp-whisper.txt`); `--backend none` writes durations only. `render` concats the picture, overlays B-roll, writes captions, and ducks music. Pass `--audio-hook` for Track's mix script and `--graphics-hook` for a Studio template script; the stubs in `ytp/stub_hooks/` show the argv and are not those tools. `--encoder nvenc` uses the RTX 4070 Super when the driver is present. The render check is the last command in this quickstart.
 
 ## Webcam desk pipeline
 

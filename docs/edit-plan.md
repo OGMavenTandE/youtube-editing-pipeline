@@ -41,6 +41,22 @@ Paths in the concat list are stored as written. On a real episode they should be
 - `voice`: the narration or the current mix. Import points this at `audio/mix/` when that folder has audio (`voice-v3d.wav` follows `mix-v3d.wav`, and the wav wins over an mp3 with that stem). `--voice voice` keeps the dry track. `--voice PATH` uses that file. Do not point it at an old render.
 - `captions`: burned in, written as SRT, or both (`captions_mode`).
 - `narration`: the approved words. The splice check compares the render to this text.
-- `audio_hook` / `graphics_hook`: optional scripts. See the hook section in the Booth quickstart. Leave them null to use ffmpeg only.
+- `audio_hook` / `graphics_hook`: optional scripts. Leave them null to use ffmpeg only.
+
+The renderer places `voice` at timeline zero. It does not add `lead_in` a second time; the Episode 1 voice file already contains that second of silence.
+
+Track's mix script, when set, is called unchanged:
+
+```text
+<script> --voice VOICE.wav --cues CUES.json --out MIX.wav --plan PLAN.yaml
+```
+
+Studio's graphics script is called once per segment that sets `template`:
+
+```text
+<script> --template NAME --out STILL.png --width W --height H --palette PALETTE --text TEXT --id SEGMENT_ID
+```
+
+`ytp/stub_hooks/track_mix.py` and `ytp/stub_hooks/studio_graphics.py` are argv stubs for tests. They are not Track's mix and not Studio's templates.
 
 `version` is `1`. `ytp plan validate` checks version, durations, caption order, b-roll layout, and duplicate narration ids.

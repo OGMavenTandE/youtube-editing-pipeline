@@ -8,9 +8,12 @@ from pathlib import Path
 
 from ytp import __version__
 from ytp.import_ep01 import import_episode
+from ytp.index import index_episode
 from ytp.layout import init_episode
 from ytp.plan import load_plan, save_plan, validate_plan
+from ytp.render import infer_episode_dir, render_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
+from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -77,6 +80,31 @@ def _build_parser() -> argparse.ArgumentParser:
     checker = plan_sub.add_parser("validate", help="check a plan against the schema rules")
     checker.add_argument("plan", type=Path)
     checker.set_defaults(func=_cmd_plan_validate)
+
+    index = sub.add_parser("index", help="transcribe source clips into edit/clip-index")
+    index.add_argument("episode_dir", type=Path)
+    index.add_argument("--model", default="base")
+    index.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    index.add_argument("--backend", default="whisper", choices=["whisper", "none"])
+    index.add_argument(
+        "--root",
+        action="append",
+        default=None,
+        help="folder to scan, relative to the episode (default: source). Repeatable.",
+    )
+    index.set_defaults(func=_cmd_index)
+
+    render = sub.add_parser("render", help="render an edit plan to mp4")
+    render.add_argument("plan", type=Path)
+    render.add_argument("--out", type=Path, default=None)
+    render.add_argument("--episode-dir", type=Path, default=None)
+    render.add_argument("--captions", choices=["srt", "burn", "both"])
+    render.add_argument("--preset", default="veryfast")
+    render.add_argument("--encoder", default="libx264", help="libx264, nvenc, or auto")
+    render.add_argument("--audio-hook", type=Path, default=None, help="Track's mix script")
+    render.add_argument("--graphics-hook", type=Path, default=None, help="Studio's template script")
+    render.add_argument("--short", default=None, help="also write this short id from the plan")
+    render.set_defaults(func=_cmd_render)
     return parser
 
 
@@ -135,6 +163,45 @@ def _cmd_plan_validate(args: argparse.Namespace) -> int:
             print(f"ytp: {error}", file=sys.stderr)
         return 1
     print(f"ok {args.plan}")
+    return 0
+
+
+def _cmd_index(args: argparse.Namespace) -> int:
+    if args.backend == "none":
+        transcriber = NullTranscriber()
+    else:
+        transcriber = FasterWhisperTranscriber(args.model, args.device)
+    roots = [Path(item) for item in args.root] if args.root else None
+    document = index_episode(args.episode_dir, transcriber, roots=roots)
+    clips = document["clips"]
+    assert isinstance(clips, list)
+    print(f"indexed {len(clips)} clip(s) -> {args.episode_dir / 'edit' / 'clip-index.json'}")
+    return 0
+
+
+def _cmd_render(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    episode_dir = args.episode_dir or infer_episode_dir(args.plan)
+    out = args.out or (episode_dir / "renders" / f"{args.plan.stem}.mp4")
+    result = render_plan(
+        plan,
+        out,
+        episode_dir=episode_dir,
+        plan_path=args.plan,
+        captions=args.captions,
+        preset=args.preset,
+        encoder=args.encoder,
+        audio_hook=args.audio_hook,
+        graphics_hook=args.graphics_hook,
+        short_id=args.short,
+    )
+    print(f"wrote {result.video}")
+    if result.srt:
+        print(f"srt {result.srt}")
+    if result.short:
+        print(f"short {result.short}")
+    for warning in result.warnings:
+        print(f"warning: {warning}")
     return 0
 
 
