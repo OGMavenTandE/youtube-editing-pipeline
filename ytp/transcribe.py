@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,6 +93,29 @@ _WHISPER_VAD = {
 }
 
 
+def enable_nvidia_dlls() -> list[str]:
+    """Make pip-installed CUDA DLLs visible to ctranslate2 on Windows.
+
+    No-op on other platforms. Does not change the process PATH permanently.
+    """
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return []
+    added: list[str] = []
+    try:
+        import nvidia.cublas.lib as cublas_lib
+        import nvidia.cudnn.lib as cudnn_lib
+    except ImportError:
+        return []
+    for module in (cublas_lib, cudnn_lib):
+        base = Path(module.__file__).resolve().parent
+        for folder in (base, base / "bin", base.parent / "bin"):
+            if not folder.is_dir() or not any(folder.glob("*.dll")):
+                continue
+            os.add_dll_directory(str(folder))
+            added.append(str(folder))
+    return added
+
+
 def _segment_is_loop(segment: object) -> bool:
     """Drop a window segment the model marked as compressed or repetitive."""
     from ytp.splice import window_is_hallucination
@@ -160,6 +184,7 @@ class FasterWhisperTranscriber(Transcriber):
         # Pin the pool before CTranslate2 reads it. cpu_threads=0 means "all cores".
         os.environ["OMP_NUM_THREADS"] = str(_CPU_THREADS)
         os.environ["CT2_VERBOSE"] = "0"
+        enable_nvidia_dlls()
         model = WhisperModel(
             model_name,
             device=device,

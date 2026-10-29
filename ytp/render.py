@@ -35,6 +35,7 @@ from ytp.plan import Broll, EditPlan, MusicCue, Short
 from ytp.rules import repo_root
 
 _NVENC_OK: bool | None = None
+_ENCODERS: set[str] | None = None
 
 
 @dataclass
@@ -75,12 +76,46 @@ def codec_args(encoder: str, preset: str) -> list[str]:
     return ["-c:v", "libx264", "-preset", preset, "-crf", "23", "-pix_fmt", "yuv420p"]
 
 
-def resolve_encoder(name: str) -> str:
+def parse_encoder_list(text: str) -> set[str]:
+    """Names from ``ffmpeg -encoders``. The flag column starts with V for video."""
+    names: set[str] = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].startswith("V"):
+            names.add(parts[1])
+    return names
+
+
+def ffmpeg_encoders() -> set[str]:
+    global _ENCODERS
+    if _ENCODERS is not None:
+        return _ENCODERS
+    try:
+        proc = run_ffmpeg(["-encoders"])
+    except FFmpegError:
+        _ENCODERS = set()
+        return _ENCODERS
+    _ENCODERS = parse_encoder_list(proc.stdout)
+    return _ENCODERS
+
+
+def choose_encoder(name: str, *, listed: set[str], gpu_ok: bool) -> str:
+    """``auto`` uses h264_nvenc only when ffmpeg lists it and a trial encode works."""
     if name in {"nvenc", "h264_nvenc"}:
         return "h264_nvenc"
-    if name == "auto":
-        return "h264_nvenc" if nvenc_works() else "libx264"
+    if name == "auto" and "h264_nvenc" in listed and gpu_ok:
+        return "h264_nvenc"
     return "libx264"
+
+
+def resolve_encoder(name: str) -> str:
+    return choose_encoder(name, listed=ffmpeg_encoders(), gpu_ok=nvenc_works())
+
+
+def reset_encoder_cache() -> None:
+    global _NVENC_OK, _ENCODERS
+    _NVENC_OK = None
+    _ENCODERS = None
 
 
 def nvenc_works() -> bool:
