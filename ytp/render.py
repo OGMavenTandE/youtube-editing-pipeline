@@ -179,6 +179,15 @@ def bold_font() -> Path | None:
     return None
 
 
+def allocate_render_path(episode_dir: Path, filename: str) -> Path:
+    """Next ``renders/vN/filename``. Existing version folders are left alone."""
+    renders = episode_dir / "renders"
+    version = 1
+    while (renders / f"v{version}").exists():
+        version += 1
+    return renders / f"v{version}" / filename
+
+
 def render_plan(
     plan: EditPlan,
     out: Path,
@@ -194,6 +203,8 @@ def render_plan(
 ) -> RenderResult:
     if not plan.segments:
         raise ValueError("plan has no picture segments")
+    if out.exists():
+        raise FileExistsError(f"refusing to overwrite {out}; write a new renders/vN folder")
     encoder = resolve_encoder(encoder)
     mode = captions or plan.captions_mode
     warnings: list[str] = []
@@ -240,6 +251,8 @@ def render_plan(
         if short_id:
             short = _find_short(plan, short_id)
             short_path = out.with_name(f"{out.stem}-short-{short.id}{out.suffix}")
+            if short_path.exists():
+                raise FileExistsError(f"refusing to overwrite {short_path}")
             _render_short(final, short, short_path, work, encoder, preset, warnings)
     return RenderResult(
         video=final,

@@ -9,7 +9,7 @@ from ytp.captions import format_srt_time, write_srt
 from ytp.ff import concat_line, escape_filter_text, has_audio, probe_duration, probe_video_size
 from ytp.hooks import STUDIO_GRAPHICS_STUB, TRACK_MIX_STUB
 from ytp.plan import Broll, CaptionCue, EditPlan, MusicCue, NarrationLine, Segment, Short
-from ytp.render import music_filtergraph, prepare_drawtext_font, render_plan
+from ytp.render import allocate_render_path, music_filtergraph, prepare_drawtext_font, render_plan
 
 
 def _episode(tmp_path: Path) -> tuple[Path, EditPlan]:
@@ -65,6 +65,30 @@ def _episode(tmp_path: Path) -> tuple[Path, EditPlan]:
         shorts=[Short(id="A", title="Stay low", start=0.0, end=0.4)],
     )
     return episode, plan
+
+
+def test_versioned_render_folders_do_not_overwrite(tmp_path: Path) -> None:
+    episode = tmp_path / "ep"
+    first = allocate_render_path(episode, "cut.mp4")
+    first.parent.mkdir(parents=True)
+    first.write_bytes(b"keep")
+    second = allocate_render_path(episode, "cut.mp4")
+    assert first.parent.name == "v1"
+    assert second.parent.name == "v2"
+    assert first.read_bytes() == b"keep"
+    with pytest.raises(FileExistsError):
+        render_plan(
+            EditPlan(
+                width=320,
+                height=180,
+                segments=[
+                    Segment(id="a", kind="still", source="missing.png", start=0, duration=0.2)
+                ],
+            ),
+            first,
+            episode_dir=episode,
+        )
+    assert first.read_bytes() == b"keep"
 
 
 def test_filtergraph_ducks_only_when_asked() -> None:

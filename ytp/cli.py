@@ -11,7 +11,7 @@ from ytp.import_ep01 import import_episode
 from ytp.index import index_episode
 from ytp.layout import init_episode
 from ytp.plan import load_plan, save_plan, validate_plan
-from ytp.render import infer_episode_dir, render_plan
+from ytp.render import allocate_render_path, infer_episode_dir, render_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
 from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber
 
@@ -182,7 +182,13 @@ def _cmd_index(args: argparse.Namespace) -> int:
 def _cmd_render(args: argparse.Namespace) -> int:
     plan = load_plan(args.plan)
     episode_dir = args.episode_dir or infer_episode_dir(args.plan)
-    out = args.out or (episode_dir / "renders" / f"{args.plan.stem}.mp4")
+    if args.out:
+        out = args.out
+    else:
+        out = allocate_render_path(episode_dir, f"{args.plan.stem}.mp4")
+    if out.exists():
+        print(f"ytp: refusing to overwrite {out}", file=sys.stderr)
+        return 1
     result = render_plan(
         plan,
         out,
