@@ -81,6 +81,7 @@ def test_import_prefers_mix_when_present(tmp_path: Path) -> None:
     episode = tmp_path / "ep01"
     mix = episode / "audio" / "mix"
     mix.mkdir(parents=True)
+    (mix / "mix-v3d.mp3").write_bytes(b"mp3")
     (mix / "mix-v3d.wav").write_bytes(b"mix")
     (episode / "audio" / "voice").mkdir()
     (episode / "audio" / "voice" / "voice-v3d.wav").write_bytes(b"dry")

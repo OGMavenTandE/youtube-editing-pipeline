@@ -128,6 +128,12 @@ def layout_media_path(source: str) -> str:
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}
 
 
+def _prefer_wav(paths: list[Path]) -> Path:
+    """Lossless wav wins over an mp3 with the same mix stem."""
+    wavs = [path for path in paths if path.suffix.lower() == ".wav"]
+    return wavs[0] if wavs else paths[0]
+
+
 def choose_voice(
     timeline_file: str,
     episode_dir: Path | None,
@@ -153,13 +159,13 @@ def choose_voice(
             )
             if files:
                 stem = Path(name).stem.replace("voice", "mix") if name else ""
-                for path in files:
-                    if stem and path.stem == stem:
-                        return f"audio/mix/{path.name}"
-                for path in files:
-                    if "mix" in path.stem.casefold():
-                        return f"audio/mix/{path.name}"
-                return f"audio/mix/{files[0].name}"
+                same_stem = [path for path in files if stem and path.stem == stem]
+                if same_stem:
+                    return f"audio/mix/{_prefer_wav(same_stem).name}"
+                named = [path for path in files if "mix" in path.stem.casefold()]
+                if named:
+                    return f"audio/mix/{_prefer_wav(named).name}"
+                return f"audio/mix/{_prefer_wav(files).name}"
     return voice_rel
 
 

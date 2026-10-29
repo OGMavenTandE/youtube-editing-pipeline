@@ -38,7 +38,7 @@ Paths in the concat list are stored as written. On a real episode they should be
 - `segments`: picture track. `kind: still` holds `duration` seconds. `kind: clip` plays `source` from `in` to `out`. `start` is the timeline time. A `template` name asks the graphics hook to draw the still.
 - `broll`: overlays. `layout` is `full` or `pip-lower-right`. `at` and `duration` are timeline seconds.
 - `music`: cues mixed under the voice. `gain_db` is applied to the file, then sidechain ducking when `duck_under_voice` is true.
-- `voice`: the narration or the current mix. Import points this at `audio/mix/` when that folder has audio (`voice-v3d.wav` follows `mix-v3d.wav`). `--voice voice` keeps the dry track. `--voice PATH` uses that file. Do not point it at an old render.
+- `voice`: the narration or the current mix. Import points this at `audio/mix/` when that folder has audio (`voice-v3d.wav` follows `mix-v3d.wav`, and the wav wins over an mp3 with that stem). `--voice voice` keeps the dry track. `--voice PATH` uses that file. Do not point it at an old render.
 - `captions`: burned in, written as SRT, or both (`captions_mode`).
 - `narration`: the approved words. The splice check compares the render to this text.
 - `audio_hook` / `graphics_hook`: optional scripts. See the hook section in the Booth quickstart. Leave them null to use ffmpeg only.
