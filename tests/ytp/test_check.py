@@ -237,11 +237,94 @@ def test_asr_bracket_fixture_has_no_invented_word_times() -> None:
     assert "picnic" in asr.text
 
 
+def _report_comparable(payload: dict) -> dict:
+    """Drop paths and timestamps. Pace and findings otherwise have to match."""
+    drop = {"timestamp", "timestamp_text", "video", "plan"}
+
+    def walk(node):
+        if isinstance(node, dict):
+            return {key: walk(value) for key, value in node.items() if key not in drop}
+        if isinstance(node, list):
+            return [walk(item) for item in node]
+        if isinstance(node, str) and ("/" in node or "\\" in node):
+            return "<path>"
+        return node
+
+    return walk(payload)
+
+
+def test_two_checks_of_the_same_clip_match(tmp_path: Path, rules_root) -> None:
+    """Repeat runs, including a voice-path swap, write the same JSON.
+
+    CPU beam search is pinned to one thread and int8. Reported pace is
+    rounded to 0.1 wpm. Without faster-whisper the two runs share one
+    word JSON, so CI still checks that the report itself does not move.
+    """
+    require_ffmpeg()
+    episode = tmp_path / "ep01"
+    video = write_clip(episode / "renders" / "speech.mp4", seconds=2.0, size="320x180")
+    plan = _base_plan(
+        narration=[NarrationLine(id="n", text="one two three", start=0.2, end=1.6)],
+    )
+    plan.voice = "audio/voice/voice-v3d.wav"
+    plan_path = episode / "edit" / "plan.yaml"
+    save_plan(plan, plan_path)
+    asr_path = episode / "words.json"
+    asr_path.write_text(
+        json.dumps(
+            {
+                "words": [
+                    {"word": "one", "start": 0.2, "end": 0.5},
+                    {"word": "two", "start": 0.5, "end": 0.9},
+                    {"word": "three", "start": 0.9, "end": 1.4},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        import faster_whisper  # noqa: F401
+
+        use_whisper = True
+    except ImportError:
+        use_whisper = False
+    args = [
+        "check",
+        str(video),
+        "--plan",
+        str(plan_path),
+        "--series",
+        "ai-survival",
+        "--rules-root",
+        str(rules_root),
+        "--profile",
+        "episode",
+    ]
+    if not use_whisper:
+        args.extend(["--asr", str(asr_path)])
+
+    def once() -> dict:
+        main(args)
+        return json.loads((episode / "qc" / "check-report.json").read_text(encoding="utf-8"))
+
+    first = _report_comparable(once())
+    second = _report_comparable(once())
+    plan.voice = "audio/mix/mix-v3d.wav"
+    save_plan(plan, plan_path)
+    third = _report_comparable(once())
+    assert first == second == third
+
+
 def test_check_cli_writes_a_failing_report(tmp_path: Path, rules_root) -> None:
     require_ffmpeg()
     episode = tmp_path / "ep01"
     video = write_clip(episode / "renders" / "cut.mp4", seconds=1.0, size="320x180")
-    plan = _base_plan()
+    plan = _base_plan(
+        narration=[
+            NarrationLine(id="a", text="one two", start=0.0, end=0.35),
+            NarrationLine(id="b", text="three four", start=0.45, end=1.0),
+        ],
+    )
     plan_path = episode / "edit" / "plan.yaml"
     save_plan(plan, plan_path)
     asr = episode / "words.json"

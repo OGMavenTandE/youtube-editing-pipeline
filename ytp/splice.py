@@ -15,8 +15,10 @@ The whole-file pass hears "target." then "Your" and skips it. The scripted
 
 from __future__ import annotations
 
+import gzip
 import math
 import re
+from collections import Counter
 from difflib import SequenceMatcher
 
 from ytp.plan import EditPlan, NarrationLine
@@ -402,8 +404,8 @@ def fragments_at_join(
         tokens = canonicalize_tokens(tokenize(word.text))
         if not tokens:
             continue
-        midpoint = (word.start + word.end) / 2
-        if abs(midpoint - join) > near:
+        # The cut is the join itself. A word later in the 1.5s clip is not a fragment.
+        if abs(word.start - join) > near:
             continue
         if any(_tokens_close(token, exp) for token in tokens for exp in expected):
             seen.add(id(word))
@@ -416,19 +418,42 @@ def fragments_at_join(
 def narration_join_edges(
     plan: EditPlan,
 ) -> list[tuple[float, NarrationLine | None, NarrationLine | None]]:
-    """Each narration boundary and the lines that meet there."""
+    """Cuts where two narration lines meet.
+
+    The start of the episode and the end of the last line are not cuts.
+    A gap of a second or less is one cut, at the end of the line before it.
+    """
     lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
-    if not lines:
-        return []
-    edges: list[tuple[float, NarrationLine | None, NarrationLine | None]] = [
-        (lines[0].start, None, lines[0])
-    ]
+    edges: list[tuple[float, NarrationLine | None, NarrationLine | None]] = []
     for previous, following in zip(lines, lines[1:]):
         edges.append((previous.end, previous, following))
-        if following.start - previous.end > 0.05:
+        if following.start - previous.end > 1.0:
             edges.append((following.start, previous, following))
-    edges.append((lines[-1].end, lines[-1], None))
     return edges
+
+
+def window_is_hallucination(words: list[Word], *, ratio_limit: float = 2.4) -> bool:
+    """True when a short clip is a Whisper loop, not speech.
+
+    A gzip ratio above about 2.4, or the same 2- or 3-word phrase three
+    times, is the "I don't know what I'm saying" failure.
+    """
+    text = " ".join(word.text.strip() for word in words if word.text.strip())
+    if not text:
+        return False
+    raw = text.encode("utf-8")
+    if raw and len(raw) / max(len(gzip.compress(raw)), 1) > ratio_limit:
+        return True
+    tokens = [token for token in (normalize_token(part) for part in tokenize(text)) if token]
+    for size in (2, 3):
+        if len(tokens) < size * 3:
+            continue
+        counts = Counter(
+            tuple(tokens[index : index + size]) for index in range(len(tokens) - size + 1)
+        )
+        if any(count >= 3 for count in counts.values()):
+            return True
+    return False
 
 
 def stray_near_joins(
@@ -438,15 +463,14 @@ def stray_near_joins(
     margin: float,
 ) -> list[tuple[str, Word]]:
     """ASR words near a narration join that alignment could not place in the script."""
-    joins = narration_joins(plan)
+    joins = [time for time, _before, _after in narration_join_edges(plan)]
     tokens = plan_tokens(plan)
     seen: set[int] = set()
     findings: list[tuple[str, Word]] = []
     for token, word in unmatched_asr(tokens, _heard_tokens(heard_words)):
         if id(word) in seen:
             continue
-        midpoint = (word.start + word.end) / 2
-        if not any(abs(midpoint - join) <= margin for join in joins):
+        if not any(abs(word.start - join) <= margin for join in joins):
             continue
         seen.add(id(word))
         findings.append((_classify(token, tokens), word))

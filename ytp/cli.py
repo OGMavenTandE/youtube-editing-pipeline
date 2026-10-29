@@ -123,7 +123,12 @@ def _build_parser() -> argparse.ArgumentParser:
     checker.add_argument("--window", type=float, default=None, help="seconds each side of a splice")
     checker.add_argument("--profile", choices=["auto", "episode", "short"], default="auto")
     checker.add_argument("--out-dir", type=Path, default=None)
-    checker.add_argument("--model", default="base")
+    checker.add_argument("--model", default="base", help="model for the whole-file transcript")
+    checker.add_argument(
+        "--splice-model",
+        default="small",
+        help="model for the ±1.5s splice windows (default small)",
+    )
     checker.add_argument("--device", default="auto")
     checker.set_defaults(func=_cmd_check)
     return parser
@@ -259,7 +264,12 @@ def _cmd_check(args: argparse.Namespace) -> int:
         transcriber = None
     else:
         language = _series_language(args.series, args.rules_root)
-        transcriber = FasterWhisperTranscriber(args.model, args.device, language)
+        transcriber = FasterWhisperTranscriber(
+            args.model,
+            args.device,
+            language,
+            window_model=args.splice_model,
+        )
     report = check_render(
         args.video,
         plan,

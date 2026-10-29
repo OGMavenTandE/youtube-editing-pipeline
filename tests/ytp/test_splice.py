@@ -9,7 +9,12 @@ import pytest
 from tests.ytp.mediautil import require_ffmpeg, write_clip
 from ytp.check import check_render
 from ytp.plan import EditPlan, NarrationLine, Segment
-from ytp.splice import compare_window, fragments_at_join, narration_word_times
+from ytp.splice import (
+    compare_window,
+    fragments_at_join,
+    narration_word_times,
+    window_is_hallucination,
+)
 from ytp.transcribe import Transcript, Word
 
 
@@ -241,6 +246,70 @@ def test_v8_flags_only_the_its_fragment_and_v8b_is_clean(tmp_path: Path, rules_r
     mixed = check_render(video, plan, transcriber=mixed_hear, **common)
     assert [item.word for item in _splice(again).findings] == ["It's"]
     assert [item.word for item in _splice(mixed).findings] == ["It's"]
+
+
+def test_a_repeated_window_is_dropped_and_the_open_is_not_a_cut(tmp_path: Path, rules_root) -> None:
+    """Loops are not fragments. 'of' at the episode open is not a cut."""
+    parts = ("I don't know what I'm saying " * 11).split()
+    phrase = [
+        Word(part, 213.3 + index * 0.1, 213.4 + index * 0.1, 0.9)
+        for index, part in enumerate(parts)
+    ]
+    assert window_is_hallucination(phrase)
+    assert not window_is_hallucination([Word("It's", 17.48, 17.55, 0.93)])
+    require_ffmpeg()
+    video = write_clip(tmp_path / "loop.mp4", seconds=1.0, size="320x180")
+    plan = EditPlan(
+        series="ai-survival",
+        episode="t",
+        width=320,
+        height=180,
+        segments=[Segment(id="p", kind="still", source="f.png", start=0.0, duration=8.0)],
+        narration=[
+            NarrationLine(
+                id="open",
+                text="You're at a picnic when you hear a buzz.",
+                start=1.0,
+                end=4.0,
+            ),
+            NarrationLine(
+                id="next",
+                text="In this story the machines have turned.",
+                start=5.2,
+                end=8.0,
+            ),
+        ],
+    )
+
+    class Heard(Silent):
+        def transcribe(self, media: Path, *, start: float | None = None, end: float | None = None):
+            del media
+            if start is None and end is None:
+                words = narration_word_times(plan)
+                return Transcript(text="script", words=words, word_timestamps=True)
+            if start is not None and end is not None and start <= 1.24 <= end:
+                return Transcript(
+                    text="of",
+                    words=[Word("of", 1.24, 1.34, 0.9)],
+                    word_timestamps=True,
+                )
+            return Transcript(
+                text="it's hot",
+                words=[Word("it's", 4.05 + i * 0.1, 4.12 + i * 0.1, 0.9) for i in range(16)]
+                + [Word("hot", 4.08 + i * 0.1, 4.14 + i * 0.1, 0.9) for i in range(16)],
+                word_timestamps=True,
+            )
+
+    report = check_render(
+        video,
+        plan,
+        series="ai-survival",
+        rules_root=rules_root,
+        transcriber=Heard(),
+        profile="episode",
+        loudness_fn=lambda _path: (-16.0, -2.0),
+    )
+    assert _splice(report).findings == []
 
 
 def test_numbers_and_low_confidence_mishearings_are_not_fragments() -> None:

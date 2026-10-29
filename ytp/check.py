@@ -24,6 +24,7 @@ from ytp.splice import (
     normalize_token,
     stray_near_joins,
     tokenize,
+    window_is_hallucination,
     words_overlapping,
 )
 from ytp.transcribe import Transcript, Word
@@ -628,7 +629,7 @@ def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> Ch
     measurements: dict[str, object] = {
         "source_type": source,
         "pause_gap_ms": gap_ms,
-        "overall_wpm": round(pace, 2),
+        "overall_wpm": round(pace, 1),
     }
     low, high, severity = _pace_band(rules, source, "overall")
     if pace < low or pace > high:
@@ -640,7 +641,7 @@ def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> Ch
     if articulation is None:
         summary = f"overall {pace:.1f} wpm; {note or 'articulation not measured'}"
     else:
-        measurements["articulation_wpm"] = round(articulation, 2)
+        measurements["articulation_wpm"] = round(articulation, 1)
         band_low, band_high, band_severity = _pace_band(rules, source, "articulation")
         if articulation < band_low or articulation > band_high:
             message = (
@@ -1013,8 +1014,14 @@ def _check_captions(plan: EditPlan, asr: Transcript | None) -> CheckResult:
     return CheckResult("captions", not findings, summary, findings)
 
 
-def _fragment_finding(code: str, word: Word) -> Finding:
-    label = word.text.strip()
+def _one_join_finding(code: str, words: list[Word], join: float) -> Finding:
+    """One finding per cut. The message lists the words heard at that cut."""
+    labels: list[str] = []
+    for word in sorted(words, key=lambda item: (item.start, item.end)):
+        text = word.text.strip()
+        if text and text not in labels:
+            labels.append(text)
+    label = " ".join(labels)
     return _fail(
         "splice_fragments",
         code,
@@ -1022,27 +1029,40 @@ def _fragment_finding(code: str, word: Word) -> Finding:
             f'{code.replace("_", " ")} "{label}" near a narration join '
             "is not in the approved script"
         ),
-        word.start,
+        words[0].start if words else join,
         label,
     )
 
 
-def _window_fragments(video, plan, transcriber, near: float) -> list[Finding]:
+def _window_fragments(video, plan, transcriber, near: float) -> dict[float, list[tuple[str, Word]]]:
     """Re-hear ±1.5s around each join of `video`. The plan's voice file is not opened."""
-    findings: list[Finding] = []
+    grouped: dict[float, list[tuple[str, Word]]] = {}
     for join, before, after in narration_join_edges(plan):
         start = max(0.0, join - JOIN_LISTEN_SECONDS)
         end = join + JOIN_LISTEN_SECONDS
         heard = transcriber.transcribe(video, start=start, end=end)
-        for code, word in fragments_at_join(
+        if window_is_hallucination(heard.words):
+            continue
+        flagged = fragments_at_join(
             before,
             after,
             heard.words,
             join,
             near=near,
             edge_seconds=JOIN_LISTEN_SECONDS,
-        ):
-            findings.append(_fragment_finding(code, word))
+        )
+        if flagged:
+            grouped.setdefault(join, []).extend(flagged)
+    return grouped
+
+
+def _findings_for_joins(grouped: dict[float, list[tuple[str, Word]]]) -> list[Finding]:
+    findings: list[Finding] = []
+    for join in sorted(grouped):
+        items = grouped[join]
+        partial = any(name == "partial_word" for name, _word in items)
+        code = "partial_word" if partial else "stray_fragment"
+        findings.append(_one_join_finding(code, [word for _name, word in items], join))
     return findings
 
 
@@ -1074,13 +1094,19 @@ def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -
             "video has no audio to transcribe",
             [_fail("splice_fragments", "no_audio", "video has no audio stream")],
         )
-    findings: list[Finding] = []
+    grouped: dict[float, list[tuple[str, Word]]] = {}
     if whole_words:
+        cuts = [time for time, _before, _after in narration_join_edges(plan)]
         for code, word in stray_near_joins(plan, asr.words, margin=span):
-            findings.append(_fragment_finding(code, word))
+            if not cuts:
+                continue
+            join = min(cuts, key=lambda time: abs(word.start - time))
+            if abs(word.start - join) <= span:
+                grouped.setdefault(join, []).append((code, word))
     if transcriber is not None:
         try:
-            findings.extend(_window_fragments(video, plan, transcriber, span))
+            for join, items in _window_fragments(video, plan, transcriber, span).items():
+                grouped.setdefault(join, []).extend(items)
         except RuntimeError as exc:
             if "faster-whisper" in str(exc):
                 return CheckResult(
@@ -1090,7 +1116,7 @@ def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -
                     [_fail("splice_fragments", "transcript_missing", str(exc))],
                 )
             raise
-    findings = _dedupe(findings)
+    findings = _dedupe(_findings_for_joins(grouped))
     summary = (
         f"aligned to the script; each join is re-heard "
         f"±{JOIN_LISTEN_SECONDS:.2f}s, margin {span:.2f}s"
