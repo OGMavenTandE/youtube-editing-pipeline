@@ -76,6 +76,19 @@ class NullTranscriber(Transcriber):
         return Transcript(text="", words=[])
 
 
+# One temperature, so a failed segment cannot step up to 0.2, 0.4, ...
+_WHISPER_TEMPERATURE = (0.0,)
+_WHISPER_BEAM_SIZE = 5
+_WHISPER_VAD = {
+    "threshold": 0.5,
+    "neg_threshold": None,
+    "min_speech_duration_ms": 0,
+    "max_speech_duration_s": float("inf"),
+    "min_silence_duration_ms": 2000,
+    "speech_pad_ms": 400,
+}
+
+
 def extract_audio(source: Path, dest: Path, *, start: float | None, end: float | None) -> None:
     """Write a mono 16 kHz wav of the requested window. Whisper and the splice check share this."""
     args = ["-y"]
@@ -130,28 +143,37 @@ class FasterWhisperTranscriber(Transcriber):
         end: float | None = None,
     ) -> Transcript:
         model = self._load()
-        path = media
-        offset = 0.0
-        temporary: Path | None = None
-        if start is not None or end is not None:
-            handle, name = tempfile.mkstemp(suffix=".wav", prefix="ytp-whisper-")
-            os.close(handle)
-            temporary = Path(name)
-            offset = float(start or 0.0)
-            extract_audio(media, temporary, start=start, end=end)
-            path = temporary
+        # Always decode through ffmpeg. PyAV's read of the render's AAC
+        # track is not the same input twice, and it moved pace and captions.
+        handle, name = tempfile.mkstemp(suffix=".wav", prefix="ytp-whisper-")
+        os.close(handle)
+        temporary = Path(name)
+        offset = float(start or 0.0)
         words: list[Word] = []
         pieces: list[str] = []
         try:
+            extract_audio(media, temporary, start=start, end=end)
             segments, info = model.transcribe(
-                str(path),
+                str(temporary),
                 word_timestamps=True,
                 language=self.forced_language,
-                temperature=0.0,
-                beam_size=5,
+                task="transcribe",
+                beam_size=_WHISPER_BEAM_SIZE,
                 best_of=1,
+                patience=1.0,
+                length_penalty=1.0,
+                repetition_penalty=1.0,
+                no_repeat_ngram_size=0,
+                temperature=_WHISPER_TEMPERATURE,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
                 condition_on_previous_text=False,
+                prompt_reset_on_temperature=0.5,
+                suppress_blank=True,
+                without_timestamps=False,
                 vad_filter=False,
+                vad_parameters=dict(_WHISPER_VAD),
             )
             for segment in segments:
                 pieces.append(segment.text.strip())

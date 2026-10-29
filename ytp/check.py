@@ -2,7 +2,8 @@
 
 Checks caption timing, integrated loudness and true peak, words per minute,
 banned words and sound-effect ids from the series rules, and the splice
-windows. Splice windows are re-transcribed. A leftover fragment fails the cut.
+windows. The whole file is aligned to the script, and each narration join
+is listened to again on a short clip. A leftover fragment fails the cut.
 """
 
 from __future__ import annotations
@@ -14,10 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
-from ytp.ff import probe_duration, probe_video_size, run_ffmpeg
+from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
 from ytp.splice import (
+    fragments_at_join,
+    narration_join_edges,
     normalize_token,
     stray_near_joins,
     tokenize,
@@ -28,6 +31,9 @@ from ytp.transcribe import Transcript, Word
 CAPTION_LEAD = 0.40
 CAPTION_TRAIL = 0.50
 DURATION_TOLERANCE = 0.75
+# Audio re-heard around each narration join. The near-join margin stays
+# splice_window_seconds; this is only how much of the cut Whisper hears.
+JOIN_LISTEN_SECONDS = 1.5
 _EMOJI = re.compile("[\U0001f300-\U0001faff\U00002700-\U000027bf\U00002600-\U000026ff]")
 _LOUDNESS_JSON = re.compile(r"\{[^{}]*\"input_i\"[^{}]*\}", re.S)
 
@@ -1007,18 +1013,50 @@ def _check_captions(plan: EditPlan, asr: Transcript | None) -> CheckResult:
     return CheckResult("captions", not findings, summary, findings)
 
 
-def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -> CheckResult:
-    """Align one transcript of the checked audio to the plan text.
+def _fragment_finding(code: str, word: Word) -> Finding:
+    label = word.text.strip()
+    return _fail(
+        "splice_fragments",
+        code,
+        (
+            f'{code.replace("_", " ")} "{label}" near a narration join '
+            "is not in the approved script"
+        ),
+        word.start,
+        label,
+    )
 
-    The voice file on the plan is not read. A second Whisper pass over short
-    clips is not run, so the result does not depend on which narration file
-    the plan names.
+
+def _window_fragments(video, plan, transcriber, near: float) -> list[Finding]:
+    """Re-hear ±1.5s around each join of `video`. The plan's voice file is not opened."""
+    findings: list[Finding] = []
+    for join, before, after in narration_join_edges(plan):
+        start = max(0.0, join - JOIN_LISTEN_SECONDS)
+        end = join + JOIN_LISTEN_SECONDS
+        heard = transcriber.transcribe(video, start=start, end=end)
+        for code, word in fragments_at_join(
+            before,
+            after,
+            heard.words,
+            join,
+            near=near,
+            edge_seconds=JOIN_LISTEN_SECONDS,
+        ):
+            findings.append(_fragment_finding(code, word))
+    return findings
+
+
+def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -> CheckResult:
+    """Align the whole-file transcript, then listen again at each join.
+
+    The voice path is not an input. Window clips are cut from the video
+    being checked, so two plans that share text and timing agree.
     """
-    del video, transcriber
     span = float(window if window is not None else rules.lint.get("splice_window_seconds", 0.5))
     if not plan.narration:
         return CheckResult("splice_fragments", True, "no narration splices", skipped=True)
-    if asr is None or not asr.word_timestamps or not asr.words:
+    whole_words = bool(asr is not None and asr.word_timestamps and asr.words)
+    if not whole_words and transcriber is None:
         note = (
             "not measured: the splice check needs one word-timestamp transcript "
             "of the audio being checked"
@@ -1029,23 +1067,34 @@ def _check_splices(video, plan, rules, transcriber, asr, window: float | None) -
             note,
             [_warn("splice_fragments", "not_measured", note)],
         )
-    findings: list[Finding] = []
-    for code, word in stray_near_joins(plan, asr.words, margin=span):
-        label = word.text.strip()
-        findings.append(
-            _fail(
-                "splice_fragments",
-                code,
-                (
-                    f'{code.replace("_", " ")} "{label}" near a narration join '
-                    "is not in the approved script"
-                ),
-                word.start,
-                label,
-            )
+    if transcriber is not None and not has_audio(video):
+        return CheckResult(
+            "splice_fragments",
+            False,
+            "video has no audio to transcribe",
+            [_fail("splice_fragments", "no_audio", "video has no audio stream")],
         )
+    findings: list[Finding] = []
+    if whole_words:
+        for code, word in stray_near_joins(plan, asr.words, margin=span):
+            findings.append(_fragment_finding(code, word))
+    if transcriber is not None:
+        try:
+            findings.extend(_window_fragments(video, plan, transcriber, span))
+        except RuntimeError as exc:
+            if "faster-whisper" in str(exc):
+                return CheckResult(
+                    "splice_fragments",
+                    False,
+                    str(exc),
+                    [_fail("splice_fragments", "transcript_missing", str(exc))],
+                )
+            raise
     findings = _dedupe(findings)
-    summary = f"aligned to the script; narration joins use a {span:.2f}s margin"
+    summary = (
+        f"aligned to the script; each join is re-heard "
+        f"±{JOIN_LISTEN_SECONDS:.2f}s, margin {span:.2f}s"
+    )
     if findings:
         summary = f"{summary}; {len(findings)} leftover fragment(s)"
     return CheckResult("splice_fragments", not findings, summary, findings)

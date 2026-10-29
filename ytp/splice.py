@@ -1,22 +1,25 @@
 """Compare narration audio to the approved script.
 
-Picture cuts are not audio splices. The heard words are aligned to the plan
-text across the whole narration. Digits are spelled out first, so "7" and
-"seven" are the same token. A fuzzy neighbor counts as that script word.
-What is left is an extra word. It is a fragment only when it sits near a
-narration join. Low-confidence mishearings are ignored.
+Picture cuts are not audio splices. The whole-file transcript is aligned to
+the plan text. Each narration join is also listened to on its own short
+clip, because the full pass can skip a fragment sitting in the gap. A word
+from that clip is a fragment only when it is near the join and matches
+neither the last words of the line before nor the first words of the line
+after. Digits are spelled out first. Fuzzy and phonetic neighbors match.
+Words under the confidence floor are ignored.
 
-Episode 1 v8 left "It's", the start of removed line 00d_b1, at about 17.48s
-on the splice near 18.045s. The scripted "if" in "And if one comes down" is
-not that bug.
+Episode 1 v8 left "It's", the start of removed line 00d_b1, at about 17.5s.
+The whole-file pass hears "target." then "Your" and skips it. The scripted
+"if" in "And if one comes down" is not that bug.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from difflib import SequenceMatcher
 
-from ytp.plan import EditPlan
+from ytp.plan import EditPlan, NarrationLine
 from ytp.transcribe import Word
 
 _TOKEN = re.compile(r"[A-Za-z0-9']+")
@@ -354,6 +357,78 @@ def plan_tokens(plan: EditPlan) -> list[str]:
     for line in sorted(plan.narration, key=lambda item: (item.start, item.end)):
         raw.extend(tokenize(line.text))
     return canonicalize_tokens(raw)
+
+
+def edge_tokens(line: NarrationLine, side: str, *, seconds: float) -> list[str]:
+    """First or last words of a line, enough to cover `seconds` of that line.
+
+    The count follows the line's own pace and is at least eight words when
+    the line has them, so a fast opening still counts as the line's edge.
+    """
+    tokens = canonicalize_tokens(tokenize(line.text))
+    if not tokens:
+        return []
+    duration = max(line.end - line.start, 1e-3)
+    span = min(seconds, duration)
+    by_pace = math.ceil(len(tokens) * span / duration)
+    count = min(len(tokens), max(by_pace, 8))
+    if side == "last":
+        return tokens[-count:]
+    return tokens[:count]
+
+
+def fragments_at_join(
+    before: NarrationLine | None,
+    after: NarrationLine | None,
+    heard: list[Word],
+    join: float,
+    *,
+    near: float,
+    edge_seconds: float,
+) -> list[tuple[str, Word]]:
+    """Heard words near `join` that are not the edge of either adjacent line."""
+    expected: list[str] = []
+    if before is not None:
+        expected.extend(edge_tokens(before, "last", seconds=edge_seconds))
+    if after is not None:
+        expected.extend(edge_tokens(after, "first", seconds=edge_seconds))
+    findings: list[tuple[str, Word]] = []
+    seen: set[int] = set()
+    for word in heard:
+        if id(word) in seen:
+            continue
+        if word.confidence is not None and word.confidence < CONFIDENCE_MIN:
+            continue
+        tokens = canonicalize_tokens(tokenize(word.text))
+        if not tokens:
+            continue
+        midpoint = (word.start + word.end) / 2
+        if abs(midpoint - join) > near:
+            continue
+        if any(_tokens_close(token, exp) for token in tokens for exp in expected):
+            seen.add(id(word))
+            continue
+        seen.add(id(word))
+        findings.append((_classify(tokens[0], expected), word))
+    return findings
+
+
+def narration_join_edges(
+    plan: EditPlan,
+) -> list[tuple[float, NarrationLine | None, NarrationLine | None]]:
+    """Each narration boundary and the lines that meet there."""
+    lines = sorted(plan.narration, key=lambda line: (line.start, line.end))
+    if not lines:
+        return []
+    edges: list[tuple[float, NarrationLine | None, NarrationLine | None]] = [
+        (lines[0].start, None, lines[0])
+    ]
+    for previous, following in zip(lines, lines[1:]):
+        edges.append((previous.end, previous, following))
+        if following.start - previous.end > 0.05:
+            edges.append((following.start, previous, following))
+    edges.append((lines[-1].end, lines[-1], None))
+    return edges
 
 
 def stray_near_joins(
