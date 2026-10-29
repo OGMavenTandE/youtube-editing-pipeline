@@ -1,0 +1,5 @@
+# Booth's script-driven editor. The desktop app keeps its own requirements.txt.
+pyyaml>=6
+
+# Optional. CI does not install this; tests that need it are marked `whisper`.
+# pip install -r requirements-ytp-whisper.txt

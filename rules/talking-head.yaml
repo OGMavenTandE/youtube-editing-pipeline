@@ -1,0 +1,229 @@
+series: talking-head
+owners:
+  picture: Studio
+  audio: Track
+  edit: Booth
+  script_copy: Galley
+sources:
+  raw_takes: 'C:\AI Eval\YouTube'
+  note: >-
+    Raw takes live on Scott's Windows PC. Episode-relative paths and absolute
+    Windows paths both have to resolve. Do not prefix a drive path with the
+    episode folder.
+picture:
+  - id: picture-001
+    text: >-
+      Scott is on camera, with text cards for each beat and chapters. The end
+      card shows his name.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: picture-002
+    text: >-
+      The end card image defaults to assets/end-card/option-C-clean.png,
+      resolved relative to the episode folder. Studio's option C. The path is
+      configurable. Do not commit the image.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+audio:
+  - id: audio-001
+    text: >-
+      Desk takes are Scott's natural pace. The pace check warns only. It never
+      fails a desk take.
+    source: track-2026-10-29
+    added: "2026-10-29"
+  - id: audio-002
+    text: >-
+      Voice integrated loudness is -16 LUFS. Music sits about 17 dB under the
+      voice. True peak is at or below -1.5 dBTP. Shorts are -14 LUFS.
+    source: rules-seed-2026-10-27
+    added: "2026-10-29"
+edit:
+  - id: edit-001
+    text: >-
+      When a sentence comes out, remove all of it, and re-transcribe a window
+      around every splice.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-002
+    text: Rebuild from the current mix every time. Never splice an old render.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-003
+    text: >-
+      Cut coughs, stumbles, false starts, and dead air from desk takes. Keep
+      natural breaths, and do not over-tighten the pauses between thoughts.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-004
+    text: >-
+      End on the last strong spoken line. No spoken sign-off. Never say "like
+      and subscribe", "thanks for watching", or "leave a comment".
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-005
+    text: >-
+      Never name these on camera or on screen: "Grok", "xAI", "Google",
+      "Gemini", "OpenAI", "ChatGPT", "GPT", "Anthropic", "Claude", "former
+      Pentagon", "CDAO", or "@scottmastin". Say "some vendors" instead.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: edit-006
+    text: >-
+      Draft only. Renders go to renders/vN and never overwrite a previous
+      render. Nothing is ever uploaded or published.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+script_copy:
+  - id: script_copy-001
+    text: >-
+      For the institution, say "Department of War". Never say "Department of
+      Defense" or "DoD" for the institution. The first mention uses the long
+      name, then "also known as", then the short form. The bio line is the
+      exception and stays word for word, including the word Pentagon.
+    source: booth-handoff-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-002
+    text: >-
+      Bio line, word for word. First person: "I manage AI test and evaluation
+      programs for the Pentagon". Third person: "He manages AI test and
+      evaluation programs for the Pentagon". Never say "former". Never say
+      "Pentagon AI Tester". Never say "former Pentagon". As of 2026-10-29
+      Scott still does this work. Only Project Maven ended.
+    source: booth-handoff-2026-10-29
+    added: "2026-10-29"
+  - id: script_copy-003
+    text: Spell out an acronym on first use.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: script_copy-004
+    text: Numbers in narration are written as words.
+    source: rules-seed-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-005
+    text: >-
+      No overclaiming in titles or captions. Credit a claim that is not ours
+      to its source.
+    source: rules-seed-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-006
+    text: No em dashes and no emojis in scripts, titles, captions, or descriptions.
+    source: rules-seed-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-007
+    text: >-
+      On-screen text fits its box with padding. Shorten anything that lands
+      within about 10 percent of the edge.
+    source: rules-seed-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-008
+    text: The channel handle is "@scott_mastin". Never write "@scottmastin".
+    source: booth-handoff-2026-10-27
+    added: "2026-10-29"
+  - id: script_copy-009
+    text: >-
+      The description cross-links to LinkedIn and X. It may link to a LinkedIn
+      article that names vendors. The vendor ban covers speech and on-screen
+      text, not description links.
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: script_copy-010
+    text: No slogans or cue-card commands. Never say "like and subscribe".
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: script_copy-011
+    text: >-
+      Near the open, within about the first 60 seconds, say "These are my own
+      views, not the Department's."
+    source: booth-2026-10-29
+    added: "2026-10-29"
+  - id: script_copy-012
+    text: Draft only. Never publish and never change the YouTube listing.
+    source: booth-handoff-2026-10-27
+    added: "2026-10-29"
+lint:
+  banned_phrases:
+    - former Pentagon
+    - CDAO
+    - "@scottmastin"
+    - like and subscribe
+    - Department of Defense
+    - DoD
+  vendors:
+    say_instead: some vendors
+    names:
+      - Grok
+      - xAI
+      - Google
+      - Gemini
+      - OpenAI
+      - ChatGPT
+      - GPT
+      - Anthropic
+      - Claude
+  closers:
+    - like and subscribe
+    - smash that like
+    - hit the like
+    - hit subscribe
+    - leave a comment
+    - comment below
+    - thanks for watching
+    - see you next time
+    - don't forget to subscribe
+  description:
+    exempt_from_vendor_ban: true
+    require:
+      - linkedin.com
+      - x.com
+  required_open:
+    text: These are my own views, not the Department's.
+    window_seconds: 60
+  end_card:
+    image: assets/end-card/option-C-clean.png
+    min_seconds: 5
+    max_seconds: 10
+    reference_width: 1920
+    reference_height: 1080
+    clear_slots:
+      - id: video
+        x1: 944
+        y1: 170
+        x2: 1760
+        y2: 629
+      - id: subscribe
+        x1: 1242
+        y1: 730
+        x2: 1462
+        y2: 950
+  wpm:
+    pause_gap_ms: 250
+    source_type: desk
+    narration:
+      overall:
+        min: 155
+        max: 185
+        severity: warn
+      articulation:
+        min: 175
+        max: 185
+        severity: warn
+    desk:
+      overall:
+        min: 155
+        max: 185
+        severity: warn
+      articulation:
+        min: 175
+        max: 185
+        severity: warn
+  loudness:
+    voice_lufs: -16
+    shorts_lufs: -14
+    true_peak_dbtp: -1.5
+    music_under_voice_db: 17
+    music_tolerance_db: 3
+    lufs_tolerance: 1
+  ban_em_dash: true
+  ban_emoji: true
+  splice_window_seconds: 0.5
+  language: en
