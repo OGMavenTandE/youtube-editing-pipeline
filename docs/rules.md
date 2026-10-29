@@ -30,11 +30,13 @@ python -m ytp rule list --series ai-survival --section script_copy
 
 ## What the check enforces by itself
 
-`ytp check` reads the rules file. It fails a render when it finds any of these:
+`ytp check VIDEO --plan PLAN --series ai-survival` reads the rules file and writes `qc/check-report.md` and `qc/check-report.json`. The process exits 1 when the report fails. It fails a render when it finds any of these:
 
 - A quoted ban in a sentence that says never, do not, banned, or forbid. `Never say "widget".` becomes a banned phrase. Words after `instead` are the replacement, not a ban, so `Say "some vendors" instead.` does not ban that line.
 - A parenthetical vendor list on a sentence that says not to name vendors. The on-camera line is **some vendors**.
-- The `lint` block: banned phrases, vendor names, banned sound-effect ids, words per minute (175–185), loudness (voice -16 LUFS, Shorts -14 LUFS, true peak at or below -1.5 dBTP, music about 17 dB under the voice), em dashes, and emoji.
+- The `lint` block: banned phrases, vendor names, banned sound-effect ids, closer phrases (like and subscribe, thanks for watching, leave a comment), loudness (voice -16 LUFS, Shorts -14 LUFS, true peak at or below -1.5 dBTP, music about 17 dB under the voice), em dashes, and emoji.
+- Pace, as two warnings that do not fail the render. Overall wpm is words over the narration span, pauses included (AI Survival warns outside 155–185). Articulation wpm is words over speech time. Only a gap between narration lines longer than `pause_gap_ms` (default 250) is removed; a hole inside a line is not a pause (warns outside 175–185). Desk takes warn only, even if a band is marked fail. The approved Episode 1 mix is about 166 overall.
+- Talking-head only: the open line "These are my own views, not the Department's." inside the first 60 seconds, description links to LinkedIn and X (vendor names in that description are not bans), and an end card of 5–10 seconds whose text boxes stay out of the YouTube end-screen slots.
 
 Write a new ban in that quoted form when Scott wants the checker to catch it. Pace and loudness numbers live under `lint` because they are measurements, not sentences.
 
@@ -42,7 +44,7 @@ Banned sounds are matched against music-cue ids (the sound name), not against th
 
 ## What stays a human read
 
-The 4P hook, thumbnail wording, "choose the shot after the cut", and "credit outside claims" stay as prose. The checker does not try to grade those. Galley and Studio still read them.
+The 4P hook, thumbnail wording, "choose the shot after the cut", and "credit outside claims" stay as prose. The checker does not try to grade those. Galley and Studio still read them. AI Survival picture rules are marked `pending_studio_confirmation` until Studio confirms them. On-camera topic videos use [`rules/talking-head.yaml`](../rules/talking-head.yaml). Raw takes for that series are on Scott's Windows PC at `C:\AI Eval\YouTube`.
 
 ## Draft only
 

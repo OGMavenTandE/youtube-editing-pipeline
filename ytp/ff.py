@@ -139,9 +139,8 @@ def concat_line(path: Path) -> str:
     return f"file '{text}'"
 
 
-def escape_filter_path(path: Path) -> str:
-    """Escape a path for an ffmpeg filter argument such as subtitles=."""
-    text = path.resolve().as_posix()
+def escape_filter_text(text: str) -> str:
+    """Escape a path or label for an ffmpeg filter argument."""
     return (
         text.replace("\\", "\\\\")
         .replace(":", r"\:")
@@ -149,4 +148,18 @@ def escape_filter_path(path: Path) -> str:
         .replace(",", r"\,")
         .replace("[", r"\[")
         .replace("]", r"\]")
+    )
+
+
+def escape_filter_path(path: Path) -> str:
+    """Escape a path for an ffmpeg filter argument such as subtitles=."""
+    return escape_filter_text(path.resolve().as_posix())
+
+
+def escape_drawtext(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+        .replace("%", r"\%")
     )

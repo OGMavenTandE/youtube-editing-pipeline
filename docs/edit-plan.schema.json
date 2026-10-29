@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/OGMavenTandE/youtube-editing-pipeline/docs/edit-plan.schema.json",
+  "title": "ytp edit plan",
+  "description": "Cut list for ytp render and ytp check. YAML and JSON use this mapping.",
+  "type": "object",
+  "required": ["version", "series", "segments", "narration", "music", "captions", "broll"],
+  "additionalProperties": true,
+  "properties": {
+    "version": { "const": 1 },
+    "series": { "type": "string", "examples": ["ai-survival"] },
+    "episode": { "type": "string" },
+    "title": { "type": "string" },
+    "width": { "type": "integer", "minimum": 16 },
+    "height": { "type": "integer", "minimum": 16 },
+    "fps": { "type": "integer", "minimum": 1 },
+    "lead_in": {
+      "type": "number",
+      "description": "Seconds of score before the first narration line."
+    },
+    "voice": {
+      "type": ["string", "null"],
+      "description": "Narration or mix wav, relative to the episode directory or absolute."
+    },
+    "captions_mode": { "enum": ["srt", "burn", "both"] },
+    "audio_hook": {
+      "type": ["string", "null"],
+      "description": "Track's mix script. ytp calls it unchanged. See docs/edit-plan.md."
+    },
+    "graphics_hook": {
+      "type": ["string", "null"],
+      "description": "Studio's graphics script. Called when a segment sets template."
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "source", "start", "duration"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "enum": ["still", "clip"] },
+          "source": { "type": "string" },
+          "start": { "type": "number", "description": "Timeline time in seconds." },
+          "duration": { "type": "number", "exclusiveMinimum": 0 },
+          "in": { "type": "number", "description": "Source in-point for a clip." },
+          "out": { "type": ["number", "null"], "description": "Source out-point for a clip." },
+          "template": {
+            "type": ["string", "null"],
+            "description": "Studio template name. Requires graphics_hook."
+          },
+          "template_text": { "type": ["string", "null"] },
+          "palette": { "type": ["string", "null"] },
+          "beat": { "type": ["integer", "null"] },
+          "narration_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "broll": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "at", "duration"],
+        "properties": {
+          "id": { "type": "string" },
+          "source": { "type": "string" },
+          "at": { "type": "number" },
+          "duration": { "type": "number", "exclusiveMinimum": 0 },
+          "in": { "type": "number" },
+          "layout": { "enum": ["full", "pip-lower-right"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "music": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "sfx", "at", "gain_db"],
+        "properties": {
+          "id": { "type": "string" },
+          "sfx": { "type": "string", "description": "Sound name. Banned-sound checks read this, not the note." },
+          "at": { "type": "number" },
+          "gain_db": { "type": "number" },
+          "source": { "type": ["string", "null"] },
+          "duration": { "type": ["number", "null"] },
+          "duck_under_voice": { "type": "boolean" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "captions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["start", "end", "text"],
+        "properties": {
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "narration": {
+      "type": "array",
+      "description": "Approved words. The splice check compares the render to this list.",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "start", "end"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "beat": { "type": ["integer", "null"] },
+          "palette": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "shorts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "start", "end"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" }
+        }
+      }
+    },
+    "beats": { "type": "array" },
+    "palettes": { "type": "array" },
+    "meta": { "type": "object" }
+  }
+}

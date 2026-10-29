@@ -1,0 +1,290 @@
+[
+ {
+  "beat": 1,
+  "palette": "DARK",
+  "text": "You're at a picnic when you hear a buzz, up high, getting closer.",
+  "id": "00e_b1",
+  "pause_after": 0.0,
+  "gen_id": "jUVPYmxhEtVHUXRJ2Zwp",
+  "dur": 3.845283
+ },
+ {
+  "beat": 1,
+  "palette": "DARK",
+  "text": "In this story, the machines have turned on us, and that drone is looking for people.",
+  "id": "00f_b1",
+  "pause_after": 0.0,
+  "gen_id": "EaY53SKW6pRhpUwydHSX",
+  "dur": 4.619342
+ },
+ {
+  "beat": 1,
+  "palette": "DARK",
+  "text": "In the next four minutes, you'll see what an AI drone actually sees, and get ten common-sense ways to not look like a target.",
+  "id": "00c_b1",
+  "pause_after": 0.0,
+  "gen_id": "iTiXtaCxCC9dhcZaeNJD",
+  "dur": 7.180612
+ },
+ {
+  "beat": 1,
+  "palette": "DARK",
+  "text": "It's for anyone who's curious, worried, or just wants to finish their picnic.",
+  "id": "00d_b1",
+  "pause_after": 1.5,
+  "gen_id": "Rb7C0gGrkGsngVzbiUy8",
+  "dur": 4.248141
+ },
+ {
+  "beat": 2,
+  "palette": "BRIGHT",
+  "text": "Your guide today is a former Pentagon AI test and evaluation program manager. His job was to put AI systems through their paces and find out where they get it wrong.",
+  "id": "04_b2",
+  "pause_after": 0.0,
+  "gen_id": "1SfTDtIAB7o9rKVlxThm",
+  "dur": 9.168503
+ },
+ {
+  "beat": 2,
+  "palette": "BRIGHT",
+  "text": "Nothing here is secret. It's common sense, from someone who has watched these machines guess. Our survivor today is this guy. Cap, scarf, big appetite. Let's keep him alive.",
+  "id": "05_b2",
+  "pause_after": 0.0,
+  "gen_id": "G7cXzT09OCeQZ747NAIL",
+  "dur": 10.58873
+ },
+ {
+  "beat": 3,
+  "palette": "DARK",
+  "text": "Most drones you've seen have a pilot. Somebody is holding a controller and watching a screen. An autonomous AI drone is different. Nobody is watching. The drone's own software looks at the picture, decides what it's seeing, and decides what to do next.",
+  "id": "06_b3",
+  "pause_after": 0.0,
+  "gen_id": "WhJtlLmpGx1pRquWsCRi",
+  "dur": 13.813152
+ },
+ {
+  "beat": 3,
+  "palette": "BRIGHT",
+  "text": "And it decides the way a kid learns from flash cards. It was shown thousands of examples of what a person looks like. Now it compares whatever it sees to those cards, picks the closest match, and puts a confidence score on it.",
+  "pause_after": 1.0,
+  "id": "07_b3",
+  "gen_id": "XpuTOf36pZHisNeIrAGL",
+  "dur": 11.837914
+ },
+ {
+  "beat": 3,
+  "palette": "BRIGHT",
+  "text": "Confident, yes. Correct, no. Every tip that follows is about making that guess harder.",
+  "pause_after": 1.0,
+  "id": "08_b3",
+  "gen_id": "glqMF90582yk3b26p3Qo",
+  "dur": 5.911134
+ },
+ {
+  "beat": 4,
+  "palette": "BRIGHT",
+  "text": "Tip one. Thermal sees heat, not light.",
+  "id": "09_b4",
+  "pause_after": 0.0,
+  "gen_id": "pypU75VANDr91iLCOcKT",
+  "dur": 2.966871
+ },
+ {
+  "beat": 4,
+  "palette": "BRIGHT",
+  "text": "These drones usually carry two cameras. A regular one, and a thermal one that sees warmth. You run around ninety-eight degrees. Most of the world around you doesn't. So darkness won't hide you. Shadows won't. And that bush you're so proud of? Your heat glows right through it.",
+  "pause_after": 1.0,
+  "id": "10_b4",
+  "gen_id": "hIhVWmrRVkR0OWywzhr8",
+  "dur": 15.811565
+ },
+ {
+  "beat": 5,
+  "palette": "BRIGHT",
+  "text": "Tip two. Get under a real roof, and stay there.",
+  "id": "11_b5",
+  "pause_after": 0.0,
+  "gen_id": "XCE0bM3aLSUzoDzbfAgk",
+  "dur": 3.51966
+ },
+ {
+  "beat": 5,
+  "palette": "BRIGHT",
+  "text": "Thermal reads heat on surfaces. It doesn't see through roofs and walls. So pick an inside room, away from windows. And the best plan is not needing to go back out. Water, food, medicine, a charged phone. Enough that a quick supply run never puts you in the open.",
+  "pause_after": 1.0,
+  "id": "12_b5",
+  "gen_id": "pteAfHTeTcRML0qwg33n",
+  "dur": 15.27195
+ },
+ {
+  "beat": 6,
+  "palette": "BRIGHT",
+  "text": "Tip three. To a thermal camera, ordinary window glass is basically a wall.",
+  "id": "13_b6",
+  "pause_after": 0.0,
+  "gen_id": "7covAym4MIBm4uT675K7",
+  "dur": 4.772109
+ },
+ {
+  "beat": 6,
+  "palette": "BRIGHT",
+  "text": "It blocks the heat a thermal camera reads. So through a window, the heat view shows a cold, blank pane. But the regular camera sees through glass just fine. So stay back from the window anyway.",
+  "pause_after": 1.0,
+  "id": "14_b6",
+  "gen_id": "UWQ3WblkxSNls0nJ7rAz",
+  "dur": 11.062902
+ },
+ {
+  "beat": 7,
+  "palette": "BRIGHT",
+  "text": "Tip four. Don't be the only warm thing in the picture.",
+  "id": "15_b7",
+  "pause_after": 0.0,
+  "gen_id": "hKnZXySPyVOjTMzK9PvN",
+  "dur": 3.139025
+ },
+ {
+  "beat": 7,
+  "palette": "BRIGHT",
+  "text": "In an empty field on a cool night, you're a bright dot on a dark page. Easy guess. Near buildings, parked cars, engines and other warm stuff, you're one glow among many. Busy beats empty, every time.",
+  "pause_after": 1.0,
+  "id": "16_b7",
+  "gen_id": "gAfdKPX0RobCLostBxtR",
+  "dur": 13.009751
+ },
+ {
+  "beat": 8,
+  "palette": "BRIGHT",
+  "text": "Tip five. A thermal blanket buys you time.",
+  "id": "17_b8",
+  "pause_after": 0.0,
+  "gen_id": "2s3RdbuhthSICqZlpoec",
+  "dur": 2.881406
+ },
+ {
+  "beat": 8,
+  "palette": "BRIGHT",
+  "text": "One of those foil emergency blankets holds your body heat in, so the heat camera sees less of you. But it's not an invisibility cloak. It warms up the longer you're under it. And the shiny side? To a regular camera, it flashes like a mirror.",
+  "pause_after": 1.0,
+  "id": "18_b8",
+  "gen_id": "FoAPew5dA91E8Y8xy68c",
+  "dur": 12.913288
+ },
+ {
+  "beat": 8,
+  "palette": "BRIGHT",
+  "text": "It buys time to get to cover. Nothing more.",
+  "pause_after": 1.0,
+  "id": "19_b8",
+  "gen_id": "29dbcuYdhytOtaLSiqys",
+  "dur": 2.436984
+ },
+ {
+  "beat": 9,
+  "palette": "BRIGHT",
+  "text": "Tip six. Don't look like the flash card.",
+  "id": "20_b9",
+  "pause_after": 0.0,
+  "gen_id": "4VTpjx8RPO5SZJLfQ7Vu",
+  "dur": 2.633379
+ },
+ {
+  "beat": 9,
+  "palette": "BRIGHT",
+  "text": "Remember, it learned people mostly from upright, walking examples. A clear, standing person out in the open is its favorite answer. So stay low, and stay right up against cover.",
+  "pause_after": 1.0,
+  "id": "21_b9",
+  "gen_id": "tlgG57Pae0KmvWY0s42d",
+  "dur": 10.378299
+ },
+ {
+  "beat": 9,
+  "palette": "BRIGHT",
+  "text": "Confidently wrong, in both directions.",
+  "pause_after": 1.0,
+  "id": "22_b9",
+  "gen_id": "5cQCBPKANhT1fYbkfjkF",
+  "dur": 2.524399
+ },
+ {
+  "beat": 10,
+  "palette": "DARK",
+  "text": "Tip seven. Listen first.",
+  "pause_after": 1.5,
+  "hum_after": true,
+  "id": "23_b10",
+  "gen_id": "ohfCzMmpltanKTh0wakt",
+  "dur": 2.074626
+ },
+ {
+  "beat": 10,
+  "palette": "DARK",
+  "text": "You'll usually hear one before you see it. Treat that buzz as your cue to move to cover, calmly, before it's overhead.",
+  "pause_after": 1.0,
+  "id": "24_b10",
+  "gen_id": "gNLeojZmDzpLO10RuOn2",
+  "dur": 6.673651
+ },
+ {
+  "beat": 11,
+  "palette": "BRIGHT",
+  "text": "Tip eight. Wait it out.",
+  "id": "25_b11",
+  "pause_after": 0.0,
+  "gen_id": "sKDxQ611TCbk7H222Gnn",
+  "dur": 1.83737
+ },
+ {
+  "beat": 11,
+  "palette": "BRIGHT",
+  "text": "Small drones run on batteries, and batteries run out. It can't hover over your house forever. Time is on your side, so patience beats any trick.",
+  "pause_after": 1.0,
+  "id": "26_b11",
+  "gen_id": "qoM2tqWdqFvjlMh1kCkz",
+  "dur": 8.799887
+ },
+ {
+  "beat": 12,
+  "palette": "BRIGHT",
+  "text": "Tip nine. Bad weather is hard on cameras.",
+  "id": "27_b12",
+  "pause_after": 0.0,
+  "gen_id": "XSO8NW0llehh8siUg0xn",
+  "dur": 3.060522
+ },
+ {
+  "beat": 12,
+  "palette": "BRIGHT",
+  "text": "Rain, fog, snow and haze smear the picture, and the regular camera takes it hardest. Thermal holds up better, but it isn't perfect either. A worse picture means a worse guess.",
+  "pause_after": 1.0,
+  "id": "28_b12",
+  "gen_id": "j8KHaNnjONCrmhpYWIUr",
+  "dur": 10.775238
+ },
+ {
+  "beat": 13,
+  "palette": "BRIGHT",
+  "text": "Tip ten. Follow official alerts. And if one comes down, never touch it. Stay away, and report it.",
+  "id": "29_b13",
+  "pause_after": 0.0,
+  "gen_id": "5IWApjPHJTeF02phCytE",
+  "dur": 6.799909
+ },
+ {
+  "beat": 14,
+  "palette": "DARK",
+  "text": "Here's what testers learn fast. A score that says ninety-four percent sure is not the same as being right ninety-four percent of the time. A system can be very sure and very wrong, and from the outside you can't tell which.",
+  "id": "30_b14",
+  "pause_after": 1.5,
+  "gen_id": "v3geaRRTupz31cCFB5HB",
+  "dur": 12.663968
+ },
+ {
+  "beat": 14,
+  "palette": "BRIGHT",
+  "text": "And most days, that buzz is just someone's sandwich on the way.",
+  "id": "32_b14",
+  "pause_after": 0.0,
+  "dur": 3.133424
+ }
+]

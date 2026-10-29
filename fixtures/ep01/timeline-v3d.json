@@ -1,0 +1,414 @@
+{
+ "file": "voice-v3d.wav",
+ "tempo": 1.1,
+ "total": 250.105,
+ "beat_starts": {
+  "1": 1.0,
+  "2": 18.045,
+  "3": 38.403,
+  "4": 72.265,
+  "5": 92.343,
+  "6": 112.435,
+  "7": 129.57,
+  "8": 147.019,
+  "9": 167.55,
+  "10": 185.386,
+  "11": 198.635,
+  "12": 210.572,
+  "13": 225.708,
+  "14": 232.808
+ },
+ "palette_segments": [
+  {
+   "palette": "DARK",
+   "start": 1.0,
+   "end": 17.245
+  },
+  {
+   "palette": "BRIGHT",
+   "start": 18.045,
+   "end": 38.103
+  },
+  {
+   "palette": "DARK",
+   "start": 38.403,
+   "end": 52.216
+  },
+  {
+   "palette": "BRIGHT",
+   "start": 52.516,
+   "end": 184.386
+  },
+  {
+   "palette": "DARK",
+   "start": 185.386,
+   "end": 197.635
+  },
+  {
+   "palette": "BRIGHT",
+   "start": 198.635,
+   "end": 232.508
+  },
+  {
+   "palette": "DARK",
+   "start": 232.808,
+   "end": 245.472
+  },
+  {
+   "palette": "BRIGHT",
+   "start": 246.972,
+   "end": 250.105
+  }
+ ],
+ "clips": [
+  {
+   "id": "00e_b1",
+   "file": "00e_b1.wav",
+   "beat": 1,
+   "palette": "DARK",
+   "start": 1.0,
+   "end": 4.845,
+   "text": "You're at a picnic when you hear a buzz, up high, getting closer.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "00f_b1",
+   "file": "00f_b1.wav",
+   "beat": 1,
+   "palette": "DARK",
+   "start": 5.145,
+   "end": 9.765,
+   "text": "In this story, the machines have turned on us, and that drone is looking for people.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "00c_b1",
+   "file": "00c_b1.wav",
+   "beat": 1,
+   "palette": "DARK",
+   "start": 10.065,
+   "end": 17.245,
+   "text": "In the next four minutes, you'll see what an AI drone actually sees, and get ten common-sense ways to not look like a target.",
+   "gap_after": 0.8
+  },
+  {
+   "id": "04_b2",
+   "file": "04_b2.wav",
+   "beat": 2,
+   "palette": "BRIGHT",
+   "start": 18.045,
+   "end": 27.214,
+   "text": "Your guide today is a former Pentagon AI test and evaluation program manager. His job was to put AI systems through their paces and find out where they get it wrong.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "05_b2",
+   "file": "05_b2.wav",
+   "beat": 2,
+   "palette": "BRIGHT",
+   "start": 27.514,
+   "end": 38.103,
+   "text": "Nothing here is secret. It's common sense, from someone who has watched these machines guess. Our survivor today is this guy. Cap, scarf, big appetite. Let's keep him alive.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "06_b3",
+   "file": "06_b3.wav",
+   "beat": 3,
+   "palette": "DARK",
+   "start": 38.403,
+   "end": 52.216,
+   "text": "Most drones you've seen have a pilot. Somebody is holding a controller and watching a screen. An autonomous AI drone is different. Nobody is watching. The drone's own software looks at the picture, decides what it's seeing, and decides what to do next.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "07_b3",
+   "file": "07_b3.wav",
+   "beat": 3,
+   "palette": "BRIGHT",
+   "start": 52.516,
+   "end": 64.354,
+   "text": "And it decides the way a kid learns from flash cards. It was shown thousands of examples of what a person looks like. Now it compares whatever it sees to those cards, picks the closest match, and puts a confidence score on it.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "08_b3",
+   "file": "08_b3.wav",
+   "beat": 3,
+   "palette": "BRIGHT",
+   "start": 65.354,
+   "end": 71.265,
+   "text": "Confident, yes. Correct, no. Every tip that follows is about making that guess harder.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "09_b4",
+   "file": "09_b4.wav",
+   "beat": 4,
+   "palette": "BRIGHT",
+   "start": 72.265,
+   "end": 75.232,
+   "text": "Tip one. Thermal sees heat, not light.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "10_b4",
+   "file": "10_b4.wav",
+   "beat": 4,
+   "palette": "BRIGHT",
+   "start": 75.532,
+   "end": 91.343,
+   "text": "These drones usually carry two cameras. A regular one, and a thermal one that sees warmth. You run around ninety-eight degrees. Most of the world around you doesn't. So darkness won't hide you. Shadows won't. And that bush you're so proud of? Your heat glows right through it.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "11_b5",
+   "file": "11_b5.wav",
+   "beat": 5,
+   "palette": "BRIGHT",
+   "start": 92.343,
+   "end": 95.863,
+   "text": "Tip two. Get under a real roof, and stay there.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "12_b5",
+   "file": "12_b5.wav",
+   "beat": 5,
+   "palette": "BRIGHT",
+   "start": 96.163,
+   "end": 111.435,
+   "text": "Thermal reads heat on surfaces. It doesn't see through roofs and walls. So pick an inside room, away from windows. And the best plan is not needing to go back out. Water, food, medicine, a charged phone. Enough that a quick supply run never puts you in the open.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "13_b6",
+   "file": "13_b6.wav",
+   "beat": 6,
+   "palette": "BRIGHT",
+   "start": 112.435,
+   "end": 117.207,
+   "text": "Tip three. To a thermal camera, ordinary window glass is basically a wall.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "14_b6",
+   "file": "14_b6.wav",
+   "beat": 6,
+   "palette": "BRIGHT",
+   "start": 117.507,
+   "end": 128.57,
+   "text": "It blocks the heat a thermal camera reads. So through a window, the heat view shows a cold, blank pane. But the regular camera sees through glass just fine. So stay back from the window anyway.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "15_b7",
+   "file": "15_b7.wav",
+   "beat": 7,
+   "palette": "BRIGHT",
+   "start": 129.57,
+   "end": 132.709,
+   "text": "Tip four. Don't be the only warm thing in the picture.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "16_b7",
+   "file": "16_b7.wav",
+   "beat": 7,
+   "palette": "BRIGHT",
+   "start": 133.009,
+   "end": 146.019,
+   "text": "In an empty field on a cool night, you're a bright dot on a dark page. Easy guess. Near buildings, parked cars, engines and other warm stuff, you're one glow among many. Busy beats empty, every time.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "17_b8",
+   "file": "17_b8.wav",
+   "beat": 8,
+   "palette": "BRIGHT",
+   "start": 147.019,
+   "end": 149.9,
+   "text": "Tip five. A thermal blanket buys you time.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "18_b8",
+   "file": "18_b8.wav",
+   "beat": 8,
+   "palette": "BRIGHT",
+   "start": 150.2,
+   "end": 163.113,
+   "text": "One of those foil emergency blankets holds your body heat in, so the heat camera sees less of you. But it's not an invisibility cloak. It warms up the longer you're under it. And the shiny side? To a regular camera, it flashes like a mirror.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "19_b8",
+   "file": "19_b8.wav",
+   "beat": 8,
+   "palette": "BRIGHT",
+   "start": 164.113,
+   "end": 166.55,
+   "text": "It buys time to get to cover. Nothing more.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "20_b9",
+   "file": "20_b9.wav",
+   "beat": 9,
+   "palette": "BRIGHT",
+   "start": 167.55,
+   "end": 170.184,
+   "text": "Tip six. Don't look like the flash card.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "21_b9",
+   "file": "21_b9.wav",
+   "beat": 9,
+   "palette": "BRIGHT",
+   "start": 170.484,
+   "end": 180.862,
+   "text": "Remember, it learned people mostly from upright, walking examples. A clear, standing person out in the open is its favorite answer. So stay low, and stay right up against cover.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "22_b9",
+   "file": "22_b9.wav",
+   "beat": 9,
+   "palette": "BRIGHT",
+   "start": 181.862,
+   "end": 184.386,
+   "text": "Confidently wrong, in both directions.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "23_b10",
+   "file": "23_b10.wav",
+   "beat": 10,
+   "palette": "DARK",
+   "start": 185.386,
+   "end": 187.461,
+   "text": "Tip seven. Listen first.",
+   "gap_after": 3.5,
+   "hum_in": 193.209
+  },
+  {
+   "id": "24_b10",
+   "file": "24_b10.wav",
+   "beat": 10,
+   "palette": "DARK",
+   "start": 190.961,
+   "end": 197.635,
+   "text": "You'll usually hear one before you see it. Treat that buzz as your cue to move to cover, calmly, before it's overhead.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "25_b11",
+   "file": "25_b11.wav",
+   "beat": 11,
+   "palette": "BRIGHT",
+   "start": 198.635,
+   "end": 200.472,
+   "text": "Tip eight. Wait it out.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "26_b11",
+   "file": "26_b11.wav",
+   "beat": 11,
+   "palette": "BRIGHT",
+   "start": 200.772,
+   "end": 209.572,
+   "text": "Small drones run on batteries, and batteries run out. It can't hover over your house forever. Time is on your side, so patience beats any trick.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "27_b12",
+   "file": "27_b12.wav",
+   "beat": 12,
+   "palette": "BRIGHT",
+   "start": 210.572,
+   "end": 213.632,
+   "text": "Tip nine. Bad weather is hard on cameras.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "28_b12",
+   "file": "28_b12.wav",
+   "beat": 12,
+   "palette": "BRIGHT",
+   "start": 213.932,
+   "end": 224.708,
+   "text": "Rain, fog, snow and haze smear the picture, and the regular camera takes it hardest. Thermal holds up better, but it isn't perfect either. A worse picture means a worse guess.",
+   "gap_after": 1.0
+  },
+  {
+   "id": "29_b13",
+   "file": "29_b13.wav",
+   "beat": 13,
+   "palette": "BRIGHT",
+   "start": 225.708,
+   "end": 232.508,
+   "text": "Tip ten. Follow official alerts. And if one comes down, never touch it. Stay away, and report it.",
+   "gap_after": 0.3
+  },
+  {
+   "id": "30_b14",
+   "file": "30_b14.wav",
+   "beat": 14,
+   "palette": "DARK",
+   "start": 232.808,
+   "end": 245.472,
+   "text": "Here's what testers learn fast. A score that says ninety-four percent sure is not the same as being right ninety-four percent of the time. A system can be very sure and very wrong, and from the outside you can't tell which.",
+   "gap_after": 1.5
+  },
+  {
+   "id": "32_b14",
+   "file": "32_b14.wav",
+   "beat": 14,
+   "palette": "BRIGHT",
+   "start": 246.972,
+   "end": 250.105,
+   "text": "And most days, that buzz is just someone's sandwich on the way."
+  }
+ ],
+ "shorts": {
+  "A": {
+   "title": "Glass Is a Wall to Thermal",
+   "start": 112.435,
+   "end": 129.07
+  },
+  "B": {
+   "title": "Thermal Blanket: Not a Cloak",
+   "start": 147.019,
+   "end": 167.05
+  },
+  "C": {
+   "title": "Confidently Wrong",
+   "start": 167.55,
+   "end": 184.886
+  }
+ },
+ "listen_first": {
+  "silence_start": 187.461,
+  "hum_in": 188.961,
+  "next_line": 190.961
+ },
+ "beat_titles": {
+  "1": "Cold open",
+  "2": "Who's talking",
+  "3": "How it works",
+  "4": "Tip 1 Thermal sees heat",
+  "5": "Tip 2 Real roof",
+  "6": "Tip 3 Glass",
+  "7": "Tip 4 Only warm thing",
+  "8": "Tip 5 Thermal blanket",
+  "9": "Tip 6 Flash card",
+  "10": "Tip 7 Listen first",
+  "11": "Tip 8 Wait it out",
+  "12": "Tip 9 Bad weather",
+  "13": "Tip 10 Alerts / downed drone",
+  "14": "Close"
+ },
+ "lead_in": 1.0
+}

@@ -5,13 +5,75 @@
 `ytp` is the script-driven editor for series episodes (AI Survival first). It never publishes a video and never changes a YouTube listing. Python 3 and ffmpeg/ffprobe only. No CapCut, DaVinci, or paid APIs. The same commands run on Linux and on Windows, including WSL on Scott's PC. NVIDIA encode is optional later (`--encoder nvenc` on the RTX 4070 Super); the default encoder is libx264 so a machine without a GPU still renders.
 
 ```bash
-pip install -r requirements-ytp.txt
-python -m ytp init path/to/ep01 --series ai-survival
+pip install -e .
+# optional local transcription (pins PyAV below 17; 16.1.0 works):
+pip install -e ".[whisper]"
+# ytp is on PATH after that install, from any working directory:
+ytp init path/to/ep01 --series ai-survival
 python -m ytp rule list --series ai-survival
 python -m ytp rule add --series ai-survival --section edit --text "Never say \"widget\"."
+python -m ytp plan import \
+  --timeline path/to/timeline-v3d.json \
+  --concat path/to/rc8b-concat.txt \
+  --score path/to/score-cues-v3d.md \
+  --lines path/to/lines.json \
+  --out path/to/ep01/edit/plan.yaml
+python -m ytp plan validate path/to/ep01/edit/plan.yaml
+python -m ytp index path/to/ep01
+python -m ytp render path/to/ep01/edit/plan.yaml --captions both
+python -m ytp check path/to/ep01/renders/v1/plan.mp4 \
+  --plan path/to/ep01/edit/plan.yaml \
+  --series ai-survival
 ```
 
-`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). Clip index, the edit plan, render, and the render check are the following commands in this quickstart.
+`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md).
+
+`index` transcribes every clip under `source/` with local faster-whisper (`pip install -r requirements-ytp-whisper.txt`) and writes `edit/clip-index.json` plus `edit/clip-index.md` (path, duration, word timestamps, transcript, description). A description you already filled in is kept. `--backend none` records durations only.
+
+`render` concats stills and clips, overlays B-roll (`full` or `pip-lower-right`), ducks music under the voice, and writes captions as a sidecar SRT, a burn-in, or both. `--encoder nvenc` (or `auto`) uses the RTX 4070 Super when that encode actually succeeds; otherwise the render stays on libx264. `--audio-hook` calls Track's mix script unchanged. `--graphics-hook` calls a Studio template script for any segment that sets `template`. The files in `ytp/stub_hooks/` are argv stubs for tests, not those tools.
+
+`render` with no `--out` writes `renders/v1/`, then `renders/v2/`, and so on. It will not overwrite a file that is already there. `--out` is for an explicit new path only.
+
+`check` writes `qc/check-report.md` and `qc/check-report.json`. It fails the render for caption drift, loudness (voice -16 LUFS, Shorts -14, true peak at or below -1.5 dBTP, music about 17 dB under the voice when stems are on disk), banned words and vendor names, closer lines, banned sound-effect ids, and leftover words at splices. Pace is a warning, not a failure: overall words per minute (pauses included; AI Survival warns outside 155–185) and articulation words per minute (only a gap between narration lines longer than 250 ms is removed; a hole inside a line is not a pause; warns outside 175–185). Desk takes only warn. The splice check aligns one transcript of the checked audio to the plan text, then listens again to about 1.5 seconds around each narration join. The window model defaults to `small` (`--splice-model`). A word is a fragment only when its start is within about 0.5 seconds of the cut, and it matches neither the last words of the line before nor the first words of the line after. Each cut produces at most one finding. A window whose text repeats or compresses above about 2.4 is dropped. The open and the close are not cuts, and the plan's voice file is not an input. Episode 1 v8 left "It's" (removed line 00d_b1) at about 17.5s. Whisper decodes a 16 kHz mono wav first, at temperature 0 with no fallback, one CPU thread, and int8. Reported pace is rounded to 0.1 wpm. The process exits 1 on a failure. Pass `--asr` with word-timestamp JSON when you already have it. A bracket transcript (`[start-end] text`) has no word times: the splice check and articulation pace are reported as not measured instead of guessing. Otherwise install faster-whisper so the check can listen itself. Whisper is locked to the series language, English by default. On-camera videos use `--series talking-head`.
+
+Run the suite (Whisper tests stay out of CI):
+
+```bash
+python -m pytest tests/ytp -m "not whisper" --confcutdir=tests/ytp
+```
+
+### Full pass on an existing episode folder
+
+Put the voice, mix, and score under `audio/`, stills under `frames/`, and raw clips under `source/`. `init` only adds folders; it does not move or delete media. From the repo:
+
+```bash
+python -m ytp init /path/to/ep01 --series ai-survival
+python -m ytp index /path/to/ep01
+python -m ytp plan import \
+  --timeline /path/to/ep01/timeline-v3d.json \
+  --concat /path/to/ep01/rc8b-concat.txt \
+  --score /path/to/ep01/score-cues-v3d.md \
+  --lines /path/to/ep01/lines.json \
+  --out /path/to/ep01/edit/plan.yaml
+python -m ytp plan validate /path/to/ep01/edit/plan.yaml
+python -m ytp render /path/to/ep01/edit/plan.yaml \
+  --captions both \
+  --encoder auto
+python -m ytp check /path/to/ep01/renders/v1/plan.mp4 \
+  --plan /path/to/ep01/edit/plan.yaml \
+  --series ai-survival
+```
+
+To check a cut you already have, skip render and pass the mix transcript if Whisper is not installed:
+
+```bash
+python -m ytp check /path/to/ep01/renders/rough-cut-v8b.mp4 \
+  --plan /path/to/ep01/edit/plan.yaml \
+  --series ai-survival \
+  --asr /path/to/ep01/asr-mix-v3d.txt
+```
+
+Point `voice` in the plan at the current mix before rendering. Do not point it at an older render. Nothing here publishes or edits the YouTube listing.
 
 ## Webcam desk pipeline
 

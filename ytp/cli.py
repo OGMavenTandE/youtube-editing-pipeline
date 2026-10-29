@@ -6,9 +6,17 @@ import argparse
 import sys
 from pathlib import Path
 
+import yaml
+
 from ytp import __version__
+from ytp.check import check_render, load_asr, write_report
+from ytp.import_ep01 import import_episode
+from ytp.index import index_episode
 from ytp.layout import init_episode
+from ytp.plan import load_plan, save_plan, validate_plan
+from ytp.render import allocate_render_path, infer_episode_dir, render_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
+from ytp.transcribe import FasterWhisperTranscriber, NullTranscriber
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -48,6 +56,81 @@ def _build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--section", choices=SECTIONS)
     listing.add_argument("--rules-root", type=Path, default=None)
     listing.set_defaults(func=_cmd_rule_list)
+
+    plan = sub.add_parser("plan", help="import or validate an edit plan")
+    plan_sub = plan.add_subparsers(dest="plan_command", required=True)
+
+    importer = plan_sub.add_parser(
+        "import",
+        help="build a plan from an Ep01 timeline, concat list, and score sheet",
+    )
+    importer.add_argument("--timeline", type=Path, required=True)
+    importer.add_argument("--concat", type=Path, required=True)
+    importer.add_argument("--score", type=Path, required=True)
+    importer.add_argument("--lines", type=Path, default=None)
+    importer.add_argument("--series", default="ai-survival")
+    importer.add_argument("--episode", default="ep01")
+    importer.add_argument("--title", default="How to Survive an AI Drone")
+    importer.add_argument("--episode-dir", type=Path, default=None)
+    importer.add_argument(
+        "--voice",
+        default=None,
+        help="mix (default when audio/mix has files), voice, or a relative path",
+    )
+    importer.add_argument("--out", type=Path, required=True)
+    importer.set_defaults(func=_cmd_plan_import)
+
+    checker = plan_sub.add_parser("validate", help="check a plan against the schema rules")
+    checker.add_argument("plan", type=Path)
+    checker.set_defaults(func=_cmd_plan_validate)
+
+    index = sub.add_parser("index", help="transcribe source clips into edit/clip-index")
+    index.add_argument("episode_dir", type=Path)
+    index.add_argument("--model", default="base")
+    index.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    index.add_argument("--backend", default="whisper", choices=["whisper", "none"])
+    index.add_argument(
+        "--root",
+        action="append",
+        default=None,
+        help="folder to scan, relative to the episode (default: source). Repeatable.",
+    )
+    index.set_defaults(func=_cmd_index)
+
+    render = sub.add_parser("render", help="render an edit plan to mp4")
+    render.add_argument("plan", type=Path)
+    render.add_argument("--out", type=Path, default=None)
+    render.add_argument("--episode-dir", type=Path, default=None)
+    render.add_argument("--captions", choices=["srt", "burn", "both"])
+    render.add_argument("--preset", default="veryfast")
+    render.add_argument("--encoder", default="libx264", help="libx264, nvenc, or auto")
+    render.add_argument("--audio-hook", type=Path, default=None, help="Track's mix script")
+    render.add_argument("--graphics-hook", type=Path, default=None, help="Studio's template script")
+    render.add_argument("--short", default=None, help="also write this short id from the plan")
+    render.set_defaults(func=_cmd_render)
+
+    checker = sub.add_parser("check", help="pass/fail a render against the plan and series rules")
+    checker.add_argument("video", type=Path)
+    checker.add_argument("--plan", type=Path, required=True)
+    checker.add_argument("--series", required=True)
+    checker.add_argument("--rules-root", type=Path, default=None)
+    checker.add_argument(
+        "--asr",
+        type=Path,
+        default=None,
+        help="word JSON or [start-end] transcript",
+    )
+    checker.add_argument("--window", type=float, default=None, help="seconds each side of a splice")
+    checker.add_argument("--profile", choices=["auto", "episode", "short"], default="auto")
+    checker.add_argument("--out-dir", type=Path, default=None)
+    checker.add_argument("--model", default="base", help="model for the whole-file transcript")
+    checker.add_argument(
+        "--splice-model",
+        default="small",
+        help="model for the ±1.5s splice windows (default small)",
+    )
+    checker.add_argument("--device", default="auto")
+    checker.set_defaults(func=_cmd_check)
     return parser
 
 
@@ -63,6 +146,151 @@ def _cmd_rule_add(args: argparse.Namespace) -> int:
     rule = add_rule(args.series, args.section, args.text, root=root)
     print(f"added {rule.id} to {rules_path(args.series, root)}")
     return 0
+
+
+def _cmd_plan_import(args: argparse.Namespace) -> int:
+    episode_dir = args.episode_dir
+    if episode_dir is None and args.out.parent.name == "edit":
+        episode_dir = args.out.parent.parent
+    plan = import_episode(
+        timeline_path=args.timeline,
+        concat_path=args.concat,
+        score_path=args.score,
+        lines_path=args.lines,
+        series=args.series,
+        episode=args.episode,
+        title=args.title,
+        episode_dir=episode_dir,
+        voice_preference=args.voice,
+    )
+    errors = validate_plan(plan)
+    for error in errors:
+        print(f"ytp: {error}", file=sys.stderr)
+    save_plan(plan, args.out)
+    print(f"wrote {args.out}")
+    print(
+        f"narration {len(plan.narration)}  segments {len(plan.segments)}  music {len(plan.music)}"
+    )
+    missing = plan.meta.get("missing_media") or []
+    for relative in missing:
+        print(f"warning: missing {relative}", file=sys.stderr)
+    if missing:
+        print(
+            f"warning: {len(missing)} imported path(s) are not in the episode folder yet",
+            file=sys.stderr,
+        )
+    return 1 if errors else 0
+
+
+def _cmd_plan_validate(args: argparse.Namespace) -> int:
+    errors = validate_plan(load_plan(args.plan))
+    if errors:
+        for error in errors:
+            print(f"ytp: {error}", file=sys.stderr)
+        return 1
+    print(f"ok {args.plan}")
+    return 0
+
+
+def _series_language(series: str, root: Path | None) -> str:
+    if not series:
+        return "en"
+    try:
+        rules = load_rules(series, root)
+    except FileNotFoundError:
+        return "en"
+    return str(rules.lint.get("language") or "en")
+
+
+def _episode_series(episode_dir: Path) -> str:
+    manifest = episode_dir / "episode.yaml"
+    if not manifest.is_file():
+        return ""
+    data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    return str(data.get("series") or "")
+
+
+def _cmd_index(args: argparse.Namespace) -> int:
+    if args.backend == "none":
+        transcriber = NullTranscriber()
+    else:
+        language = _series_language(_episode_series(args.episode_dir), None)
+        transcriber = FasterWhisperTranscriber(args.model, args.device, language)
+    roots = [Path(item) for item in args.root] if args.root else None
+    document = index_episode(args.episode_dir, transcriber, roots=roots)
+    clips = document["clips"]
+    assert isinstance(clips, list)
+    print(f"indexed {len(clips)} clip(s) -> {args.episode_dir / 'edit' / 'clip-index.json'}")
+    return 0
+
+
+def _cmd_render(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    episode_dir = args.episode_dir or infer_episode_dir(args.plan)
+    if args.out:
+        out = args.out
+    else:
+        out = allocate_render_path(episode_dir, f"{args.plan.stem}.mp4")
+    if out.exists():
+        print(f"ytp: refusing to overwrite {out}", file=sys.stderr)
+        return 1
+    result = render_plan(
+        plan,
+        out,
+        episode_dir=episode_dir,
+        plan_path=args.plan,
+        captions=args.captions,
+        preset=args.preset,
+        encoder=args.encoder,
+        audio_hook=args.audio_hook,
+        graphics_hook=args.graphics_hook,
+        short_id=args.short,
+    )
+    print(f"wrote {result.video}")
+    if result.srt:
+        print(f"srt {result.srt}")
+    if result.short:
+        print(f"short {result.short}")
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    return 0
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    episode_dir = infer_episode_dir(args.plan)
+    asr = load_asr(args.asr) if args.asr else None
+    if asr is not None:
+        transcriber = None
+    else:
+        language = _series_language(args.series, args.rules_root)
+        transcriber = FasterWhisperTranscriber(
+            args.model,
+            args.device,
+            language,
+            window_model=args.splice_model,
+        )
+    report = check_render(
+        args.video,
+        plan,
+        series=args.series,
+        plan_path=args.plan,
+        rules_root=args.rules_root,
+        transcriber=transcriber,
+        asr=asr,
+        window=args.window,
+        profile=args.profile,
+        episode_dir=episode_dir,
+    )
+    out_dir = args.out_dir
+    if out_dir is None:
+        qc = episode_dir / "qc"
+        out_dir = qc if episode_dir.exists() else args.video.parent
+    markdown, payload = write_report(report, out_dir)
+    print("PASS" if report.passed else "FAIL")
+    print(markdown)
+    print(payload)
+    return 0 if report.passed else 1
 
 
 def _cmd_rule_list(args: argparse.Namespace) -> int:
