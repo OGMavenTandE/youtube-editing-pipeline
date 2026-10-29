@@ -9,6 +9,7 @@ is configured. Neither hook is reimplemented here.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import write_srt
+from ytp.cards import append_talking_head_end_card, card_box
 from ytp.ff import (
     FFmpegError,
     concat_line,
@@ -249,10 +251,17 @@ def render_plan(
     encoder = resolve_encoder(encoder)
     mode = captions or plan.captions_mode
     warnings: list[str] = []
+    if append_talking_head_end_card(plan):
+        warnings.append("appended a 7s talking-head end card after the last spoken line")
     commands: list[list[str]] = []
     out.parent.mkdir(parents=True, exist_ok=True)
+    if graphics_hook is None and plan.graphics_hook:
+        graphics_hook = Path(plan.graphics_hook)
+        if not graphics_hook.is_absolute():
+            graphics_hook = episode_dir / graphics_hook
     with tempfile.TemporaryDirectory(prefix="ytp-render-") as work_text:
         work = Path(work_text)
+        _placeholder_end_card(plan, episode_dir, work, warnings)
         picture = _picture(
             plan,
             episode_dir,
@@ -263,6 +272,26 @@ def render_plan(
             plan_path,
             warnings,
             commands,
+        )
+        carded = work / "with-cards.mp4"
+        manifest = _burn_cards(
+            picture,
+            carded,
+            plan,
+            work,
+            encoder,
+            preset,
+            graphics_hook,
+            commands,
+            warnings,
+        )
+        if carded.is_file():
+            picture = carded
+        manifest_path = out.with_name("cards.json")
+        manifest_path.write_text(
+            json.dumps({"cards": manifest}, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
         )
         audio = _audio(
             plan,
@@ -302,6 +331,130 @@ def render_plan(
         warnings=warnings,
         commands=commands,
     )
+
+
+def _placeholder_end_card(plan, episode_dir, work: Path, warnings: list[str]) -> None:
+    for segment in plan.segments:
+        if segment.id != "end-card":
+            continue
+        source = resolve_media(segment.source, episode_dir)
+        if source is not None and source.is_file():
+            return
+        missing = segment.source
+        generated = work / "end-card-plain.png"
+        run_ffmpeg(
+            [
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=0x1C1C1C:s={plan.width}x{plan.height}",
+                "-frames:v",
+                "1",
+                str(generated),
+            ]
+        )
+        segment.source = str(generated)
+        warnings.append(f"end card image is not on disk ({missing}); drew a plain card")
+        return
+
+
+def _burn_cards(
+    picture: Path,
+    dest: Path,
+    plan: EditPlan,
+    work: Path,
+    encoder: str,
+    preset: str,
+    graphics_hook: Path | None,
+    commands: list[list[str]],
+    warnings: list[str],
+) -> list[dict[str, object]]:
+    """Draw plan cards into the safe area. Returns the manifest written beside the render."""
+    manifest: list[dict[str, object]] = []
+    draws: list[str] = []
+    overlays: list[tuple[Path, float, float, float, float, float]] = []
+    font = bold_font()
+    for index, card in enumerate(plan.cards):
+        box = card_box(card.style, plan.width, plan.height)
+        manifest.append(
+            {
+                "id": card.id,
+                "text": card.text,
+                "style": card.style,
+                "start": card.start,
+                "duration": card.duration,
+                "x1": box[0],
+                "y1": box[1],
+                "x2": box[2],
+                "y2": box[3],
+            }
+        )
+        end = card.start + card.duration
+        if graphics_hook is not None:
+            png = work / f"card-{index:03d}.png"
+            width = max(2, int(box[2] - box[0]))
+            height = max(2, int(box[3] - box[1]))
+            command = graphics_hook_command(
+                graphics_hook,
+                template=card.style,
+                out=png,
+                width=width,
+                height=height,
+                palette="",
+                text=card.text,
+                segment_id=card.id,
+            )
+            commands.append(command)
+            try:
+                run_hook(command)
+            except FFmpegError as exc:
+                warnings.append(f"card {card.id} hook failed: {exc}")
+                continue
+            overlays.append((png, box[0], box[1], card.start, end, index))
+            continue
+        text = escape_drawtext(card.text)
+        font_arg = f":fontfile='{escape_filter_path(font)}'" if font else ""
+        draws.append(
+            "drawtext="
+            f"text='{text}'{font_arg}:fontsize=42:fontcolor=white:"
+            f"x={box[0]:.0f}:y={box[1]:.0f}:"
+            f"enable='between(t,{card.start:.3f},{end:.3f})'"
+        )
+    if draws:
+        run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(picture),
+                "-vf",
+                ",".join(draws),
+                *codec_args(encoder, preset),
+                str(dest),
+            ]
+        )
+        picture = dest
+    for png, x, y, start, end, index in overlays:
+        overlaid = work / f"card-over-{index:03d}.mp4"
+        run_ffmpeg(
+            [
+                "-y",
+                "-i",
+                str(picture),
+                "-i",
+                str(png),
+                "-filter_complex",
+                f"[0:v][1:v]overlay={x:.0f}:{y:.0f}:enable='between(t,{start:.3f},{end:.3f})'",
+                *codec_args(encoder, preset),
+                str(overlaid),
+            ]
+        )
+        picture = overlaid
+    if picture != dest and (draws or overlays):
+        shutil.copyfile(picture, dest)
+    elif not draws and not overlays and picture != dest:
+        return manifest
+    return manifest
 
 
 def _find_short(plan: EditPlan, short_id: str) -> Short:

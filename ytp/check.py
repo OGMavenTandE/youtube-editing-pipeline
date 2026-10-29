@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
+from ytp.cards import card_box
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
@@ -317,7 +318,8 @@ def check_render(
         _check_closers(plan, rules, transcript),
         _check_required_open(plan, rules, transcript),
         _check_description(plan, rules, episode_dir),
-        _check_end_card(plan, rules, episode_dir),
+        _check_end_card(plan, rules, episode_dir, duration),
+        _check_cards(video, plan, rules),
         _check_captions(plan, transcript),
         _check_splices(video, plan, rules, transcriber, transcript, window),
     ]
@@ -708,10 +710,11 @@ def _check_required_open(plan: EditPlan, rules: SeriesRules, asr: Transcript | N
     if not required:
         return CheckResult("required_open", True, "no required open line", skipped=True)
     window = float(block.get("window_seconds", 60))
-    parts = [line.text for line in plan.narration if line.start < window]
-    if asr is not None:
+    if asr is not None and asr.words:
         heard = " ".join(word.text for word in asr.words if word.start < window)
-        parts.append(heard)
+        parts = [heard]
+    else:
+        parts = [line.text for line in plan.narration if line.start < window]
     haystack = _copy_text(*parts).casefold()
     needle = _copy_text(required).casefold()
     if needle in haystack:
@@ -793,7 +796,12 @@ def _overlaps(
     return left[0] < right[2] and left[2] > right[0] and left[1] < right[3] and left[3] > right[1]
 
 
-def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None) -> CheckResult:
+def _check_end_card(
+    plan: EditPlan,
+    rules: SeriesRules,
+    episode_dir: Path | None,
+    video_duration: float | None = None,
+) -> CheckResult:
     block = rules.lint.get("end_card") or {}
     if not block:
         return CheckResult("end_card", True, "no end card rule", skipped=True)
@@ -805,7 +813,10 @@ def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None
             [_fail("end_card", "no_narration", "end card needs a last spoken line")],
         )
     last = max(line.end for line in plan.narration)
-    tail = plan.picture_duration() - last
+    end = plan.picture_duration()
+    if video_duration is not None:
+        end = max(end, video_duration)
+    tail = end - last
     low = float(block.get("min_seconds", 5))
     high = float(block.get("max_seconds", 10))
     findings: list[Finding] = []
@@ -861,6 +872,66 @@ def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None
         findings,
         measurements={"tail_seconds": round(tail, 3)},
     )
+
+
+def _load_card_manifest(video: Path) -> list[dict] | None:
+    path = video.with_name("cards.json")
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    cards = data.get("cards") if isinstance(data, dict) else None
+    if not isinstance(cards, list):
+        return None
+    return cards
+
+
+def _check_cards(video: Path, plan: EditPlan, rules: SeriesRules) -> CheckResult:
+    """Card text matches the plan, and no card sits on an end-screen slot."""
+    manifest = _load_card_manifest(video)
+    if not plan.cards and not manifest:
+        return CheckResult("cards", True, "no cards", skipped=True)
+    findings: list[Finding] = []
+    boxes: list[tuple[str, tuple[float, float, float, float]]] = []
+    if manifest is None:
+        for card in plan.cards:
+            boxes.append((card.id, card_box(card.style, plan.width, plan.height)))
+    else:
+        by_id = {str(item.get("id")): item for item in manifest}
+        for card in plan.cards:
+            got = by_id.get(card.id)
+            heard = "" if got is None else str(got.get("text") or "")
+            if got is None or heard != card.text:
+                findings.append(
+                    _fail(
+                        "cards",
+                        "card_text",
+                        f"card {card.id} text does not match the plan",
+                        card.start,
+                        card.id,
+                    )
+                )
+        for item in manifest:
+            box = (
+                float(item.get("x1") or 0),
+                float(item.get("y1") or 0),
+                float(item.get("x2") or 0),
+                float(item.get("y2") or 0),
+            )
+            boxes.append((str(item.get("id") or "card"), box))
+    for name, slot in _slots(rules, plan.width, plan.height):
+        for label, box in boxes:
+            if _overlaps(box, slot):
+                findings.append(
+                    _fail(
+                        "cards",
+                        "end_screen_overlap",
+                        f"{label} overlaps the {name} end-screen slot",
+                        None,
+                        label,
+                    )
+                )
+    summary = f"{len(plan.cards)} card(s)" if not findings else "card check failed"
+    return CheckResult("cards", not findings, summary, findings)
 
 
 def _check_banned(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:

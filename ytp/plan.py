@@ -75,6 +75,15 @@ class CaptionCue:
 
 
 @dataclass
+class Card:
+    id: str
+    text: str
+    start: float
+    duration: float
+    style: str = "lower-third"
+
+
+@dataclass
 class Short:
     id: str
     title: str
@@ -117,6 +126,7 @@ class EditPlan:
     music: list[MusicCue] = field(default_factory=list)
     captions: list[CaptionCue] = field(default_factory=list)
     narration: list[NarrationLine] = field(default_factory=list)
+    cards: list[Card] = field(default_factory=list)
     shorts: list[Short] = field(default_factory=list)
     beats: list[Beat] = field(default_factory=list)
     palettes: list[PaletteSpan] = field(default_factory=list)
@@ -211,6 +221,16 @@ def plan_to_dict(plan: EditPlan) -> dict[str, Any]:
                 "palette": line.palette,
             }
             for line in plan.narration
+        ],
+        "cards": [
+            {
+                "id": card.id,
+                "text": card.text,
+                "start": card.start,
+                "duration": card.duration,
+                "style": card.style,
+            }
+            for card in plan.cards
         ],
         "shorts": [
             {
@@ -308,6 +328,16 @@ def plan_from_dict(data: dict[str, Any]) -> EditPlan:
             )
             for item in data.get("narration") or []
         ],
+        cards=[
+            Card(
+                id=str(item["id"]),
+                text=str(item.get("text") or ""),
+                start=float(item.get("start") or 0),
+                duration=float(item["duration"]),
+                style=str(item.get("style") or "lower-third"),
+            )
+            for item in data.get("cards") or []
+        ],
         shorts=[
             Short(
                 id=str(item["id"]),
@@ -378,6 +408,11 @@ def validate_plan(plan: EditPlan) -> list[str]:
             errors.append(f"b-roll {item.id} has no duration")
         if item.layout not in BROLL_LAYOUTS:
             errors.append(f"b-roll {item.id} layout must be full or pip-lower-right")
+    for card in plan.cards:
+        if card.duration <= 0:
+            errors.append(f"card {card.id} has no duration")
+        if card.style not in {"title", "lower-third", "end-card"}:
+            errors.append(f"card {card.id} style must be title, lower-third, or end-card")
     for line in plan.narration:
         if line.end <= line.start:
             errors.append(f"narration {line.id} ends at or before it starts")
