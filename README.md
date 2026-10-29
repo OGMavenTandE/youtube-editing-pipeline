@@ -1,5 +1,20 @@
 # youtube-editing-pipeline
 
+## Booth quickstart (`ytp`)
+
+`ytp` is the script-driven editor for series episodes (AI Survival first). It never publishes a video and never changes a YouTube listing. Python 3 and ffmpeg/ffprobe only. No CapCut, DaVinci, or paid APIs. The same commands run on Linux and on Windows, including WSL on Scott's PC. NVIDIA encode is optional later (`--encoder nvenc` on the RTX 4070 Super); the default encoder is libx264 so a machine without a GPU still renders.
+
+```bash
+pip install -r requirements-ytp.txt
+python -m ytp init path/to/ep01 --series ai-survival
+python -m ytp rule list --series ai-survival
+python -m ytp rule add --series ai-survival --section edit --text "Never say \"widget\"."
+```
+
+`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). Clip index, the edit plan, render, and the render check are the following commands in this quickstart.
+
+## Webcam desk pipeline
+
 Local pipeline for landscape talking-head webcam footage: trim dead air, let Gemini tag sparse body beats, paint a locked Scott Mastin picture kit (overlay / pip / nothing, plus app-forced bookends), then export an MP4 plus a YouTube Studio package.
 
 ```bash
