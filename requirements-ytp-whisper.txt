@@ -1,2 +1,5 @@
 # Local transcription only. No cloud ASR API.
-faster-whisper>=1.1.0
+# faster-whisper 1.2.1 calls av.open(..., metadata_errors=...), which PyAV 19
+# removed (TypeError). 16.1.0 works. Keep av below 17.
+faster-whisper>=1.1.0,<1.3
+av>=16.1.0,<17

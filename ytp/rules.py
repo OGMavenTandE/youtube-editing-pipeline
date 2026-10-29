@@ -106,6 +106,7 @@ DEFAULT_LINT: dict[str, Any] = {
     "ban_em_dash": True,
     "ban_emoji": True,
     "splice_window_seconds": 0.5,
+    "language": "en",
 }
 
 _BAN_SENTENCE = re.compile(r"\b(never|do not|don't|banned|forbid)\b", re.I)

@@ -226,3 +226,4 @@ lint:
   ban_em_dash: true
   ban_emoji: true
   splice_window_seconds: 0.5
+  language: en

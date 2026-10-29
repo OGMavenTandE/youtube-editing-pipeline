@@ -38,6 +38,8 @@ def test_seed_covers_every_owner(rules_root) -> None:
     assert rules.lint["wpm"]["narration"]["articulation"]["min"] == 175
     assert rules.lint["wpm"]["narration"]["articulation"]["max"] == 185
     assert "like and subscribe" in rules.lint["closers"]
+    assert rules.lint["language"] == "en"
+    assert load_rules("talking-head").lint["language"] == "en"
     assert rules.lint["loudness"]["voice_lufs"] == -16
     assert rules.lint["loudness"]["shorts_lufs"] == -14
     assert rules.lint["loudness"]["true_peak_dbtp"] == -1.5
