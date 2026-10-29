@@ -289,9 +289,15 @@ lint:
     voice_lufs: -16
     shorts_lufs: -14
     true_peak_dbtp: -1.5
+    master_tp_margin_db: 0.5
+    lra: 11
     music_under_voice_db: 17
     music_tolerance_db: 3
     lufs_tolerance: 1
+    denoise_nr: 10
+    denoise_nf: -50
+    denoise_tn: 1
+    highpass_hz: 80
   ban_em_dash: true
   ban_emoji: true
   splice_window_seconds: 0.5

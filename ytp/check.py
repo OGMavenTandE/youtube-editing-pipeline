@@ -17,6 +17,7 @@ from pathlib import Path
 from ytp.captions import format_timestamp
 from ytp.cards import append_talking_head_end_card, card_box, end_card_candidates, find_end_card
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
+from ytp.master import master_report_line, note_from_sidecar, parse_loudnorm
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
 from ytp.splice import (
@@ -37,7 +38,6 @@ DURATION_TOLERANCE = 0.75
 # splice_window_seconds; this is only how much of the cut Whisper hears.
 JOIN_LISTEN_SECONDS = 1.5
 _EMOJI = re.compile("[\U0001f300-\U0001faff\U00002700-\U000027bf\U00002600-\U000026ff]")
-_LOUDNESS_JSON = re.compile(r"\{[^{}]*\"input_i\"[^{}]*\}", re.S)
 
 
 @dataclass
@@ -154,10 +154,10 @@ def measure_loudness(path: Path) -> tuple[float, float]:
             "-",
         ]
     )
-    match = _LOUDNESS_JSON.search(proc.stderr or "")
-    if match is None:
-        raise RuntimeError(f"loudnorm printed no measurement for {path}")
-    data = json.loads(match.group(0))
+    try:
+        data = parse_loudnorm(proc.stderr or "")
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"loudnorm printed no measurement for {path}") from exc
     return float(data["input_i"]), float(data["input_tp"])
 
 
@@ -429,7 +429,33 @@ def _check_loudness(video, plan, rules, use_short, loudness_fn, episode_dir) -> 
     summary = f"{integrated:.2f} LUFS, true peak {true_peak:.2f} dBTP"
     if music_notes:
         summary = f"{summary}. {music_notes}"
-    return CheckResult("loudness", not findings, summary, findings, measurements=measurements)
+    master = _read_master_sidecar(video)
+    if master is not None:
+        line = master_report_line(master)
+        if line:
+            summary = f"{summary}\n\n{line}"
+            measurements["master_input_i"] = master.get("input_i")
+            measurements["master_input_tp"] = master.get("input_tp")
+            measurements["master_output_i"] = master.get("output_i")
+            measurements["master_output_tp"] = master.get("output_tp")
+        note = note_from_sidecar(master, target)
+        if note:
+            summary = f"{summary}\n\n{note}"
+            measurements["dynamic_note"] = note
+    return CheckResult("loudness", _ok(findings), summary, findings, measurements=measurements)
+
+
+def _read_master_sidecar(video: Path) -> dict | None:
+    path = Path(video).with_suffix(".loudness.json")
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or not data.get("mastered"):
+        return None
+    return data
 
 
 def _resolve(episode_dir: Path | None, value: str | None) -> Path | None:

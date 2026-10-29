@@ -6,6 +6,7 @@ ffmpeg lists it and a one-frame encode succeeds.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -15,7 +16,13 @@ from ytp.render import allocate_render_path, render_plan
 from ytp.rules import load_rules
 
 
-def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
+def finish_episode(
+    episode_dir: Path,
+    *,
+    rules_root: Path | None = None,
+    master: bool = True,
+    denoise: bool = False,
+) -> int:
     episode_dir = episode_dir.resolve()
     plan_path = episode_dir / "edit" / "plan.yaml"
     if not plan_path.is_file():
@@ -35,8 +42,13 @@ def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
         plan_path=plan_path,
         encoder="auto",
         preset="veryfast",
+        master=master,
+        denoise=denoise,
+        rules_root=rules_root,
     )
     print(f"wrote {result.video}")
+    for line in result.logs:
+        print(line)
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
     words = episode_dir / "edit" / "words.json"
@@ -59,10 +71,20 @@ def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
         loudness_fn=measure_loudness,
     )
     markdown, payload = write_report(report, episode_dir / "qc")
+    _copy_versioned_report(markdown, result.video)
     print("PASS" if report.passed else "FAIL")
     print(markdown.read_text(encoding="utf-8").replace("\u00b1", "+/-"))
     print(payload)
     return 0 if report.passed else 1
+
+
+def _copy_versioned_report(markdown: Path, video: Path) -> None:
+    """Keep one report per render. ``check-report.md`` stays the latest."""
+    version = video.parent.name
+    if re.fullmatch(r"v\d+", version) is None:
+        return
+    dest = markdown.with_name(f"check-report-{version}.md")
+    dest.write_text(markdown.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
 
 
 def _cpu_transcriber(language: str):
