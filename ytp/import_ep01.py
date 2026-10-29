@@ -99,6 +99,42 @@ def _slug(text: str) -> str:
     return slug[:48] or "cue"
 
 
+def score_source_path(sfx: str) -> str:
+    """Episode-relative path for a score-sheet sound name.
+
+    ``picnic-ambience (original)`` becomes ``audio/score/picnic-ambience.wav``.
+    """
+    cleaned = re.sub(r"\s*\([^)]*\)", "", sfx).strip()
+    return f"audio/score/{_slug(cleaned)}.wav"
+
+
+def layout_media_path(source: str) -> str:
+    """Rewrite a concat or timeline path into the episode layout.
+
+    Stills land in ``frames/``. Voice wavs land in ``audio/voice/``. Other
+    clips land in ``source/raw/``. Absolute paths keep only the file name.
+    """
+    name = Path(source.replace("\\", "/")).name
+    suffix = Path(name).suffix.lower()
+    if suffix in _IMAGE_SUFFIXES:
+        return f"frames/{name}"
+    if suffix in {".wav", ".mp3", ".m4a", ".aac", ".flac"}:
+        return f"audio/voice/{name}"
+    if suffix in {".mp4", ".mov", ".mkv", ".webm"}:
+        return f"source/raw/{name}"
+    return name
+
+
+def missing_media(paths: list[str], episode_dir: Path | None) -> list[str]:
+    if episode_dir is None:
+        return []
+    missing = []
+    for relative in paths:
+        if not (episode_dir / relative).is_file():
+            missing.append(relative)
+    return missing
+
+
 def _segment_id(source: str, index: int) -> str:
     stem = Path(source).stem
     return stem or f"segment-{index:03d}"
@@ -113,6 +149,7 @@ def import_episode(
     series: str = "ai-survival",
     episode: str = "ep01",
     title: str = "How to Survive an AI Drone",
+    episode_dir: Path | None = None,
 ) -> EditPlan:
     timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
     concat_entries = parse_concat(concat_path.read_text(encoding="utf-8"))
@@ -149,7 +186,7 @@ def import_episode(
             Segment(
                 id=_segment_id(source, index),
                 kind="still" if suffix in _IMAGE_SUFFIXES else "clip",
-                source=source,
+                source=layout_media_path(source),
                 start=cursor,
                 duration=duration,
             )
@@ -170,6 +207,7 @@ def import_episode(
                 sfx=str(cue["sfx"]),
                 at=float(cue["at"]),
                 gain_db=float(cue["gain_db"]),
+                source=score_source_path(str(cue["sfx"])),
                 note=str(cue["note"]),
                 duck_under_voice=True,
             )
@@ -196,13 +234,20 @@ def import_episode(
         for item in timeline.get("palette_segments") or []
     ]
     captions = [CaptionCue(start=line.start, end=line.end, text=line.text) for line in narration]
+    voice_name = str(timeline.get("file") or "")
+    voice = f"audio/voice/{Path(voice_name).name}" if voice_name else None
+    referenced = [segment.source for segment in segments]
+    if voice:
+        referenced.append(voice)
+    referenced.extend(cue.source for cue in music if cue.source)
+    absent = missing_media(referenced, episode_dir)
 
     return EditPlan(
         series=series,
         episode=episode,
         title=title,
         lead_in=float(timeline.get("lead_in") or 0),
-        voice=str(timeline.get("file") or "") or None,
+        voice=voice,
         segments=segments,
         music=music,
         captions=captions,
@@ -220,6 +265,7 @@ def import_episode(
             "timeline_total": timeline.get("total"),
             "tempo": timeline.get("tempo"),
             "script_ids_not_in_timeline": removed,
+            "missing_media": absent,
         },
     )
 

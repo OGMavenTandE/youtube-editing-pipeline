@@ -42,7 +42,11 @@ def test_import_ep01_matches_the_shipped_artifacts(tmp_path: Path) -> None:
     assert plan.narration[0].text.startswith("You're at a picnic")
     assert "00d_b1" not in {line.id for line in plan.narration}
     assert plan.meta["script_ids_not_in_timeline"] == ["00d_b1"]
-    assert plan.voice == "voice-v3d.wav"
+    assert plan.voice == "audio/voice/voice-v3d.wav"
+    assert plan.segments[0].source == "frames/ep01-v3-000-coldopen.png"
+    assert plan.segments[0].source.startswith("frames/")
+    assert "frames-v3" not in plan.segments[0].source
+    assert plan.music[0].source == "audio/score/picnic-ambience.wav"
     assert plan.lead_in == 1.0
     assert plan.meta["timeline_total"] == 250.105
     assert plan.captions[0].text == plan.narration[0].text
@@ -71,6 +75,23 @@ def test_import_ep01_matches_the_shipped_artifacts(tmp_path: Path) -> None:
     json_out = tmp_path / "plan.json"
     save_plan(plan, json_out)
     assert load_plan(json_out).narration[0].id == "00e_b1"
+
+
+def test_import_warns_when_layout_files_are_missing(tmp_path: Path) -> None:
+    episode = tmp_path / "ep01"
+    (episode / "frames").mkdir(parents=True)
+    present = episode / "frames" / "ep01-v3-000-coldopen.png"
+    present.write_bytes(b"png")
+    plan = import_episode(
+        timeline_path=FIXTURES / "timeline-v3d.json",
+        concat_path=FIXTURES / "rc8b-concat.txt",
+        score_path=FIXTURES / "score-cues-v3d.md",
+        episode_dir=episode,
+    )
+    missing = plan.meta["missing_media"]
+    assert "frames/ep01-v3-000-coldopen.png" not in missing
+    assert "audio/voice/voice-v3d.wav" in missing
+    assert "audio/score/picnic-ambience.wav" in missing
 
 
 def test_plan_import_cli(tmp_path: Path) -> None:
