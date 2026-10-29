@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.ytp.mediautil import require_ffmpeg, write_clip, write_wav
 from ytp.check import (
@@ -11,13 +12,14 @@ from ytp.check import (
     load_asr,
     measure_loudness,
     music_under_db,
+    resolve_episode_path,
     speaking_wpm,
     write_report,
 )
 from ytp.cli import main
 from ytp.plan import CaptionCue, EditPlan, MusicCue, NarrationLine, Segment, save_plan
 from ytp.rules import repo_root
-from ytp.transcribe import Transcript
+from ytp.transcribe import Transcript, Word
 
 
 class Silent:
@@ -102,8 +104,9 @@ def test_wpm_outside_the_band_fails(tmp_path: Path, rules_root) -> None:
     assert speaking_wpm(plan) == pytest.approx(450)
     report = _check(video, plan, rules_root)
     wpm = next(check for check in report.checks if check.id == "wpm")
-    assert wpm.passed is False
-    assert "450.0" in wpm.summary or "450" in wpm.summary
+    assert wpm.passed is True
+    assert any(item.severity == "warn" and item.code == "overall_wpm" for item in wpm.findings)
+    assert report.passed is True
 
 
 def test_caption_that_leads_speech_fails(tmp_path: Path, rules_root) -> None:
@@ -177,6 +180,138 @@ def test_check_cli_writes_a_failing_report(tmp_path: Path, rules_root) -> None:
         for item in check["findings"]
     ]
     assert any(stamp.startswith("00:") for stamp in stamps)
+
+
+def _words_for_rates(count: int, overall: float, articulation: float) -> tuple[float, list[Word]]:
+    total = count / overall * 60
+    speech = count / articulation * 60
+    pause = total - speech
+    word_dur = speech / count
+    words: list[Word] = []
+    cursor = 0.0
+    for index in range(count):
+        if index == count // 2:
+            cursor += pause
+        words.append(Word(f"w{index}", cursor, cursor + word_dur))
+        cursor += word_dur
+    return total, words
+
+
+def test_ep01_like_pace_warns_nothing(tmp_path: Path, rules_root) -> None:
+    """166 overall and articulation inside 175-185 is the approved shape. No warning."""
+    video = _video(tmp_path, "pace.mp4")
+    total, words = _words_for_rates(10, 166, 180)
+    text = " ".join(word.text for word in words)
+    plan = _base_plan(
+        narration=[NarrationLine(id="n", text=text, start=0.0, end=total)],
+        segments=[Segment(id="picture", kind="still", source="f.png", start=0.0, duration=total)],
+    )
+    report = _check(video, plan, rules_root, asr=Transcript(text=text, words=words))
+    wpm = next(check for check in report.checks if check.id == "wpm")
+    assert wpm.findings == []
+    assert wpm.measurements["overall_wpm"] == pytest.approx(166, abs=0.05)
+    assert wpm.measurements["articulation_wpm"] == pytest.approx(180, abs=0.05)
+    assert "WARN" not in wpm.summary
+
+
+def test_desk_pace_is_warn_even_if_the_band_says_fail(tmp_path: Path, rules_root) -> None:
+    path = rules_root / "rules" / "ai-survival.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["lint"]["wpm"]["source_type"] = "desk"
+    data["lint"]["wpm"]["desk"]["overall"]["severity"] = "fail"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    video = _video(tmp_path, "desk.mp4")
+    plan = _base_plan(narration=[NarrationLine(id="n", text="one two three", start=0.0, end=0.4)])
+    plan.meta["source_type"] = "desk"
+    report = _check(video, plan, rules_root)
+    wpm = next(check for check in report.checks if check.id == "wpm")
+    assert wpm.findings
+    assert all(item.severity == "warn" for item in wpm.findings)
+    assert wpm.passed is True
+    assert report.passed is True
+
+
+def test_closers_fail_the_cut(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "closer.mp4")
+    plan = _base_plan(
+        narration=[
+            NarrationLine(
+                id="n",
+                text="Thanks for watching. Please like and subscribe.",
+                start=0.0,
+                end=1.0,
+            )
+        ]
+    )
+    report = _check(video, plan, rules_root)
+    closers = next(check for check in report.checks if check.id == "closers")
+    phrases = {item.word for item in closers.findings}
+    assert "thanks for watching" in phrases
+    assert "like and subscribe" in phrases
+    assert closers.passed is False
+    assert report.passed is False
+
+
+def test_talking_head_open_line_end_screen_and_description(tmp_path: Path, rules_root) -> None:
+    video = _video(tmp_path, "talk.mp4")
+    open_line = "These are my own views, not the Department's."
+    plan = EditPlan(
+        series="talking-head",
+        episode="truth",
+        width=1920,
+        height=1080,
+        segments=[Segment(id="picture", kind="still", source="f.png", start=0.0, duration=17.0)],
+        narration=[NarrationLine(id="n", text=open_line, start=0.0, end=10.0)],
+        meta={
+            "description": "Notes at https://linkedin.com/in/scott and https://x.com/scott_mastin",
+            "end_card": {
+                "elements": [{"id": "name", "x1": 80, "y1": 80, "x2": 420, "y2": 160}],
+            },
+        },
+    )
+    clean = _check(video, plan, rules_root, series="talking-head")
+    assert next(item for item in clean.checks if item.id == "required_open").passed
+    assert next(item for item in clean.checks if item.id == "description").passed
+    end_card = next(item for item in clean.checks if item.id == "end_card")
+    assert end_card.passed
+    assert not any(item.code == "end_screen_overlap" for item in end_card.findings)
+    banned = next(item for item in clean.checks if item.id == "banned")
+    assert not any(item.word == "ChatGPT" for item in banned.findings)
+
+    plan.meta["description"] += " The article names ChatGPT."
+    named = _check(video, plan, rules_root, series="talking-head")
+    banned = next(item for item in named.checks if item.id == "banned")
+    assert not any(item.word == "ChatGPT" for item in banned.findings)
+
+    plan.narration[0].text = "Today we talk about the clause."
+    missing = _check(video, plan, rules_root, series="talking-head")
+    opened = next(item for item in missing.checks if item.id == "required_open")
+    assert opened.passed is False
+
+    plan.narration[0].text = open_line
+    plan.meta["end_card"]["elements"] = [
+        {"id": "bug", "x1": 944, "y1": 170, "x2": 1760, "y2": 629}
+    ]
+    overlap = _check(video, plan, rules_root, series="talking-head")
+    end_card = next(item for item in overlap.checks if item.id == "end_card")
+    overlap_hits = [item for item in end_card.findings if item.code == "end_screen_overlap"]
+    assert any(item.word == "bug" for item in overlap_hits)
+    assert end_card.passed is False
+
+    plan.segments[0].duration = 12.0
+    plan.meta["end_card"]["elements"] = [{"id": "name", "x1": 80, "y1": 80, "x2": 420, "y2": 160}]
+    short_tail = _check(video, plan, rules_root, series="talking-head")
+    end_card = next(item for item in short_tail.checks if item.id == "end_card")
+    assert any(item.code == "end_card_duration" for item in end_card.findings)
+
+
+def test_windows_drive_path_is_not_prefixed_with_the_episode(tmp_path: Path) -> None:
+    episode = tmp_path / "ep01"
+    asset = resolve_episode_path(episode, "assets/end-card/option-C-clean.png")
+    assert asset == episode / "assets" / "end-card" / "option-C-clean.png"
+    drive = resolve_episode_path(episode, r"C:\AI Eval\YouTube\take.mp4")
+    assert str(drive) == r"C:\AI Eval\YouTube\take.mp4"
+    assert episode.as_posix() not in drive.as_posix()
 
 
 def test_write_report_round_trip(tmp_path: Path, rules_root) -> None:

@@ -17,10 +17,8 @@ python -m ytp plan import \
   --out path/to/ep01/edit/plan.yaml
 python -m ytp plan validate path/to/ep01/edit/plan.yaml
 python -m ytp index path/to/ep01
-python -m ytp render path/to/ep01/edit/plan.yaml \
-  --out path/to/ep01/renders/cut.mp4 \
-  --captions both
-python -m ytp check path/to/ep01/renders/cut.mp4 \
+python -m ytp render path/to/ep01/edit/plan.yaml --captions both
+python -m ytp check path/to/ep01/renders/v1/plan.mp4 \
   --plan path/to/ep01/edit/plan.yaml \
   --series ai-survival
 ```
@@ -31,7 +29,9 @@ python -m ytp check path/to/ep01/renders/cut.mp4 \
 
 `render` concats stills and clips, overlays B-roll (`full` or `pip-lower-right`), ducks music under the voice, and writes captions as a sidecar SRT, a burn-in, or both. `--encoder nvenc` (or `auto`) uses the RTX 4070 Super when that encode actually succeeds; otherwise the render stays on libx264. `--audio-hook` calls Track's mix script unchanged. `--graphics-hook` calls a Studio template script for any segment that sets `template`. The files in `ytp/stub_hooks/` are argv stubs for tests, not those tools.
 
-`check` writes `qc/check-report.md` and `qc/check-report.json`. It fails the render for caption drift, loudness (voice -16 LUFS, Shorts -14, true peak at or below -1.5 dBTP, music about 17 dB under the voice when stems are on disk), pace outside 175–185 words per minute, banned words and vendor names, banned sound-effect ids, and leftover words at splices. The splice pass re-transcribes a short window around every cut. A stray fragment such as the "if" left in Episode 1 v8 fails the report and the process exits 1. Pass `--asr` with a word JSON or an `[start-end]` transcript when you already have one; otherwise install faster-whisper so the check can listen itself.
+`render` with no `--out` writes `renders/v1/`, then `renders/v2/`, and so on. It will not overwrite a file that is already there. `--out` is for an explicit new path only.
+
+`check` writes `qc/check-report.md` and `qc/check-report.json`. It fails the render for caption drift, loudness (voice -16 LUFS, Shorts -14, true peak at or below -1.5 dBTP, music about 17 dB under the voice when stems are on disk), banned words and vendor names, closer lines, banned sound-effect ids, and leftover words at splices. Pace is a warning, not a failure: overall words per minute (pauses included; AI Survival warns outside 155–185) and articulation words per minute (gaps over 250 ms removed; warns outside 175–185). Desk takes only warn. The splice pass re-transcribes a short window around every cut. A stray fragment such as the "if" left in Episode 1 v8 fails the report and the process exits 1. Pass `--asr` with a word JSON or an `[start-end]` transcript when you already have one; otherwise install faster-whisper so the check can listen itself. On-camera videos use `--series talking-head`.
 
 Run the suite (Whisper tests stay out of CI):
 
@@ -54,10 +54,9 @@ python -m ytp plan import \
   --out /path/to/ep01/edit/plan.yaml
 python -m ytp plan validate /path/to/ep01/edit/plan.yaml
 python -m ytp render /path/to/ep01/edit/plan.yaml \
-  --out /path/to/ep01/renders/cut.mp4 \
   --captions both \
   --encoder auto
-python -m ytp check /path/to/ep01/renders/cut.mp4 \
+python -m ytp check /path/to/ep01/renders/v1/plan.mp4 \
   --plan /path/to/ep01/edit/plan.yaml \
   --series ai-survival
 ```

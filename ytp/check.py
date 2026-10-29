@@ -107,10 +107,7 @@ class Report:
             "",
         ]
         for check in self.checks:
-            if check.skipped:
-                status = "SKIP"
-            else:
-                status = "PASS" if check.passed else "FAIL"
+            status = _check_status(check)
             lines.append(f"## {check.id} — {status}")
             lines.append("")
             lines.append(check.summary)
@@ -165,14 +162,39 @@ def music_under_db(voice_lufs: float, music_lufs: float, gain_db: float) -> floa
 
 
 def speaking_wpm(plan: EditPlan) -> float | None:
-    words = 0
-    seconds = 0.0
-    for line in plan.narration:
-        words += len(tokenize(line.text))
-        seconds += max(0.0, line.end - line.start)
-    if words == 0 or seconds <= 0:
+    """Overall pace: script words over the narration span, pauses included."""
+    words = sum(len(tokenize(line.text)) for line in plan.narration)
+    seconds = narration_span(plan)
+    if words == 0 or seconds is None:
         return None
     return words / (seconds / 60.0)
+
+
+def narration_span(plan: EditPlan) -> float | None:
+    """First narration start through the last end. Gaps between lines count."""
+    if not plan.narration:
+        return None
+    span = max(line.end for line in plan.narration) - min(line.start for line in plan.narration)
+    if span <= 0:
+        return None
+    return span
+
+
+def speech_seconds(words: list[Word], gap_seconds: float) -> float:
+    """Word time plus gaps at or under the pause threshold. Longer gaps drop out."""
+    ordered = sorted(words, key=lambda word: (word.start, word.end))
+    if not ordered:
+        return 0.0
+    total = 0.0
+    previous_end: float | None = None
+    for word in ordered:
+        if previous_end is not None:
+            gap = word.start - previous_end
+            if 0 <= gap <= gap_seconds:
+                total += gap
+        total += max(0.0, word.end - word.start)
+        previous_end = word.end if previous_end is None else max(previous_end, word.end)
+    return total
 
 
 def _is_json_transcript(raw: str, path: Path) -> bool:
@@ -278,8 +300,12 @@ def check_render(
     checks = [
         _check_container(video, plan, width, height, duration, use_short),
         _check_loudness(video, plan, rules, use_short, loudness_fn, episode_dir),
-        _check_wpm(plan, rules),
+        _check_wpm(plan, rules, asr),
         _check_banned(plan, rules, asr),
+        _check_closers(plan, rules, asr),
+        _check_required_open(plan, rules, asr),
+        _check_description(plan, rules, episode_dir),
+        _check_end_card(plan, rules, episode_dir),
         _check_captions(plan, asr),
         _check_splices(video, plan, rules, transcriber, asr, window),
     ]
@@ -443,24 +469,303 @@ def _check_music_level(
     return f"music under voice {unders[0]:.1f} dB (target {target:.0f})"
 
 
-def _check_wpm(plan: EditPlan, rules: SeriesRules) -> CheckResult:
-    band = rules.lint.get("wpm") or {}
-    low = float(band.get("min", 175))
-    high = float(band.get("max", 185))
+def _check_status(check: CheckResult) -> str:
+    if check.skipped:
+        return "SKIP"
+    if any(item.severity == "fail" for item in check.findings):
+        return "FAIL"
+    if any(item.severity == "warn" for item in check.findings):
+        return "WARN"
+    return "PASS"
+
+
+def _ok(findings: list[Finding]) -> bool:
+    return not any(item.severity == "fail" for item in findings)
+
+
+def _warn(
+    check: str,
+    code: str,
+    message: str,
+    timestamp: float | None = None,
+    word: str | None = None,
+) -> Finding:
+    return Finding(check, "warn", code, message, timestamp, word)
+
+
+def _pace_source(plan: EditPlan, rules: SeriesRules) -> str:
+    chosen = str((plan.meta or {}).get("source_type") or "")
+    if chosen in {"narration", "desk"}:
+        return chosen
+    configured = str((rules.lint.get("wpm") or {}).get("source_type") or "narration")
+    return configured if configured in {"narration", "desk"} else "narration"
+
+
+def _pace_band(rules: SeriesRules, source: str, metric: str) -> tuple[float, float, str]:
+    wpm = rules.lint.get("wpm") or {}
+    block = (wpm.get(source) or {}).get(metric) or {}
+    low = float(block.get("min", 155 if metric == "overall" else 175))
+    high = float(block.get("max", 185))
+    severity = str(block.get("severity") or "warn").lower()
+    if severity not in {"warn", "fail"}:
+        severity = "warn"
+    if source == "desk":
+        severity = "warn"
+    return low, high, severity
+
+
+def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
+    source = _pace_source(plan, rules)
     pace = speaking_wpm(plan)
     if pace is None:
         return CheckResult("wpm", True, "no timed narration", skipped=True)
-    findings = []
+    gap_ms = float((rules.lint.get("wpm") or {}).get("pause_gap_ms", 250))
+    findings: list[Finding] = []
+    measurements: dict[str, object] = {
+        "source_type": source,
+        "pause_gap_ms": gap_ms,
+        "overall_wpm": round(pace, 2),
+    }
+    low, high, severity = _pace_band(rules, source, "overall")
     if pace < low or pace > high:
-        findings.append(
-            _fail("wpm", "pace", f"speaking rate is {pace:.1f} wpm; target {low:.0f}-{high:.0f}")
+        message = (
+            f"overall pace is {pace:.1f} wpm; {source} band {low:.0f}-{high:.0f} ({severity})"
         )
+        note = _fail if severity == "fail" else _warn
+        findings.append(note("wpm", "overall_wpm", message))
+    articulation = _articulation_wpm(plan, asr, gap_ms / 1000.0)
+    if articulation is None:
+        summary = f"overall {pace:.1f} wpm; articulation not measured (no word timestamps)"
+    else:
+        measurements["articulation_wpm"] = round(articulation, 2)
+        band_low, band_high, band_severity = _pace_band(rules, source, "articulation")
+        if articulation < band_low or articulation > band_high:
+            message = (
+                f"articulation pace is {articulation:.1f} wpm; "
+                f"{source} band {band_low:.0f}-{band_high:.0f} ({band_severity})"
+            )
+            note = _fail if band_severity == "fail" else _warn
+            findings.append(note("wpm", "articulation_wpm", message))
+        summary = f"overall {pace:.1f} wpm; articulation {articulation:.1f} wpm"
+    return CheckResult("wpm", _ok(findings), summary, findings, measurements=measurements)
+
+
+def _articulation_wpm(plan: EditPlan, asr: Transcript | None, gap_seconds: float) -> float | None:
+    if asr is None or not asr.words:
+        return None
+    spoken = [word for word in asr.words if normalize_token(word.text)]
+    seconds = speech_seconds(spoken, gap_seconds)
+    if not spoken or seconds <= 0:
+        return None
+    return len(spoken) / (seconds / 60.0)
+
+
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def resolve_episode_path(episode_dir: Path | None, value: str) -> Path:
+    """Episode-relative path, or an absolute path including a Windows drive."""
+    if _DRIVE.match(value) or Path(value).is_absolute():
+        return Path(value)
+    relative = Path(value.replace("\\", "/"))
+    if episode_dir is None:
+        return relative
+    return episode_dir / relative
+
+
+def _copy_text(*parts: str) -> str:
+    return " ".join(part for part in parts if part).replace("\u2019", "'").replace("\u2018", "'")
+
+
+def _check_closers(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
+    phrases = [str(item) for item in (rules.lint.get("closers") or [])]
+    if not phrases:
+        return CheckResult("closers", True, "no closer list", skipped=True)
+    findings: list[Finding] = []
+    blobs: list[tuple[str, float | None]] = [
+        (line.text, line.start) for line in plan.narration
+    ]
+    blobs.extend((cue.text, cue.start) for cue in plan.captions)
+    for segment in plan.segments:
+        if segment.template_text:
+            blobs.append((segment.template_text, segment.start))
+    if asr is not None and asr.text:
+        blobs.append((asr.text, asr.words[0].start if asr.words else None))
+    for text, stamp in blobs:
+        for phrase in phrases:
+            if _contains(text, phrase):
+                findings.append(
+                    _fail(
+                        "closers",
+                        "closer",
+                        f'closer "{phrase}" is not allowed',
+                        stamp,
+                        phrase,
+                    )
+                )
+    findings = _dedupe(findings)
+    summary = "no closers" if not findings else f"{len(findings)} closer(s)"
+    return CheckResult("closers", _ok(findings), summary, findings)
+
+
+def _check_required_open(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> CheckResult:
+    block = rules.lint.get("required_open") or {}
+    required = str(block.get("text") or "").strip()
+    if not required:
+        return CheckResult("required_open", True, "no required open line", skipped=True)
+    window = float(block.get("window_seconds", 60))
+    parts = [line.text for line in plan.narration if line.start < window]
+    if asr is not None:
+        heard = " ".join(word.text for word in asr.words if word.start < window)
+        parts.append(heard)
+    haystack = _copy_text(*parts).casefold()
+    needle = _copy_text(required).casefold()
+    if needle in haystack:
+        return CheckResult("required_open", True, f"open line is inside the first {window:.0f}s")
     return CheckResult(
-        "wpm",
-        not findings,
-        f"{pace:.1f} wpm (target {low:.0f}-{high:.0f})",
+        "required_open",
+        False,
+        f'missing "{required}" in the first {window:.0f}s',
+        [
+            _fail(
+                "required_open",
+                "missing_open",
+                f'missing "{required}" in the first {window:.0f}s',
+            )
+        ],
+    )
+
+
+def _description_text(plan: EditPlan, episode_dir: Path | None) -> str:
+    meta = str((plan.meta or {}).get("description") or "")
+    if meta.strip():
+        return meta
+    if episode_dir is None:
+        return ""
+    path = episode_dir / "text" / "description.txt"
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    return ""
+
+
+def _link_present(text: str, needle: str) -> bool:
+    lowered = text.casefold()
+    if needle.casefold() in lowered:
+        return True
+    if needle.casefold() in {"x.com", "twitter.com"}:
+        return "x.com" in lowered or "twitter.com" in lowered
+    return False
+
+
+def _check_description(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None) -> CheckResult:
+    block = rules.lint.get("description") or {}
+    required = [str(item) for item in (block.get("require") or [])]
+    if not required:
+        return CheckResult("description", True, "no description links required", skipped=True)
+    text = _description_text(plan, episode_dir)
+    findings = [
+        _fail("description", "missing_link", f'description does not link to "{needle}"')
+        for needle in required
+        if not _link_present(text, needle)
+    ]
+    summary = "description links are present" if not findings else "description is missing a link"
+    return CheckResult("description", _ok(findings), summary, findings)
+
+
+def _slots(
+    rules: SeriesRules, width: int, height: int
+) -> list[tuple[str, tuple[float, float, float, float]]]:
+    block = rules.lint.get("end_card") or {}
+    ref_w = float(block.get("reference_width") or 1920)
+    ref_h = float(block.get("reference_height") or 1080)
+    scale_x = width / ref_w if ref_w else 1
+    scale_y = height / ref_h if ref_h else 1
+    scaled = []
+    for slot in block.get("clear_slots") or []:
+        box = (
+            float(slot["x1"]) * scale_x,
+            float(slot["y1"]) * scale_y,
+            float(slot["x2"]) * scale_x,
+            float(slot["y2"]) * scale_y,
+        )
+        scaled.append((str(slot.get("id") or "slot"), box))
+    return scaled
+
+
+def _overlaps(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return left[0] < right[2] and left[2] > right[0] and left[1] < right[3] and left[3] > right[1]
+
+
+def _check_end_card(plan: EditPlan, rules: SeriesRules, episode_dir: Path | None) -> CheckResult:
+    block = rules.lint.get("end_card") or {}
+    if not block:
+        return CheckResult("end_card", True, "no end card rule", skipped=True)
+    if not plan.narration:
+        return CheckResult(
+            "end_card",
+            False,
+            "no narration, so the end card has no last line to follow",
+            [_fail("end_card", "no_narration", "end card needs a last spoken line")],
+        )
+    last = max(line.end for line in plan.narration)
+    tail = plan.picture_duration() - last
+    low = float(block.get("min_seconds", 5))
+    high = float(block.get("max_seconds", 10))
+    findings: list[Finding] = []
+    if tail < low or tail > high:
+        findings.append(
+            _fail(
+                "end_card",
+                "end_card_duration",
+                f"end card runs {tail:.2f}s after the last line; expected {low:.0f}-{high:.0f}s",
+                last,
+            )
+        )
+    image = str((plan.meta or {}).get("end_card", {}).get("image") or block.get("image") or "")
+    if image:
+        resolved = resolve_episode_path(episode_dir, image)
+        if episode_dir is not None and not resolved.is_file():
+            findings.append(
+                _warn(
+                    "end_card",
+                    "end_card_image",
+                    f"end card image is not on disk: {resolved}",
+                    last,
+                )
+            )
+    elements = list(((plan.meta or {}).get("end_card") or {}).get("elements") or [])
+    for name, slot in _slots(rules, plan.width, plan.height):
+        for element in elements:
+            box = (
+                float(element["x1"]),
+                float(element["y1"]),
+                float(element["x2"]),
+                float(element["y2"]),
+            )
+            if _overlaps(box, slot):
+                label = str(element.get("id") or "element")
+                findings.append(
+                    _fail(
+                        "end_card",
+                        "end_screen_overlap",
+                        f"{label} overlaps the {name} end-screen slot",
+                        last,
+                        label,
+                    )
+                )
+    if low <= tail <= high and not any(item.severity == "fail" for item in findings):
+        summary = f"end card {tail:.2f}s, end-screen slots clear"
+    else:
+        summary = f"end card {tail:.2f}s after the last line"
+    return CheckResult(
+        "end_card",
+        _ok(findings),
+        summary,
         findings,
-        measurements={"wpm": round(pace, 2)},
+        measurements={"tail_seconds": round(tail, 3)},
     )
 
 
