@@ -12,14 +12,14 @@ import pytest
 from tests.ytp.mediautil import require_ffmpeg, write_png, write_wav
 from ytp.check import Report, _check_loudness, write_report
 from ytp.cli import _build_parser
-from ytp.ff import probe_duration
+from ytp.ff import probe_audio_rate, probe_duration
 from ytp.master import (
-    DYNAMIC_WARN,
     MasterResult,
     denoise_filter,
-    dynamic_warning,
+    dynamic_note,
     linear_loudnorm_filter,
     loudness_settings,
+    master_true_peak,
     parse_loudnorm,
 )
 from ytp.plan import EditPlan, NarrationLine, Segment
@@ -99,16 +99,21 @@ def test_two_pass_loudnorm_json_parses_captured_sample() -> None:
     applied = parse_loudnorm(_captured("loudnorm-pass2.json"))
     assert applied["output_i"] == "-16.01"
     assert applied["output_tp"] == "-8.78"
-    assert dynamic_warning(applied) == DYNAMIC_WARN
+    assert dynamic_note(-23.76, -16.54, -16) == (
+        "loudnorm used dynamic mode: not enough peak headroom for linear gain "
+        "(would peak at -8.8 dBTP)"
+    )
+    assert "would peak at +4.2 dBTP" in dynamic_note(-24.36, -4.16, -16)
     linear = parse_loudnorm(_captured("loudnorm-linear.json"))
     assert linear["normalization_type"] == "linear"
-    assert dynamic_warning(linear) is None
 
 
 def test_targets_and_denoise_strength_come_from_series_rules() -> None:
     settings = loudness_settings("ai-survival")
     assert settings["voice_lufs"] == -16
     assert settings["true_peak_dbtp"] == -1.5
+    assert settings["master_tp_margin_db"] == 0.5
+    assert master_true_peak(settings) == -2
     assert settings["lra"] == 11
     assert denoise_filter(settings) == "highpass=f=80,afftdn=nr=10:nf=-50:tn=1"
     head = loudness_settings("talking-head")
@@ -117,7 +122,7 @@ def test_targets_and_denoise_strength_come_from_series_rules() -> None:
     assert denoise_filter(head) == denoise_filter(settings)
 
 
-def test_dynamic_fallback_warns_in_the_loudness_section(tmp_path: Path) -> None:
+def test_dynamic_mode_is_an_info_note_not_a_warning(tmp_path: Path) -> None:
     video = tmp_path / "plan.mp4"
     video.write_bytes(b"")
     sidecar = {
@@ -141,19 +146,19 @@ def test_dynamic_fallback_warns_in_the_loudness_section(tmp_path: Path) -> None:
     )
     result = _check_loudness(video, plan, rules, False, lambda _path: (-16.0, -2.0), None)
     assert result.passed
-    warned = [item for item in result.findings if item.code == "loudnorm_dynamic"]
-    assert warned and warned[0].severity == "warn"
-    assert not any(item.severity == "fail" for item in result.findings)
+    assert not any(item.severity in {"warn", "fail"} for item in result.findings)
     report = Report("v", "p", "ai-survival", True, [result])
     markdown, _payload = write_report(report, tmp_path / "qc")
     text = markdown.read_text(encoding="utf-8")
-    assert "## loudness — WARN" in text
+    assert "## loudness — PASS" in text
     expected = (
         "mastered from input -23.76 LUFS / -16.54 dBTP "
         "to output -16.01 LUFS / -8.78 dBTP"
     )
     assert expected in text
-    assert DYNAMIC_WARN in text
+    assert "loudnorm used dynamic mode" in text
+    assert "would peak at -8.8 dBTP" in text
+    assert "WARN" not in text
 
 
 def test_quiet_render_lands_on_the_loudness_target(tmp_path: Path) -> None:
@@ -169,9 +174,13 @@ def test_quiet_render_lands_on_the_loudness_target(tmp_path: Path) -> None:
     integrated, true_peak = measure_loudness(result.video)
     assert integrated == pytest.approx(-16, abs=1)
     assert true_peak <= -1.5
+    assert probe_audio_rate(result.video) == 48000
     log = (out.parent / "render.log").read_text(encoding="utf-8")
     assert "input I=" in log
     assert "output I=" in log
+    assert "af measure: " in log
+    assert "af apply: " in log
+    assert "TP=-2:" in log
     sidecar = json.loads(out.with_suffix(".loudness.json").read_text(encoding="utf-8"))
     assert sidecar["mastered"] is True
     assert sidecar["input_i"] == pytest.approx(source_i, abs=1.5)
@@ -191,13 +200,12 @@ def test_quiet_render_lands_on_the_loudness_target(tmp_path: Path) -> None:
     assert "mastered from input" in loudness.summary
     text = report.to_markdown()
     assert "mastered from input" in text
+    assert "## loudness — PASS" in text
+    assert not any(item.severity == "warn" for item in loudness.findings)
     if sidecar["normalization_type"] == "dynamic":
-        assert any(item.code == "loudnorm_dynamic" for item in loudness.findings)
-        assert "## loudness — WARN" in text
-        assert "WARN:" in log
-        assert DYNAMIC_WARN in log
-    else:
-        assert "## loudness — PASS" in text
+        assert "loudnorm used dynamic mode" in loudness.summary
+        assert "would peak at" in log
+        assert "WARN:" not in log
 
 
 def test_no_master_leaves_the_level_alone(tmp_path: Path) -> None:
@@ -226,6 +234,9 @@ def test_denoise_adds_highpass_and_afftdn(tmp_path: Path) -> None:
     chain = _joined(result.commands)
     assert "highpass=f=80,afftdn=nr=10:nf=-50:tn=1,loudnorm=" in chain
     assert "linear=true" in chain
+    log = (out.parent / "render.log").read_text(encoding="utf-8")
+    assert "af measure: highpass=f=80,afftdn=nr=10:nf=-50:tn=1,loudnorm=" in log
+    assert "af apply: highpass=f=80,afftdn=nr=10:nf=-50:tn=1,loudnorm=" in log
 
 
 def test_master_sees_the_mix_through_the_end_card(tmp_path: Path, monkeypatch) -> None:
@@ -256,6 +267,85 @@ def test_master_sees_the_mix_through_the_end_card(tmp_path: Path, monkeypatch) -
     assert any(segment.id == "end-card" for segment in plan.segments)
     assert seen["duration"] == pytest.approx(plan.picture_duration(), abs=0.2)
     assert plan.picture_duration() >= 7
+
+
+def _hot_quiet_wav(path: Path, *, seconds: float = 5.0) -> Path:
+    """About -24 LUFS, with peaks hot enough that linear gain would clip."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    expr = (
+        "aevalsrc='0.07*sin(2*PI*220*t)"
+        "+0.36*sin(2*PI*1800*t)*lt(mod(t\\,0.40),0.008)'"
+        f":s=48000:d={seconds}"
+    )
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            expr,
+            "-c:a",
+            "pcm_s16le",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr[-2000:])
+    return path
+
+
+def test_mastered_aac_passes_the_loudness_check(tmp_path: Path) -> None:
+    require_ffmpeg()
+    from ytp.check import check_render, measure_loudness
+
+    episode = tmp_path / "ep"
+    seconds = 5.0
+    write_png(episode / "frames" / "a.png", size="320x180")
+    _hot_quiet_wav(episode / "audio" / "voice" / "voice.wav", seconds=seconds)
+    source_i, _source_tp = measure_loudness(episode / "audio" / "voice" / "voice.wav")
+    assert -28 < source_i < -20
+    plan = EditPlan(
+        series="ai-survival",
+        episode="t",
+        width=320,
+        height=180,
+        fps=30,
+        voice="audio/voice/voice.wav",
+        segments=[
+            Segment(
+                id="a",
+                kind="still",
+                source="frames/a.png",
+                start=0.0,
+                duration=seconds,
+            )
+        ],
+        narration=[NarrationLine(id="n", text="Stay low.", start=0.0, end=0.4)],
+    )
+    out = episode / "renders" / "v1" / "plan.mp4"
+    result = render_plan(plan, out, episode_dir=episode, preset="ultrafast")
+    assert "TP=-2:" in _joined(result.commands)
+    assert "TP=-1.5:" not in _joined(result.commands)
+    assert probe_audio_rate(result.video) == 48000
+    report = check_render(
+        result.video,
+        plan,
+        series="ai-survival",
+        rules_root=repo_root(),
+        transcriber=None,
+        episode_dir=episode,
+        loudness_fn=measure_loudness,
+    )
+    loudness = next(item for item in report.checks if item.id == "loudness")
+    assert loudness.passed
+    assert loudness.measurements["integrated_lufs"] == pytest.approx(-16, abs=1)
+    assert loudness.measurements["true_peak_dbtp"] <= -1.5
+    assert "## loudness — PASS" in report.to_markdown()
 
 
 def test_render_and_finish_accept_master_flags() -> None:

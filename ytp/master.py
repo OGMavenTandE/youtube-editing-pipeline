@@ -18,15 +18,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ytp.ff import FFmpegError, run_ffmpeg
+from ytp.ff import FFmpegError, probe_audio_rate, run_ffmpeg
 from ytp.rules import DEFAULT_LINT, load_rules
 
 _LOUDNORM_JSON = re.compile(r"\{[^{}]*\"input_i\"[^{}]*\}", re.S)
 _MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
-
-DYNAMIC_WARN = (
-    "loudnorm fell back to dynamic normalization; linear mode did not converge"
-)
+_DEFAULT_RATE = 48000
 
 
 @dataclass
@@ -40,6 +37,7 @@ class MasterResult:
     output_i: float | None = None
     output_tp: float | None = None
     normalization_type: str | None = None
+    dynamic_note: str | None = None
     warnings: list[str] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     commands: list[list[str]] = field(default_factory=list)
@@ -55,6 +53,7 @@ class MasterResult:
             "output_tp": self.output_tp,
             "normalization_type": self.normalization_type,
             "denoise": self.denoise,
+            "dynamic_note": self.dynamic_note,
         }
 
 
@@ -81,10 +80,40 @@ def parse_loudnorm(text: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in data.items()}
 
 
-def dynamic_warning(measured: dict[str, str]) -> str | None:
-    if measured.get("normalization_type") == "dynamic":
-        return DYNAMIC_WARN
-    return None
+def master_true_peak(loudness: dict[str, object]) -> float:
+    """Loudnorm true-peak target. The check limit stays ``true_peak_dbtp``.
+
+    AAC adds a few hundredths of a dB after the wav is encoded, so the master
+    aims ``master_tp_margin_db`` under the limit.
+    """
+    limit = float(loudness.get("true_peak_dbtp", -1.5))
+    margin = float(loudness.get("master_tp_margin_db", 0.5))
+    return limit - margin
+
+
+def dynamic_note(input_i: float, input_tp: float, target_i: float) -> str:
+    """Linear gain to the loudness target, and where that would put the peak.
+
+    A quiet desk take needs several dB of gain. That gain would push an
+    already-hot peak over the limit, so dynamic mode is the normal result.
+    """
+    peak = input_tp + (target_i - input_i)
+    return (
+        "loudnorm used dynamic mode: not enough peak headroom for linear gain "
+        f"(would peak at {peak:+.1f} dBTP)"
+    )
+
+
+def note_from_sidecar(data: dict[str, object], target_i: float) -> str | None:
+    stored = data.get("dynamic_note")
+    if isinstance(stored, str) and stored.strip():
+        return stored
+    if data.get("normalization_type") != "dynamic":
+        return None
+    try:
+        return dynamic_note(float(data["input_i"]), float(data["input_tp"]), target_i)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def measure_loudnorm_filter(*, target_i: float, target_tp: float, target_lra: float) -> str:
@@ -148,16 +177,19 @@ def master_audio(
     *,
     loudness: dict[str, object],
     denoise: bool = False,
+    sample_rate: int | None = None,
 ) -> MasterResult:
     target_i = float(loudness.get("voice_lufs", -16))
-    target_tp = float(loudness.get("true_peak_dbtp", -1.5))
+    target_tp = master_true_peak(loudness)
     target_lra = float(loudness.get("lra", 11))
+    rate = _output_rate(source, sample_rate)
     result = MasterResult(path=source, mastered=False, dynamic=False, denoise=denoise)
     measure = _with_denoise(
         measure_loudnorm_filter(target_i=target_i, target_tp=target_tp, target_lra=target_lra),
         loudness,
         denoise,
     )
+    result.logs.append(f"af measure: {measure}")
     measure_cmd = ["-i", str(source), "-af", measure, "-f", "null", "-"]
     result.commands.append(measure_cmd)
     try:
@@ -180,7 +212,19 @@ def master_audio(
         loudness,
         denoise,
     )
-    apply_cmd = ["-y", "-i", str(source), "-af", apply, "-c:a", "pcm_s16le", str(dest)]
+    result.logs.append(f"af apply: {apply}")
+    apply_cmd = [
+        "-y",
+        "-i",
+        str(source),
+        "-af",
+        apply,
+        "-ar",
+        str(rate),
+        "-c:a",
+        "pcm_s16le",
+        str(dest),
+    ]
     result.commands.append(apply_cmd)
     try:
         applied = parse_loudnorm(run_ffmpeg(apply_cmd).stderr or "")
@@ -208,10 +252,20 @@ def master_audio(
     result.logs.append(
         format_loudness_line(result.input_i, result.input_tp, result.output_i, result.output_tp)
     )
-    warned = dynamic_warning(applied)
-    if warned:
-        result.warnings.append(warned)
+    if result.dynamic:
+        result.dynamic_note = dynamic_note(result.input_i, result.input_tp, target_i)
+        result.logs.append(result.dynamic_note)
     return result
+
+
+def _output_rate(source: Path, sample_rate: int | None) -> int:
+    if sample_rate is not None and sample_rate > 0:
+        return int(sample_rate)
+    try:
+        rate = probe_audio_rate(source)
+    except (FFmpegError, ValueError):
+        return _DEFAULT_RATE
+    return rate if rate > 0 else _DEFAULT_RATE
 
 
 def _with_denoise(loudnorm: str, loudness: dict[str, object], denoise: bool) -> str:

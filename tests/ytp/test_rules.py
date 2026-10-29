@@ -43,6 +43,7 @@ def test_seed_covers_every_owner(rules_root) -> None:
     assert rules.lint["loudness"]["voice_lufs"] == -16
     assert rules.lint["loudness"]["shorts_lufs"] == -14
     assert rules.lint["loudness"]["true_peak_dbtp"] == -1.5
+    assert rules.lint["loudness"]["master_tp_margin_db"] == 0.5
     assert rules.lint["loudness"]["lra"] == 11
     assert rules.lint["loudness"]["music_under_voice_db"] == 17
     assert rules.lint["loudness"]["denoise_nr"] == 10
@@ -51,6 +52,7 @@ def test_seed_covers_every_owner(rules_root) -> None:
     assert rules.lint["loudness"]["highpass_hz"] == 80
     head = load_rules("talking-head").lint["loudness"]
     assert head["lra"] == 11
+    assert head["master_tp_margin_db"] == 0.5
     assert head["denoise_nr"] == 10
     assert head["highpass_hz"] == 80
 

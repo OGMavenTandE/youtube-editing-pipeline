@@ -97,6 +97,27 @@ def run_ffprobe(args: list[str]) -> subprocess.CompletedProcess[str]:
     return run_cmd([ffprobe_bin(), "-hide_banner", *args])
 
 
+def probe_audio_rate(path: Path) -> int:
+    """Sample rate of the first audio stream."""
+    proc = run_ffprobe(
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=sample_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ]
+    )
+    text = proc.stdout.strip().splitlines()
+    if not text or not text[0].strip():
+        raise ValueError(f"no audio sample rate in {path}")
+    return int(text[0].strip())
+
+
 def probe_duration(path: Path) -> float:
     proc = run_ffprobe(
         [

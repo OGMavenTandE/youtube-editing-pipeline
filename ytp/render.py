@@ -25,6 +25,7 @@ from ytp.ff import (
     escape_drawtext,
     escape_filter_path,
     escape_filter_text,
+    probe_audio_rate,
     run_ffmpeg,
 )
 from ytp.hooks import (
@@ -309,12 +310,14 @@ def render_plan(
             warnings,
             commands,
         )
+        sample_rate = _sample_rate(audio)
         if master:
             mastered = master_audio(
                 audio,
                 work / "master.wav",
                 loudness=loudness_settings(plan.series, rules_root),
                 denoise=denoise,
+                sample_rate=sample_rate,
             )
             commands.extend(mastered.commands)
             warnings.extend(mastered.warnings)
@@ -327,7 +330,7 @@ def render_plan(
             if denoise:
                 warnings.append("denoise runs before loudnorm; skipped because mastering is off")
         muxed = work / "muxed.mp4"
-        _mux(picture, audio, muxed, encoder, preset)
+        _mux(picture, audio, muxed, encoder, preset, sample_rate)
         srt_path: Path | None = None
         final = out
         if plan.captions and mode in {"srt", "both", "burn"}:
@@ -347,7 +350,9 @@ def render_plan(
             short_path = out.with_name(f"{out.stem}-short-{short.id}{out.suffix}")
             if short_path.exists():
                 raise FileExistsError(f"refusing to overwrite {short_path}")
-            _render_short(final, short, short_path, work, encoder, preset, warnings)
+            _render_short(
+                final, short, short_path, work, encoder, preset, warnings, sample_rate
+            )
         _write_render_log(final, logs, warnings)
         if loudness_meta is not None:
             payload = json.dumps(loudness_meta, indent=2) + "\n"
@@ -740,7 +745,23 @@ def _audio(
     return mixed
 
 
-def _mux(picture: Path, audio: Path, dest: Path, encoder: str, preset: str) -> None:
+def _sample_rate(path: Path) -> int:
+    """Mix rate to keep. Loudnorm upsamples internally, so this is read first."""
+    try:
+        rate = probe_audio_rate(path)
+    except (FFmpegError, ValueError):
+        return 48000
+    return rate if rate > 0 else 48000
+
+
+def _mux(
+    picture: Path,
+    audio: Path,
+    dest: Path,
+    encoder: str,
+    preset: str,
+    sample_rate: int = 48000,
+) -> None:
     run_ffmpeg(
         [
             "-y",
@@ -758,6 +779,8 @@ def _mux(picture: Path, audio: Path, dest: Path, encoder: str, preset: str) -> N
             "aac",
             "-b:a",
             "192k",
+            "-ar",
+            str(sample_rate),
             "-shortest",
             str(dest),
         ]
@@ -789,6 +812,7 @@ def _render_short(
     encoder: str,
     preset: str,
     warnings: list[str],
+    sample_rate: int = 48000,
 ) -> None:
     filters = [
         f"scale={short.width}:{short.height}:force_original_aspect_ratio=increase",
@@ -822,6 +846,8 @@ def _render_short(
             "aac",
             "-b:a",
             "192k",
+            "-ar",
+            str(sample_rate),
             str(dest),
         ]
     )

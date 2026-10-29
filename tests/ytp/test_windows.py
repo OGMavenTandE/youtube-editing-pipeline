@@ -130,13 +130,22 @@ def test_finish_renders_and_prints_the_report(tmp_path: Path, monkeypatch) -> No
         encoding="utf-8",
     )
     monkeypatch.setattr("ytp.finish.measure_loudness", lambda _path: (-16.0, -2.0))
-    code = finish_episode(episode, rules_root=Path(__file__).resolve().parents[2])
+    root = Path(__file__).resolve().parents[2]
+    code = finish_episode(episode, rules_root=root)
     report = episode / "qc" / "check-report.md"
     assert report.is_file()
     printed = report.read_text(encoding="utf-8")
     assert "Render check" in printed
+    versioned = episode / "qc" / "check-report-v1.md"
+    assert versioned.read_text(encoding="utf-8") == printed
     assert list((episode / "renders").glob("v*/plan.mp4"))
     assert code == 0
+    again = finish_episode(episode, rules_root=root)
+    assert again == 0
+    latest = report.read_text(encoding="utf-8")
+    assert (episode / "qc" / "check-report-v2.md").read_text(encoding="utf-8") == latest
+    assert versioned.read_text(encoding="utf-8") == printed
+    assert latest != printed
 
 
 def test_nvidia_dll_hook_is_a_noop_off_windows() -> None:

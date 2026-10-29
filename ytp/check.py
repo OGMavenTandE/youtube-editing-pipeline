@@ -17,7 +17,7 @@ from pathlib import Path
 from ytp.captions import format_timestamp
 from ytp.cards import append_talking_head_end_card, card_box, end_card_candidates, find_end_card
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
-from ytp.master import DYNAMIC_WARN, master_report_line, parse_loudnorm
+from ytp.master import master_report_line, note_from_sidecar, parse_loudnorm
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
 from ytp.splice import (
@@ -438,8 +438,10 @@ def _check_loudness(video, plan, rules, use_short, loudness_fn, episode_dir) -> 
             measurements["master_input_tp"] = master.get("input_tp")
             measurements["master_output_i"] = master.get("output_i")
             measurements["master_output_tp"] = master.get("output_tp")
-        if master.get("normalization_type") == "dynamic":
-            findings.append(_warn("loudness", "loudnorm_dynamic", DYNAMIC_WARN))
+        note = note_from_sidecar(master, target)
+        if note:
+            summary = f"{summary}\n\n{note}"
+            measurements["dynamic_note"] = note
     return CheckResult("loudness", _ok(findings), summary, findings, measurements=measurements)
 
 

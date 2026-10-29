@@ -6,6 +6,7 @@ ffmpeg lists it and a one-frame encode succeeds.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -70,10 +71,20 @@ def finish_episode(
         loudness_fn=measure_loudness,
     )
     markdown, payload = write_report(report, episode_dir / "qc")
+    _copy_versioned_report(markdown, result.video)
     print("PASS" if report.passed else "FAIL")
     print(markdown.read_text(encoding="utf-8").replace("\u00b1", "+/-"))
     print(payload)
     return 0 if report.passed else 1
+
+
+def _copy_versioned_report(markdown: Path, video: Path) -> None:
+    """Keep one report per render. ``check-report.md`` stays the latest."""
+    version = video.parent.name
+    if re.fullmatch(r"v\d+", version) is None:
+        return
+    dest = markdown.with_name(f"check-report-{version}.md")
+    dest.write_text(markdown.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
 
 
 def _cpu_transcriber(language: str):
