@@ -11,7 +11,7 @@ from tests.ytp.mediautil import require_ffmpeg, write_clip, write_png, write_wav
 from ytp.ff import ffmpeg_bin, ffprobe_bin
 from ytp.finish import finish_episode
 from ytp.plan import EditPlan, NarrationLine, Segment, save_plan
-from ytp.render import choose_encoder, parse_encoder_list, reset_encoder_cache, resolve_encoder
+from ytp.render import choose_encoder, parse_encoder_list, resolve_encoder
 from ytp.take import clock, episode_dir_for_take, ingest_take, link_take, transcript_text
 from ytp.transcribe import Transcript, Word, enable_nvidia_dlls, nvidia_dll_dirs
 
@@ -102,9 +102,12 @@ def test_encoder_auto_falls_back_without_a_gpu() -> None:
     assert choose_encoder("auto", listed=listed, gpu_ok=True) == "h264_nvenc"
     assert choose_encoder("auto", listed={"libx264"}, gpu_ok=True) == "libx264"
     assert choose_encoder("libx264", listed=listed, gpu_ok=True) == "libx264"
-    require_ffmpeg()
-    reset_encoder_cache()
+def test_encoder_auto_follows_the_nvenc_trial(monkeypatch) -> None:
+    monkeypatch.setattr("ytp.render.ffmpeg_encoders", lambda: {"h264_nvenc", "libx264"})
+    monkeypatch.setattr("ytp.render.nvenc_works", lambda: False)
     assert resolve_encoder("auto") == "libx264"
+    monkeypatch.setattr("ytp.render.nvenc_works", lambda: True)
+    assert resolve_encoder("auto") == "h264_nvenc"
 
 
 def test_finish_renders_and_prints_the_report(tmp_path: Path, monkeypatch) -> None:
@@ -159,6 +162,16 @@ def test_nvidia_dll_dirs_come_from_site_packages(tmp_path: Path, monkeypatch) ->
     added = enable_nvidia_dlls([root])
     assert added == [str(path) for path in found]
     assert os.environ["PATH"].split(os.pathsep)[:3] == added
+
+
+def test_missing_ffmpeg_override_is_reported(tmp_path: Path, monkeypatch) -> None:
+    from ytp.selftest import _tool_status
+
+    missing = tmp_path / "AI Eval" / "ffmpeg.exe"
+    monkeypatch.setenv("YTP_FFMPEG", str(missing))
+    monkeypatch.delenv("FFMPEG_PATH", raising=False)
+    line = _tool_status("ffmpeg", ffmpeg_bin)
+    assert line == f"ffmpeg: missing ({missing})"
 
 
 def test_self_test_failure_exits_nonzero() -> None:

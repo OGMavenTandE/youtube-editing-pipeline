@@ -316,7 +316,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         out_dir = qc if episode_dir.exists() else args.video.parent
     markdown, payload = write_report(report, out_dir)
     print("PASS" if report.passed else "FAIL")
-    print(markdown)
+    print(_console_text(markdown.read_text(encoding="utf-8")))
     print(payload)
     return 0 if report.passed else 1
 
@@ -379,6 +379,11 @@ def _cmd_self_test(args: argparse.Namespace) -> int:
     for line in lines:
         print(line)
     return 1 if self_test_failed(lines) else 0
+
+
+def _console_text(text: str) -> str:
+    """PowerShell 5.1 consoles garble a UTF-8 plus-minus sign."""
+    return text.replace("\u00b1", "+/-")
 
 
 def main(argv: list[str] | None = None) -> int:

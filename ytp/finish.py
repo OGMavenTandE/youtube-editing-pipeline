@@ -60,7 +60,7 @@ def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
     )
     markdown, payload = write_report(report, episode_dir / "qc")
     print("PASS" if report.passed else "FAIL")
-    print(markdown.read_text(encoding="utf-8"))
+    print(markdown.read_text(encoding="utf-8").replace("\u00b1", "+/-"))
     print(payload)
     return 0 if report.passed else 1
 

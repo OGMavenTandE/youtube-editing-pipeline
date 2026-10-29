@@ -24,19 +24,21 @@ def self_test_failed(lines: list[str]) -> bool:
     return False
 
 
+def _tool_status(label: str, resolve) -> str:
+    try:
+        path = resolve()
+    except Exception as exc:
+        return f"{label}: missing ({exc})"
+    if not Path(path).is_file():
+        return f"{label}: missing ({path})"
+    return f"{label}: {path}"
+
+
 def self_test_lines() -> list[str]:
     reset_encoder_cache()
     lines = [f"python: {sys.version.split()[0]} ({sys.executable})"]
-    try:
-        ffmpeg = ffmpeg_bin()
-        lines.append(f"ffmpeg: {ffmpeg}")
-    except Exception as exc:
-        lines.append(f"ffmpeg: missing ({exc})")
-        ffmpeg = ""
-    try:
-        lines.append(f"ffprobe: {ffprobe_bin()}")
-    except Exception as exc:
-        lines.append(f"ffprobe: missing ({exc})")
+    lines.append(_tool_status("ffmpeg", ffmpeg_bin))
+    lines.append(_tool_status("ffprobe", ffprobe_bin))
     try:
         listed = ffmpeg_encoders()
         lines.append(f"nvenc: {'yes' if 'h264_nvenc' in listed else 'no'}")

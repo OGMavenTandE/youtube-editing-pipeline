@@ -1,0 +1,28 @@
+name: windows powershell
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "cursor/**"
+
+jobs:
+  ps51:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse and dry-run setup-windows.ps1 with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $path = Join-Path (Get-Location) "scripts\setup-windows.ps1"
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_ }
+            exit 1
+          }
+          & powershell.exe -NoProfile -File $path -DryRun
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

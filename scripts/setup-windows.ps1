@@ -2,7 +2,8 @@
 # or touch any Python install outside the venv path.
 param(
     [string]$Venv = "C:\AI Eval\YouTube\ytp\.venv",
-    [string]$Repo = ""
+    [string]$Repo = "",
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,11 +14,23 @@ if (-not $Repo) {
 }
 
 function Invoke-Native {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Command)
-    & $Command[0] $Command[1..($Command.Length - 1)]
-    if ($LASTEXITCODE -ne 0) {
-        throw "command failed (${LASTEXITCODE}): $($Command -join ' ')"
+    # Not an advanced function. A param() block would bind pip's -e to -ErrorAction.
+    $exe = $args[0]
+    if ($args.Count -gt 1) {
+        $rest = $args[1..($args.Count - 1)]
+    } else {
+        $rest = @()
     }
+    & $exe @rest
+    if ($LASTEXITCODE) {
+        throw "command failed (${LASTEXITCODE}): $exe $($rest -join ' ')"
+    }
+}
+
+if ($DryRun) {
+    Write-Host "dry-run: passing -e through Invoke-Native"
+    Invoke-Native cmd.exe /c echo -e editable
+    exit 0
 }
 
 $spec = $null
