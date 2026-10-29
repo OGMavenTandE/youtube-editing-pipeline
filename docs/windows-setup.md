@@ -60,7 +60,7 @@ If ffmpeg is not on PATH, set `YTP_FFMPEG` to the full path of `ffmpeg.exe` for 
 1. Drop a `.mp4` or `.mov` in `C:\AI Eval\YouTube`.
 2. `ytp take` makes a folder beside that file (`desk\` for `desk.mp4`), hardlinks the take into `source\raw` when Windows allows it, and writes `edit\transcript.txt`, `edit\words.json`, and the clip index. Transcription prefers the GPU (float16). With no CUDA it prints a warning and uses the CPU (int8). The model for a take is `small`. The original file is not copied and not modified.
 3. Edit `edit\plan.yaml`.
-4. `ytp finish desk` checks the plan, renders `renders\v1\` (then v2, and so on) with NVENC when ffmpeg lists it and a 256x256 trial encode works, otherwise libx264, then runs `ytp check` on the CPU and prints `qc\check-report.md`.
+4. `ytp finish desk` checks the plan, masters the mixed audio to the series loudness target (-16 LUFS, true peak -1.5 dBTP, LRA 11), then renders `renders\v1\` (then v2, and so on) with NVENC when ffmpeg lists it and a 256x256 trial encode works, otherwise libx264. It runs `ytp check` on the CPU and prints `qc\check-report.md`. The loudness section includes the measured input and output. Raw desk takes near -24 LUFS are brought to that target. The measurement is the full mix, including the end card, after any music ducking. `ytp finish desk --no-master` skips mastering. `ytp finish desk --denoise` runs a light denoise (highpass near 80 Hz, then afftdn) before the loudness pass. If loudnorm cannot stay linear it keeps the dynamic result, prints a warning, and writes that warning into the loudness section. The warning does not fail the check. `renders\vN\render.log` records the before and after levels.
 
 ## End card
 

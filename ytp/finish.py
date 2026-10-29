@@ -15,7 +15,13 @@ from ytp.render import allocate_render_path, render_plan
 from ytp.rules import load_rules
 
 
-def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
+def finish_episode(
+    episode_dir: Path,
+    *,
+    rules_root: Path | None = None,
+    master: bool = True,
+    denoise: bool = False,
+) -> int:
     episode_dir = episode_dir.resolve()
     plan_path = episode_dir / "edit" / "plan.yaml"
     if not plan_path.is_file():
@@ -35,8 +41,13 @@ def finish_episode(episode_dir: Path, *, rules_root: Path | None = None) -> int:
         plan_path=plan_path,
         encoder="auto",
         preset="veryfast",
+        master=master,
+        denoise=denoise,
+        rules_root=rules_root,
     )
     print(f"wrote {result.video}")
+    for line in result.logs:
+        print(line)
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
     words = episode_dir / "edit" / "words.json"

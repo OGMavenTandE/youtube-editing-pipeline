@@ -33,6 +33,7 @@ from ytp.hooks import (
     run_hook,
     write_cue_file,
 )
+from ytp.master import loudness_settings, master_audio
 from ytp.plan import Broll, EditPlan, MusicCue, Short
 from ytp.rules import repo_root
 
@@ -47,6 +48,7 @@ class RenderResult:
     short: Path | None
     warnings: list[str] = field(default_factory=list)
     commands: list[list[str]] = field(default_factory=list)
+    logs: list[str] = field(default_factory=list)
 
 
 def infer_episode_dir(plan_path: Path) -> Path:
@@ -243,6 +245,9 @@ def render_plan(
     audio_hook: Path | None = None,
     graphics_hook: Path | None = None,
     short_id: str | None = None,
+    master: bool = True,
+    denoise: bool = False,
+    rules_root: Path | None = None,
 ) -> RenderResult:
     if not plan.segments:
         raise ValueError("plan has no picture segments")
@@ -251,6 +256,8 @@ def render_plan(
     encoder = resolve_encoder(encoder)
     mode = captions or plan.captions_mode
     warnings: list[str] = []
+    logs: list[str] = []
+    loudness_meta: dict[str, object] | None = None
     if append_talking_head_end_card(plan):
         warnings.append("appended a 7s talking-head end card after the last spoken line")
     commands: list[list[str]] = []
@@ -302,6 +309,23 @@ def render_plan(
             warnings,
             commands,
         )
+        if master:
+            mastered = master_audio(
+                audio,
+                work / "master.wav",
+                loudness=loudness_settings(plan.series, rules_root),
+                denoise=denoise,
+            )
+            commands.extend(mastered.commands)
+            warnings.extend(mastered.warnings)
+            logs.extend(mastered.logs)
+            if mastered.mastered and mastered.path.is_file():
+                audio = mastered.path
+                loudness_meta = mastered.as_sidecar()
+        else:
+            logs.append("loudness: mastering skipped")
+            if denoise:
+                warnings.append("denoise runs before loudnorm; skipped because mastering is off")
         muxed = work / "muxed.mp4"
         _mux(picture, audio, muxed, encoder, preset)
         srt_path: Path | None = None
@@ -324,13 +348,30 @@ def render_plan(
             if short_path.exists():
                 raise FileExistsError(f"refusing to overwrite {short_path}")
             _render_short(final, short, short_path, work, encoder, preset, warnings)
+        _write_render_log(final, logs, warnings)
+        if loudness_meta is not None:
+            payload = json.dumps(loudness_meta, indent=2) + "\n"
+            final.with_suffix(".loudness.json").write_text(
+                payload,
+                encoding="utf-8",
+                newline="\n",
+            )
     return RenderResult(
         video=final,
         srt=srt_path,
         short=short_path,
         warnings=warnings,
         commands=commands,
+        logs=logs,
     )
+
+
+def _write_render_log(out: Path, logs: list[str], warnings: list[str]) -> None:
+    lines = list(logs)
+    for warning in warnings:
+        lines.append(f"WARN: {warning}")
+    text = ("\n".join(lines) + "\n") if lines else ""
+    (out.parent / "render.log").write_text(text, encoding="utf-8", newline="\n")
 
 
 def _placeholder_end_card(plan, episode_dir, work: Path, warnings: list[str]) -> None:

@@ -110,6 +110,16 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument("--audio-hook", type=Path, default=None, help="Track's mix script")
     render.add_argument("--graphics-hook", type=Path, default=None, help="Studio's template script")
     render.add_argument("--short", default=None, help="also write this short id from the plan")
+    render.add_argument(
+        "--no-master",
+        action="store_true",
+        help="skip loudnorm and encode the mix at its current level",
+    )
+    render.add_argument(
+        "--denoise",
+        action="store_true",
+        help="highpass and light afftdn before loudnorm (off unless set)",
+    )
     render.set_defaults(func=_cmd_render)
 
     checker = sub.add_parser("check", help="pass/fail a render against the plan and series rules")
@@ -152,6 +162,16 @@ def _build_parser() -> argparse.ArgumentParser:
     finish = sub.add_parser("finish", help="validate, render with encoder auto, and check")
     finish.add_argument("episode", nargs="?", type=Path, default=None)
     finish.add_argument("--rules-root", type=Path, default=None)
+    finish.add_argument(
+        "--no-master",
+        action="store_true",
+        help="skip loudnorm and encode the mix at its current level",
+    )
+    finish.add_argument(
+        "--denoise",
+        action="store_true",
+        help="highpass and light afftdn before loudnorm (off unless set)",
+    )
     finish.set_defaults(func=_cmd_finish)
 
     probe = sub.add_parser(
@@ -273,12 +293,16 @@ def _cmd_render(args: argparse.Namespace) -> int:
         audio_hook=args.audio_hook,
         graphics_hook=args.graphics_hook,
         short_id=args.short,
+        master=not args.no_master,
+        denoise=args.denoise,
     )
     print(f"wrote {result.video}")
     if result.srt:
         print(f"srt {result.srt}")
     if result.short:
         print(f"short {result.short}")
+    for line in result.logs:
+        print(line)
     for warning in result.warnings:
         print(f"warning: {warning}")
     return 0
@@ -370,7 +394,12 @@ def _cmd_take(args: argparse.Namespace) -> int:
 
 def _cmd_finish(args: argparse.Namespace) -> int:
     episode = args.episode or Path.cwd()
-    return finish_episode(episode, rules_root=args.rules_root)
+    return finish_episode(
+        episode,
+        rules_root=args.rules_root,
+        master=not args.no_master,
+        denoise=args.denoise,
+    )
 
 
 def _cmd_self_test(args: argparse.Namespace) -> int:
