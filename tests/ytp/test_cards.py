@@ -22,6 +22,28 @@ def _overlaps_slot(box, slot) -> bool:
     return box[0] < slot[2] and box[2] > slot[0] and box[1] < slot[3] and box[3] > slot[1]
 
 
+def test_end_card_prefers_env_then_the_folder_beside_the_repo(tmp_path: Path, monkeypatch) -> None:
+    from ytp.cards import find_end_card
+    from ytp.selftest import self_test_failed
+
+    root = tmp_path / "ytp-repo"
+    (root / "assets" / "end-card").mkdir(parents=True)
+    inside = root / "assets" / "end-card" / "option-C-clean.png"
+    inside.write_bytes(b"in")
+    outside = tmp_path / "assets" / "end-card" / "option-C-clean.png"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"out")
+    monkeypatch.setattr("ytp.cards.repo_root", lambda: root)
+    monkeypatch.delenv("YTP_END_CARD", raising=False)
+    assert find_end_card() == outside
+    custom = tmp_path / "mine.png"
+    custom.write_bytes(b"c")
+    monkeypatch.setenv("YTP_END_CARD", str(custom))
+    assert find_end_card() == custom
+    note = "end card: missing (expected at C:\\AI Eval\\YouTube\\ytp\\assets\\end-card\\x.png)"
+    assert not self_test_failed([note])
+
+
 def test_open_line_allows_one_missing_word() -> None:
     from ytp.check import open_line_match
 

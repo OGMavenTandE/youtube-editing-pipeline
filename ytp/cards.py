@@ -7,8 +7,13 @@ still pending, so a graphics hook draws the card when one is configured.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from ytp.plan import EditPlan, Segment
-from ytp.rules import load_rules
+from ytp.rules import load_rules, repo_root
+
+END_CARD_RELATIVE = Path("assets/end-card/option-C-clean.png")
 
 # x1, y1, x2, y2 on a 1920x1080 frame.
 _BOXES = {
@@ -26,6 +31,43 @@ def card_box(style: str, width: int, height: int) -> tuple[float, float, float, 
     scale_x = width / 1920.0 if width else 1.0
     scale_y = height / 1080.0 if height else 1.0
     return (x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y)
+
+
+def end_card_candidates(
+    episode_dir: Path | None = None,
+    root: Path | None = None,
+) -> list[Path]:
+    """Where a local end card may live. The picture is not part of the public repo.
+
+    Order: ``YTP_END_CARD``, ``<repo parent>/assets/end-card/option-C-clean.png``,
+    the episode copy, then the gitignored in-repo path for local development.
+    """
+    root = root or repo_root()
+    relative = END_CARD_RELATIVE
+    paths: list[Path] = []
+    env = os.environ.get("YTP_END_CARD", "").strip().strip('"')
+    if env:
+        paths.append(Path(env))
+    paths.append(root.parent / relative)
+    if episode_dir is not None:
+        paths.append(episode_dir / relative)
+    paths.append(root / relative)
+    return paths
+
+
+def find_end_card(episode_dir: Path | None = None, root: Path | None = None) -> Path | None:
+    for path in end_card_candidates(episode_dir, root):
+        if path.is_file():
+            return path
+    return None
+
+
+def end_card_status(episode_dir: Path | None = None, root: Path | None = None) -> str:
+    found = find_end_card(episode_dir, root)
+    if found is not None:
+        return f"end card: found {found}"
+    expected = " or ".join(str(path) for path in end_card_candidates(episode_dir, root))
+    return f"end card: missing (expected at {expected})"
 
 
 def append_talking_head_end_card(plan: EditPlan, rules_root=None) -> bool:

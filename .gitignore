@@ -22,6 +22,9 @@ build/
 .vscode/
 .DS_Store
 
+# Scott's end card has a headshot and handles. Keep it off the public repo.
+assets/end-card/*.png
+
 # Pipeline working files and rendered media
 output/
 work/

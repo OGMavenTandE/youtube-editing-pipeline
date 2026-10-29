@@ -60,7 +60,18 @@ If ffmpeg is not on PATH, set `YTP_FFMPEG` to the full path of `ffmpeg.exe` for 
 1. Drop a `.mp4` or `.mov` in `C:\AI Eval\YouTube`.
 2. `ytp take` makes a folder beside that file (`desk\` for `desk.mp4`), hardlinks the take into `source\raw` when Windows allows it, and writes `edit\transcript.txt`, `edit\words.json`, and the clip index. Transcription prefers the GPU (float16). With no CUDA it prints a warning and uses the CPU (int8). The model for a take is `small`. The original file is not copied and not modified.
 3. Edit `edit\plan.yaml`.
-4. `ytp finish desk` checks the plan, renders `renders\v1\` (then v2, and so on) with NVENC when ffmpeg lists it and a trial encode works, otherwise libx264, then runs `ytp check` on the CPU and prints `qc\check-report.md`.
+4. `ytp finish desk` checks the plan, renders `renders\v1\` (then v2, and so on) with NVENC when ffmpeg lists it and a 256x256 trial encode works, otherwise libx264, then runs `ytp check` on the CPU and prints `qc\check-report.md`.
+
+## End card
+
+The end card picture is not in the git repo. It has Scott's headshot and handles. Put `option-C-clean.png` in one of these places, first match wins:
+
+1. The full path in `YTP_END_CARD`.
+2. Next to the clone: `<folder that contains the repo>\assets\end-card\option-C-clean.png`.
+3. Inside the episode: `assets\end-card\option-C-clean.png`.
+4. Inside the clone, which is gitignored: `assets\end-card\option-C-clean.png`. If the clone is `C:\AI Eval\YouTube\ytp`, that file is `C:\AI Eval\YouTube\ytp\assets\end-card\option-C-clean.png`.
+
+`ytp self-test` prints `end card: found ...` or `end card: missing (expected at ...)`. Missing is a warning. The self-test still succeeds. `ytp finish` draws a plain card and the check report warns that the image was not found.
 
 To watch a folder for new files that have stopped growing:
 

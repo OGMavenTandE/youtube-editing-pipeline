@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import write_srt
-from ytp.cards import append_talking_head_end_card, card_box
+from ytp.cards import append_talking_head_end_card, card_box, find_end_card
 from ytp.ff import (
     FFmpegError,
     concat_line,
@@ -337,14 +337,9 @@ def _placeholder_end_card(plan, episode_dir, work: Path, warnings: list[str]) ->
     for segment in plan.segments:
         if segment.id != "end-card":
             continue
-        source = resolve_media(segment.source, episode_dir)
-        if source is not None and source.is_file():
-            return
-        from ytp.rules import repo_root
-
-        repo_copy = repo_root() / str(segment.source).replace("\\", "/")
-        if repo_copy.is_file():
-            segment.source = str(repo_copy)
+        found = find_end_card(episode_dir)
+        if found is not None:
+            segment.source = str(found)
             return
         missing = segment.source
         generated = work / "end-card-plain.png"

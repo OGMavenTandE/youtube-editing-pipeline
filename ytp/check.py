@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ytp.captions import format_timestamp
-from ytp.cards import append_talking_head_end_card, card_box
+from ytp.cards import append_talking_head_end_card, card_box, end_card_candidates, find_end_card
 from ytp.ff import has_audio, probe_duration, probe_video_size, run_ffmpeg
 from ytp.plan import EditPlan
 from ytp.rules import SeriesRules, collected_bans, load_rules
@@ -887,23 +887,16 @@ def _check_end_card(
             )
         )
     image = str((plan.meta or {}).get("end_card", {}).get("image") or block.get("image") or "")
-    if image:
-        resolved = resolve_episode_path(episode_dir, image)
-        if not resolved.is_file():
-            from ytp.rules import repo_root
-
-            repo_copy = repo_root() / image.replace("\\", "/")
-            if repo_copy.is_file():
-                resolved = repo_copy
-        if not resolved.is_file():
-            findings.append(
-                _warn(
-                    "end_card",
-                    "end_card_image",
-                    f"end card image is not on disk: {resolved}",
-                    last,
-                )
+    if image and find_end_card(episode_dir) is None:
+        expected = " or ".join(str(path) for path in end_card_candidates(episode_dir))
+        findings.append(
+            _warn(
+                "end_card",
+                "end_card_image",
+                f"end card image was not found; a plain card was drawn. Expected at {expected}",
+                last,
             )
+        )
     elements = list(((plan.meta or {}).get("end_card") or {}).get("elements") or [])
     for name, slot in _slots(rules, plan.width, plan.height):
         for element in elements:
