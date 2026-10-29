@@ -83,9 +83,15 @@ def extract_audio(source: Path, dest: Path, *, start: float | None, end: float |
 class FasterWhisperTranscriber(Transcriber):
     """Local CTranslate2 model. CUDA float16 on the RTX 4070 Super, int8 on CPU."""
 
-    def __init__(self, model: str = "base", device: str = "auto") -> None:
+    def __init__(
+        self,
+        model: str = "base",
+        device: str = "auto",
+        language: str = "en",
+    ) -> None:
         self.model_name = model
         self.device_request = device
+        self.forced_language = language or "en"
         self._model = None
         self.name = model
 

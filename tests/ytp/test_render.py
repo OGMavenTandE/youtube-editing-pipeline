@@ -9,7 +9,13 @@ from ytp.captions import format_srt_time, write_srt
 from ytp.ff import concat_line, escape_filter_text, has_audio, probe_duration, probe_video_size
 from ytp.hooks import STUDIO_GRAPHICS_STUB, TRACK_MIX_STUB
 from ytp.plan import Broll, CaptionCue, EditPlan, MusicCue, NarrationLine, Segment, Short
-from ytp.render import allocate_render_path, music_filtergraph, prepare_drawtext_font, render_plan
+from ytp.render import (
+    allocate_render_path,
+    music_filtergraph,
+    prepare_drawtext_font,
+    render_plan,
+    resolve_media,
+)
 
 
 def _episode(tmp_path: Path) -> tuple[Path, EditPlan]:
@@ -65,6 +71,41 @@ def _episode(tmp_path: Path) -> tuple[Path, EditPlan]:
         shorts=[Short(id="A", title="Stay low", start=0.0, end=0.4)],
     )
     return episode, plan
+
+
+def test_resolve_media_uses_the_episode_dir_not_the_cwd(tmp_path: Path, monkeypatch) -> None:
+    episode = tmp_path / "ep"
+    (episode / "frames").mkdir(parents=True)
+    (episode / "frames" / "a.png").write_bytes(b"episode")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "frames").mkdir()
+    (tmp_path / "frames" / "a.png").write_bytes(b"cwd")
+    found = resolve_media("frames/a.png", episode)
+    assert found == episode / "frames" / "a.png"
+    assert found.read_bytes() == b"episode"
+    windows = resolve_media(r"C:\AI Eval\YouTube\take.mp4", episode)
+    assert str(windows) == r"C:\AI Eval\YouTube\take.mp4"
+
+
+def test_captions_both_burns_in_and_writes_srt(tmp_path: Path, monkeypatch) -> None:
+    require_ffmpeg()
+    episode, plan = _episode(tmp_path)
+    burned: list[Path] = []
+    import ytp.render as render_mod
+
+    real_burn = render_mod._burn
+
+    def spy(video, srt, dest, encoder, preset):
+        burned.append(dest)
+        return real_burn(video, srt, dest, encoder, preset)
+
+    monkeypatch.setattr(render_mod, "_burn", spy)
+    out = episode / "renders" / "v1" / "cut.mp4"
+    result = render_plan(plan, out, episode_dir=episode, preset="ultrafast", captions="both")
+    assert burned
+    assert result.srt is not None
+    assert "Stay low." in result.srt.read_text(encoding="utf-8")
+    assert result.video.is_file()
 
 
 def test_versioned_render_folders_do_not_overwrite(tmp_path: Path) -> None:

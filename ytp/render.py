@@ -10,6 +10,7 @@ is configured. Neither hook is reimplemented here.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -51,16 +52,21 @@ def infer_episode_dir(plan_path: Path) -> Path:
     return plan_path.parent
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
 def resolve_media(value: str | None, episode_dir: Path) -> Path | None:
+    """Resolve a plan path against the episode directory.
+
+    Relative paths are never looked up in the process working directory.
+    Absolute paths, including Windows drive paths, are returned as given.
+    """
     if not value:
         return None
-    path = Path(value)
-    if path.is_file():
-        return path
-    candidate = (episode_dir / value).resolve()
-    if candidate.is_file():
-        return candidate
-    return path if path.is_absolute() else candidate
+    text = str(value)
+    if _DRIVE.match(text) or Path(text).is_absolute():
+        return Path(text)
+    return episode_dir / text.replace("\\", "/")
 
 
 def codec_args(encoder: str, preset: str) -> list[str]:
@@ -239,7 +245,7 @@ def render_plan(
         if plan.captions and mode in {"srt", "both", "burn"}:
             srt_file = work / "captions.srt"
             write_srt(plan.captions, srt_file)
-            if mode == "burn":
+            if mode in {"burn", "both"}:
                 burned = work / "burned.mp4"
                 _burn(muxed, srt_file, burned, encoder, preset)
                 muxed = burned
