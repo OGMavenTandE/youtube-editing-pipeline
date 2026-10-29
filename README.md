@@ -9,9 +9,16 @@ pip install -r requirements-ytp.txt
 python -m ytp init path/to/ep01 --series ai-survival
 python -m ytp rule list --series ai-survival
 python -m ytp rule add --series ai-survival --section edit --text "Never say \"widget\"."
+python -m ytp plan import \
+  --timeline path/to/timeline-v3d.json \
+  --concat path/to/rc8b-concat.txt \
+  --score path/to/score-cues-v3d.md \
+  --lines path/to/lines.json \
+  --out path/to/ep01/edit/plan.yaml
+python -m ytp plan validate path/to/ep01/edit/plan.yaml
 ```
 
-`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). Clip index, the edit plan, render, and the render check are the following commands in this quickstart.
+`init` creates `source/vo`, `source/raw`, `audio/voice`, `audio/mix`, `audio/score`, `frames`, `edit`, `renders`, `shorts`, `thumbs`, `text`, and `qc`. How a note from Scott becomes a rule is written up in [docs/rules.md](docs/rules.md). The cut list is documented in [docs/edit-plan.md](docs/edit-plan.md). Clip index, render, and the render check are the following commands in this quickstart.
 
 ## Webcam desk pipeline
 

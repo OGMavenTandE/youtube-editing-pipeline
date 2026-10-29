@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 
 from ytp import __version__
+from ytp.import_ep01 import import_episode
 from ytp.layout import init_episode
+from ytp.plan import load_plan, save_plan, validate_plan
 from ytp.rules import SECTIONS, add_rule, load_rules, rules_path
 
 
@@ -48,6 +50,27 @@ def _build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--section", choices=SECTIONS)
     listing.add_argument("--rules-root", type=Path, default=None)
     listing.set_defaults(func=_cmd_rule_list)
+
+    plan = sub.add_parser("plan", help="import or validate an edit plan")
+    plan_sub = plan.add_subparsers(dest="plan_command", required=True)
+
+    importer = plan_sub.add_parser(
+        "import",
+        help="build a plan from an Ep01 timeline, concat list, and score sheet",
+    )
+    importer.add_argument("--timeline", type=Path, required=True)
+    importer.add_argument("--concat", type=Path, required=True)
+    importer.add_argument("--score", type=Path, required=True)
+    importer.add_argument("--lines", type=Path, default=None)
+    importer.add_argument("--series", default="ai-survival")
+    importer.add_argument("--episode", default="ep01")
+    importer.add_argument("--title", default="How to Survive an AI Drone")
+    importer.add_argument("--out", type=Path, required=True)
+    importer.set_defaults(func=_cmd_plan_import)
+
+    checker = plan_sub.add_parser("validate", help="check a plan against the schema rules")
+    checker.add_argument("plan", type=Path)
+    checker.set_defaults(func=_cmd_plan_validate)
     return parser
 
 
@@ -62,6 +85,37 @@ def _cmd_rule_add(args: argparse.Namespace) -> int:
     root = args.rules_root
     rule = add_rule(args.series, args.section, args.text, root=root)
     print(f"added {rule.id} to {rules_path(args.series, root)}")
+    return 0
+
+
+def _cmd_plan_import(args: argparse.Namespace) -> int:
+    plan = import_episode(
+        timeline_path=args.timeline,
+        concat_path=args.concat,
+        score_path=args.score,
+        lines_path=args.lines,
+        series=args.series,
+        episode=args.episode,
+        title=args.title,
+    )
+    errors = validate_plan(plan)
+    for error in errors:
+        print(f"ytp: {error}", file=sys.stderr)
+    save_plan(plan, args.out)
+    print(f"wrote {args.out}")
+    print(
+        f"narration {len(plan.narration)}  segments {len(plan.segments)}  music {len(plan.music)}"
+    )
+    return 1 if errors else 0
+
+
+def _cmd_plan_validate(args: argparse.Namespace) -> int:
+    errors = validate_plan(load_plan(args.plan))
+    if errors:
+        for error in errors:
+            print(f"ytp: {error}", file=sys.stderr)
+        return 1
+    print(f"ok {args.plan}")
     return 0
 
 
