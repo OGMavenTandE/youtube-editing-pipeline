@@ -1160,8 +1160,8 @@ def grab_gray(path: Path, indices: list[int], width: int, height: int, tmp: Path
         str(path),
         "-vf",
         f"select='{select}',scale={width // 4}:{height // 4},format=gray",
-        "-vsync",
-        "0",
+        "-fps_mode",
+        "passthrough",
         str(tmp / "g%04d.png"),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False, **hidden_kwargs())
