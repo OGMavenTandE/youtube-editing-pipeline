@@ -82,7 +82,11 @@ SLIP = {
     "unit": "TOKENS",
     "source": "Example from a major AI lab, Nov 2025",
 }
+# A synthetic 608x918 strip (paper and ink bars), the size of Studio's tallest receipt.
+STRIP = Path(__file__).parent / "fixtures" / "receipt-strip.png"
+RECEIPT_IMAGE = {"image": str(STRIP)}
 COPY = {
+    "receipt-image": RECEIPT_IMAGE,
     "count-up": COUNT_UP,
     "kinetic": KINETIC,
     "chapter-card": CHAPTER,
@@ -144,11 +148,19 @@ def _spec(frames: list[dict], **top) -> dict:
 # --------------------------------------------------------------------------- templates
 
 
-def test_four_templates_ship():
-    assert set(list_templates()) == {"count-up", "kinetic", "chapter-card", "receipt-unroll"}
+def test_five_templates_ship():
+    assert set(list_templates()) == {
+        "count-up",
+        "kinetic",
+        "chapter-card",
+        "receipt-unroll",
+        "receipt-image",
+    }
 
 
-@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+@pytest.mark.parametrize(
+    "name", ["count-up", "kinetic", "chapter-card", "receipt-unroll", "receipt-image"]
+)
 def test_templates_carry_no_copy_or_cdn(name):
     folder = repo_root() / "templates" / "motion" / name
     html = (folder / "index.html").read_text(encoding="utf-8")
@@ -165,7 +177,9 @@ def test_templates_carry_no_copy_or_cdn(name):
         assert not motion.VENDOR_PATTERN.search(source), path
 
 
-@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+@pytest.mark.parametrize(
+    "name", ["count-up", "kinetic", "chapter-card", "receipt-unroll", "receipt-image"]
+)
 def test_template_type_meets_minimums(name):
     for role in ("label", "source", "subline", "body", "headline"):
         assert ROLE_MIN[role] >= {"label": 26, "source": 24, "subline": 40, "body": 40}.get(role, 0)
@@ -182,7 +196,9 @@ def test_template_type_meets_minimums(name):
 # --------------------------------------------------------------------------- planning and lint
 
 
-@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+@pytest.mark.parametrize(
+    "name", ["count-up", "kinetic", "chapter-card", "receipt-unroll", "receipt-image"]
+)
 @pytest.mark.parametrize("aspect", ["16x9", "9x16"])
 def test_galley_copy_plans_clean(fonts, name, aspect):
     plan = plan_motion(_job(name), aspect, fonts)
@@ -532,6 +548,7 @@ def test_short_slot_cannot_cut_the_motion_hold(tmp_path, mock_hf):
 # --------------------------------------------------------------------------- v1.1 review fixes
 
 
+# receipt-image has no label; its frame 1 is the slot and the paper lip (tested below)
 @pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
 def test_label_is_on_from_frame_one(fonts, name):
     plan = plan_motion(_job(name), "16x9", fonts)
@@ -670,7 +687,9 @@ def test_prices_and_currency_never_pass(fonts, text):
     assert any("currency" in e for e in plan_motion(card, "16x9", fonts).errors)
 
 
-@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+@pytest.mark.parametrize(
+    "name", ["count-up", "kinetic", "chapter-card", "receipt-unroll", "receipt-image"]
+)
 def test_templates_never_add_currency(fonts, name):
     folder = repo_root() / "templates" / "motion"
     for path in [*(folder / name).iterdir(), *(folder / "_shared").iterdir()]:
@@ -728,3 +747,102 @@ def test_written_duration_never_rounds_up_a_frame():
         for frames in range(1, 2000):
             written = motion.render_duration(frames, fps)
             assert math.ceil(written * fps) == frames == round(written * fps), (fps, frames)
+
+
+# --------------------------------------------------------------------------- receipt-image
+
+
+def _strip(path: Path, w: int, h: int) -> Path:
+    from PIL import Image
+
+    Image.new("RGBA", (w, h), (251, 247, 236, 255)).save(path)
+    return path
+
+
+def test_receipt_image_is_one_to_one_in_the_16x9_slice(fonts):
+    plan = plan_motion(_job("receipt-image"), "16x9", fonts)
+    assert plan.errors == [] and plan.warnings == []
+    d = plan.payload["data"]
+    assert d["image_size"] == [608, 918] and d["scale"] == 1
+    assert (d["x"], d["w"], d["h"]) == (656, 608, 918)  # exactly the slice x 656-1264
+    assert d["y"] == 72 and d["y"] + d["h"] <= 990 and d["y"] + d["lip"] > 90
+    assert d["slot_x"] >= motion.SAFE_SLICE[0] and d["slot_x"] + d["slot_w"] <= 1264
+    assert 0 < d["lip"] <= 31  # frame 1: the slot plus blank paper, above the first ink
+
+
+def test_receipt_image_fits_the_9x16_safe_area(fonts):
+    plan = plan_motion(_job("receipt-image"), "9x16", fonts)
+    assert plan.errors == []
+    d, st = plan.payload["data"], plan.stage
+    assert d["w"] <= st.w + 1e-6 and d["x"] >= st.x - 1e-6 and d["x"] + d["w"] <= st.x + st.w
+    assert d["y"] >= st.y and d["y"] + d["h"] <= st.y + st.h + 1e-6
+    assert d["scale"] == pytest.approx(st.w / 608, abs=1e-3)
+    # 40px receipt type lands at 56px or more in 9:16
+    assert 40 * d["scale"] >= 56
+
+
+def test_receipt_image_print_and_hold_timing(fonts):
+    plan = plan_motion(_job("receipt-image"), "16x9", fonts)
+    assert plan.payload["cues"]["print"] == 3.0 and plan.frames == 150
+    quick = plan_motion(_job("receipt-image", vars={"print": 2.5, "hold": 1}), "16x9", fonts)
+    assert quick.payload["cues"]["print"] == 2.5 and quick.frames == 105
+    bad = plan_motion(_job("receipt-image", vars={"print": 0.1}), "16x9", fonts)
+    assert any("out of range" in e for e in bad.errors)
+    script = (repo_root() / "templates" / "motion" / "receipt-image" / "template.js").read_text(
+        "utf-8"
+    )
+    assert "tl.set(vp, { height: d.lip }, 0)" in script  # paper on screen from frame 1
+    assert 'ease: "none"' in script  # steady feed
+
+
+def test_receipt_image_never_grows_past_the_slice(tmp_path, fonts):
+    wide = _strip(tmp_path / "wide.png", 800, 1200)
+    plan = plan_motion(_job("receipt-image", vars={"image": str(wide)}), "16x9", fonts)
+    d = plan.payload["data"]
+    assert d["w"] <= 608 and d["h"] <= 960 and any("shrunk" in w for w in plan.warnings)
+    small = _strip(tmp_path / "small.png", 400, 300)
+    plan = plan_motion(_job("receipt-image", vars={"image": str(small)}), "16x9", fonts)
+    assert plan.payload["data"]["scale"] == 1  # 16:9 never enlarges the art
+
+
+def test_receipt_image_missing_or_not_png(tmp_path, fonts):
+    plan = plan_motion(
+        _job("receipt-image", vars={"image": str(tmp_path / "no.png")}), "16x9", fonts
+    )
+    assert any("not found" in e for e in plan.errors)
+    fake = tmp_path / "fake.png"
+    fake.write_text("not a png", encoding="utf-8")
+    plan = plan_motion(_job("receipt-image", vars={"image": str(fake)}), "16x9", fonts)
+    assert any("not a PNG" in e for e in plan.errors)
+
+
+def test_receipt_image_path_is_not_screen_copy(tmp_path, fonts):
+    # The path has digits but never shows, so no source line is needed; lint is unchanged.
+    art = tmp_path / "Ep02 v4" / "R5-final 2,000.png"
+    art.parent.mkdir()
+    shutil.copy(STRIP, art)
+    plan = plan_motion(_job("receipt-image", vars={"image": str(art)}), "16x9", fonts)
+    assert plan.errors == []
+
+
+def test_receipt_image_renders_from_the_episode_folder(tmp_path, mock_hf):
+    require_ffmpeg()
+    episode = tmp_path / "ep"
+    (episode / "art").mkdir(parents=True)
+    shutil.copy(STRIP, episode / "art" / "R5-final.png")
+    frame = {
+        "id": "r5",
+        "kind": "motion",
+        "template": "receipt-image",
+        "start": 0,
+        "vars": {"image": "art/R5-final.png", "print": 3.0},
+    }
+    run = run_motion(_write_spec(episode, [frame]), aspect="both")
+    assert {r.aspect for r in run.results} == {"16x9", "9x16"}
+    for result in run.results:
+        assert result.path.with_suffix(".last.png").is_file()
+    project = episode / ".ytp-motion" / "r5-16x9"
+    assert (project / "assets" / "receipt.png").read_bytes() == STRIP.read_bytes()
+    assert 'src="assets/receipt.png"' in (project / "index.html").read_text(encoding="utf-8")
+    plan = json.loads((project / "ytp-plan.json").read_text(encoding="utf-8"))
+    assert len(plan["data"]["image_sha256"]) == 64  # new art, new hash, new render
