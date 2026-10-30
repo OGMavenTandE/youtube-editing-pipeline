@@ -560,11 +560,81 @@ def _picture(
     return picture
 
 
+MOTION_OVERSAMPLE = 4
+
+
+def motion_filter(
+    motion: dict,
+    width: int,
+    height: int,
+    fps: int,
+    duration: float,
+    oversample: int = MOTION_OVERSAMPLE,
+) -> str:
+    """Ken Burns for one still: zoom from a to b and drift toward one edge.
+
+    zoompan rounds its crop to whole input pixels, which shudders at 1x. The
+    still is scaled up ``oversample`` times first, so each step is a fraction of
+    an output pixel. Zoom is linear per output frame. Pan moves the view from
+    the center toward the named edge, using the room the zoom opens up.
+    """
+    zoom = motion.get("zoom") or [1.0, 1.08]
+    z0, z1 = float(zoom[0]), float(zoom[1])
+    pan = str(motion.get("pan") or "none")
+    frames = max(1, round(duration * fps))
+    last = max(1, frames - 1)
+    progress = f"(on/{last})"
+    z = f"{z0:g}+({z1 - z0:g})*{progress}"
+    free_x = "(iw-iw/zoom)"
+    free_y = "(ih-ih/zoom)"
+    x = f"{free_x}/2"
+    y = f"{free_y}/2"
+    if pan == "right":
+        x = f"{free_x}*(0.5+0.5*{progress})"
+    elif pan == "left":
+        x = f"{free_x}*(0.5-0.5*{progress})"
+    elif pan == "down":
+        y = f"{free_y}*(0.5+0.5*{progress})"
+    elif pan == "up":
+        y = f"{free_y}*(0.5-0.5*{progress})"
+    big_w, big_h = width * oversample, height * oversample
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"scale={big_w}:{big_h}:flags=lanczos,"
+        f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={fps},"
+        "format=yuv420p"
+    )
+
+
 def _encode_segment(source, part, segment, plan, encoder, preset) -> None:
     scale = (
         f"scale={plan.width}:{plan.height}:force_original_aspect_ratio=decrease,"
         f"pad={plan.width}:{plan.height}:(ow-iw)/2:(oh-ih)/2:color=black,format=yuv420p"
     )
+    if segment.kind == "still" and getattr(segment, "motion", None):
+        vf = motion_filter(segment.motion, plan.width, plan.height, plan.fps, segment.duration)
+        run_ffmpeg(
+            [
+                "-y",
+                "-framerate",
+                str(plan.fps),
+                "-i",
+                str(source),
+                "-vf",
+                vf,
+                "-t",
+                f"{segment.duration:.3f}",
+                "-r",
+                str(plan.fps),
+                "-fps_mode",
+                "cfr",
+                "-an",
+                *codec_args(encoder, preset),
+                str(part),
+            ]
+        )
+        return
     if segment.kind == "still" or source.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
         run_ffmpeg(
             [

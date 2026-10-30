@@ -84,6 +84,17 @@ FAIL https://x.com/someone/status/123 login required; needs a public post; log C
 
 The duration (`m:ss` or `h:mm:ss`) is always the last token, so a path with spaces still parses. `--summary-lines N` prints the first N transcript lines after each `OK` line. When parsing, any stdout line that does not start with `OK ` or `FAIL ` is transcript text from the `OK` line above it. `--from-file` reads one link or path per line (blank lines and `#` comments are skipped) and can be combined with links on the command line. One failed link does not stop the rest; the exit code is 0 when every input worked and 1 when any failed. X changes often; if X links start failing, run `& "C:\AI Eval\YouTube\ytp\.venv\Scripts\python.exe" -m pip install --upgrade yt-dlp`.
 
+### Scene frames (`ytp scenes`)
+
+Studio's art plus a short spec file become finished 1920x1080 frames in Ep01's look (plate, art layers, big word, caption pill, red tags, strikethrough, source line, count-up clips), and the matching plan segments:
+
+```powershell
+python -m ytp scenes "C:\AI Eval\YouTube\ep02\edit\scenes.yaml" --plan
+python -m ytp finish "C:\AI Eval\YouTube\ep02"
+```
+
+Frames go to `<episode>\frames`. Without `--plan` the segments go to `frames\scenes-plan.yaml` for review. `--safe-guides` writes debug copies with the 9:16 Shorts slice outlined, and the run warns when the big word or a host layer falls outside it. A frame's `motion: {zoom: 1.0->1.08, pan: left}` makes `ytp render` add a slow Ken Burns move to that still (off by default). Art stays on the PC (`asset_dirs`, `YTP_SCENE_ASSETS`, or `C:\AI Eval\YouTube\assets\scenes`), and Inter must be installed (or set `YTP_SCENE_FONT`). Format and a full example: [docs/scene-spec.md](docs/scene-spec.md).
+
 ### Full pass on an existing episode folder
 
 Put the voice, mix, and score under `audio/`, stills under `frames/`, and raw clips under `source/`. `init` only adds folders; it does not move or delete media. From the repo:
