@@ -56,6 +56,9 @@ by name under `palettes:`.
 
 ## Frames
 
+Animated frames (`kind: motion`: count-up, kinetic type, chapter cards,
+receipt) render through HyperFrames; see [motion.md](motion.md).
+
 ```yaml
 frames:
   - id: "02"                 # quote ids so YAML keeps leading zeros

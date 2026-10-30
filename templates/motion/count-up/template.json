@@ -1,0 +1,27 @@
+{
+  "name": "count-up",
+  "description": "Cost before/after: two bars count up. The after row stays hidden until the before number lands.",
+  "figures": true,
+  "vars": {
+    "label": {"type": "text", "required": true, "role": "label"},
+    "title": {"type": "text", "required": true, "role": "headline", "note": "one *amber* word"},
+    "before_label": {"type": "text", "required": true, "role": "label"},
+    "after_label": {"type": "text", "required": true, "role": "label"},
+    "before": {"type": "number", "required": true, "role": "figure"},
+    "after": {"type": "number", "required": true, "role": "figure"},
+    "unit": {"type": "text", "required": true, "role": "figure"},
+    "decimals": {"type": "number", "required": false, "role": "figure"},
+    "tag": {"type": "text", "required": false, "role": "body"},
+    "source": {"type": "text", "required": true, "role": "source"}
+  },
+  "elements": {
+    "label": {"role": "label", "font": "sans", "weight": 600, "size": [26, 28], "tracking": 0.16, "upper": true, "max_lines": 2},
+    "title": {"role": "headline", "font": "display", "weight": 500, "size": [56, 76], "max_lines": 3},
+    "before_label": {"role": "label", "font": "sans", "weight": 600, "size": [26, 26], "tracking": 0.12, "upper": true, "max_lines": 3},
+    "after_label": {"role": "label", "font": "sans", "weight": 600, "size": [26, 26], "tracking": 0.12, "upper": true, "max_lines": 3},
+    "before_num": {"role": "figure", "font": "sans", "weight": 600, "size": [40, 46], "max_lines": 1, "wide": 1.2},
+    "after_num": {"role": "figure", "font": "sans", "weight": 600, "size": [40, 46], "max_lines": 1, "wide": 1.2},
+    "tag": {"role": "body", "font": "sans", "weight": 500, "size": [40, 44], "max_lines": 2, "wide": 1.1},
+    "source": {"role": "source", "font": "sans", "weight": 400, "size": [24, 26], "opacity": 0.7, "max_lines": 2, "wide": 1.0}
+  }
+}
