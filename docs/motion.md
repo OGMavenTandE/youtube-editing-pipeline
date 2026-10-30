@@ -1,7 +1,7 @@
 # Motion clips (`ytp motion`)
 
 `kind: motion` frames in a scene spec are short animated clips (count-up bars,
-kinetic type, chapter cards, a receipt) rendered with the HyperFrames CLI from
+kinetic type, chapter cards, a receipt, a receipt image) rendered with the HyperFrames CLI from
 the templates in `templates/motion/`. Each one becomes a `kind: clip` segment in
 the edit plan, so `ytp render` cuts it in like any other clip.
 
@@ -209,6 +209,46 @@ warns if amounts don't add up to the total.
 | `total_label`, `total`, `unit` | e.g. `TOTAL:`, `150000`, `TOKENS` |
 | `decimals` | optional |
 | `source` | required |
+
+### `receipt-image`
+
+Studio's finished receipt art (a PNG strip) prints in from a fixed top edge, then
+holds; hard cut. The image is the art: it is never redrawn, recolored or cropped,
+only revealed. A dark slot sits at the top edge, and on frame 1 the slot plus a
+24px lip of blank paper (above the first ink) is already on screen. The paper
+then feeds down at a steady speed for `print` seconds over the house ink and
+grain, and holds for `hold` seconds.
+
+* 16:9: drawn 1:1, centred on the Shorts slice (a 608px strip fills x 656-1264),
+  hanging from y 60 (Studio's spec). Never enlarged; a strip wider than 608px or
+  taller than 960px is shrunk to fit, with a warning.
+* 9:16: one scale that fits the safe area (x 90-990, y 200-1720). A 608px strip
+  is scaled to 900px (1.48x), so 40px receipt type lands at about 59px. The art
+  is upscaled by the browser; for the sharpest 9:16, Studio can supply a 2x strip.
+* The path and timings never reach the screen, so the copy lint (currency,
+  vendors, placeholders) has nothing to check: Studio's art carries its own copy.
+* A new image (by content) changes the hash and renders again.
+
+| Var | |
+|---|---|
+| `image` | PNG, absolute or relative to the episode folder |
+| `print` | optional, seconds to print in (default 3.0, 0.5 to 10) |
+| `hold` | optional, seconds held after the print (default 2.0) |
+
+Ep02 v4 (Studio's six strips from `ep02/v4/receipts/strips/`, copied into the
+episode's `art\receipts\` folder):
+
+```yaml
+frames:
+  - {id: m-r0-open,  kind: motion, template: receipt-image, start: 0,  vars: {image: art/receipts/R0-open.png}}
+  - {id: m-r1-step1, kind: motion, template: receipt-image, start: 8,  vars: {image: art/receipts/R1-step1.png}}
+  - {id: m-r2-step2, kind: motion, template: receipt-image, start: 16, vars: {image: art/receipts/R2-step2.png}}
+  - {id: m-r3-step3, kind: motion, template: receipt-image, start: 24, vars: {image: art/receipts/R3-step3.png}}
+  - {id: m-r4-step4, kind: motion, template: receipt-image, start: 32, vars: {image: art/receipts/R4-step4.png, hold: 1.0}}
+  - {id: m-r5-final, kind: motion, template: receipt-image, start: 40, vars: {image: art/receipts/R5-final.png}}
+```
+
+Studio's spec holds R4 for 1 s and R5 for 2 s; set `start` from the script lines.
 
 ## Ep02 example (Galley v2 copy)
 

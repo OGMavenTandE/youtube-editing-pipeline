@@ -471,6 +471,8 @@ class MotionJob:
     episode: int | None = None
     # "aspect/layout" -> element -> largest size, so a set of cards shares one size
     caps: dict[str, dict[str, float]] = field(default_factory=dict)
+    # the episode folder: relative file vars (receipt-image's image) resolve here
+    base: Path | None = None
 
 
 @dataclass
@@ -554,8 +556,8 @@ class Planner:
         out = []
         for name, rule in schema.items():
             value = self.vars.get(name)
-            if value is None:
-                continue
+            if value is None or rule.get("visible") is False:
+                continue  # file paths and timings never reach the screen
             role = rule.get("role", "body")
             if isinstance(value, list):
                 for item in value:
@@ -1024,6 +1026,87 @@ def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
     return data, cues, land + p.hold(words)
 
 
+RECEIPT_IMAGE_TOP = 60  # Studio's receipts hang from y 60 in the 16:9 frame
+RECEIPT_IMAGE_LIP = 24  # image px of blank paper out of the slot on frame 1 (above the ink)
+
+
+def png_size(path: Path) -> tuple[int, int]:
+    """Width and height from a PNG header (no Pillow needed)."""
+    with open(path, "rb") as fh:
+        head = fh.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        raise MotionError(f"{path} is not a PNG")
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+
+def image_path(job: MotionJob, value: Any) -> Path:
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute() and job.base is not None:
+        path = job.base / path
+    return path
+
+
+def _plan_receipt_image(p: Planner) -> tuple[dict, dict, float]:
+    """Studio's finished receipt prints in from a fixed top edge, then holds. The image
+    is the art: shown 1:1 in 16:9 (the strip is the 608px Shorts slice), and in 9:16 at
+    one scale that fits the safe area. Never wider than the slice or the safe area."""
+    v = p.vars
+    s = p.stage
+    path = image_path(p.job, v["image"])
+    if not path.is_file():
+        p.errors.append(f"image {path} not found")
+        return {}, {}, 0.0
+    try:
+        iw, ih = png_size(path)
+    except MotionError as exc:
+        p.errors.append(str(exc))
+        return {}, {}, 0.0
+    print_s = float(v.get("print") if v.get("print") not in (None, "") else 3.0)
+    hold_s = float(v.get("hold") if v.get("hold") not in (None, "") else 2.0)
+    if not 0.5 <= print_s <= 10:
+        p.errors.append(f"print {print_s}s is out of range (0.5 to 10 s)")
+    if hold_s < 0:
+        p.errors.append("hold must be 0 or more seconds")
+    slot_h = round(10 * s.scale)
+    if s.aspect == "16x9":
+        left, right = SAFE_SLICE
+        top = RECEIPT_IMAGE_TOP
+        max_w = right - left
+        max_h = s.height - 2 * top
+    else:
+        top = s.y + slot_h
+        max_w, max_h = s.w, s.h - slot_h
+    scale = min(max_w / iw, max_h / ih)
+    if s.aspect == "16x9":
+        scale = min(1.0, scale)  # never enlarged in 16:9; the strip is drawn at size
+    if scale < 1.0 - 1e-6 and s.aspect == "16x9":
+        p.warnings.append(
+            f"image {iw}x{ih} is shrunk to {scale:.0%} to fit the safe slice "
+            f"({max_w}x{max_h}); Studio's strips are 608 wide and at most {max_h} tall"
+        )
+    w, h = round(iw * scale, 1), round(ih * scale, 1)
+    x = round((s.width - w) / 2, 1)
+    lip = round(min(h, RECEIPT_IMAGE_LIP * scale), 1)
+    slot_w = w if s.aspect == "16x9" else round(w + 24 * s.scale, 1)
+    data = {
+        "image": path.name,
+        "image_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "image_size": [iw, ih],
+        "scale": round(scale, 4),
+        "x": x,
+        "y": top,
+        "w": w,
+        "h": h,
+        "lip": lip,
+        "slot_x": round((s.width - slot_w) / 2, 1),
+        "slot_y": top - slot_h,
+        "slot_w": slot_w,
+        "slot_h": slot_h,
+    }
+    cues = {"print": round(print_s, 3), "land": round(print_s, 3)}
+    return data, cues, print_s + hold_s
+
+
 def _refit(
     p: Planner,
     spec_name: str,
@@ -1043,6 +1126,7 @@ PLANNERS = {
     "kinetic": _plan_kinetic,
     "chapter-card": _plan_chapter_card,
     "receipt-unroll": _plan_receipt,
+    "receipt-image": _plan_receipt_image,
 }
 
 
@@ -1130,6 +1214,8 @@ def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> 
     shared = templates_dir() / "_shared"
     for face in sorted(FACES):
         shutil.copy2(fonts.path(face), work / "assets" / "fonts" / fonts.path(face).name)
+    if plan.job.template == "receipt-image":
+        shutil.copy2(image_path(plan.job, plan.job.vars["image"]), work / "assets" / "receipt.png")
     shutil.copy2(gsap, work / "assets" / "gsap.min.js")
     shutil.copy2(shared / "house.js", work / "assets" / "house.js")
     shutil.copy2(tdir / "template.js", work / "assets" / "template.js")
@@ -1542,6 +1628,9 @@ def last_frame_png(clip: Path, dest: Path) -> Path:
 
 
 def job_for(frame, spec, caps: dict[str, dict[str, dict[str, float]]] | None = None) -> MotionJob:
+    from ytp import scenes
+
+    base = scenes.episode_for(spec.path) if getattr(spec, "path", None) else None
     return MotionJob(
         id=frame.id,
         template=frame.template,
@@ -1552,6 +1641,7 @@ def job_for(frame, spec, caps: dict[str, dict[str, dict[str, float]]] | None = N
         series=spec.series,
         episode=spec.episode,
         caps=dict((caps or {}).get(frame.template) or {}),
+        base=base,
     )
 
 

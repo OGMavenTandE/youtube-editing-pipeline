@@ -1,0 +1,11 @@
+{
+  "name": "receipt-image",
+  "description": "A finished receipt image (Studio's art, PNG) prints in from a fixed top edge over about 3 s, then holds. The image is shown as drawn: never recolored, cropped or scaled past the safe area.",
+  "figures": false,
+  "vars": {
+    "image": {"type": "file", "required": true, "visible": false, "note": "PNG, absolute or relative to the episode folder"},
+    "print": {"type": "number", "required": false, "visible": false, "note": "seconds to print in, default 3.0"},
+    "hold": {"type": "number", "required": false, "visible": false, "note": "seconds to hold after the print, default 2.0"}
+  },
+  "elements": {}
+}
