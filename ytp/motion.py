@@ -423,6 +423,36 @@ def fmt_number(value: float, decimals: int = 0) -> str:
     return f"{value:,.{decimals}f}"
 
 
+EASES = {
+    "power1.out": lambda q: 1 - (1 - q),
+    "power2.out": lambda q: 1 - (1 - q) ** 2,
+}
+
+
+def count_value(a: float, b: float, t0: float, t1: float, t: float, ease: str) -> float:
+    """What the count shows at time t (GSAP's tween, same ease)."""
+    if t <= t0:
+        return a
+    q = min(1.0, (t - t0) / max(1e-9, t1 - t0))
+    return a + (b - a) * EASES[ease](q)
+
+
+def count_show(
+    a: float, b: float, t0: float, t1: float, fps: int, decimals: int, ease: str = "power2.out"
+) -> float:
+    """When a counting number appears: a quarter frame before the first rendered frame
+    whose value differs from the start. The start value ("0 tokens") never shows, not even
+    for one frame; the count appears already moving."""
+    start = fmt_number(a, decimals)
+    n = math.floor(t0 * fps)
+    while n / fps <= t1 + 1.0 / fps:
+        t = n / fps
+        if t > t0 + 1e-9 and fmt_number(count_value(a, b, t0, t1, t, ease), decimals) != start:
+            return round(t - 0.25 / fps, 4)
+        n += 1
+    return round(t0, 4)
+
+
 # --------------------------------------------------------------------------- planning
 
 
@@ -769,6 +799,8 @@ def _plan_count_up(p: Planner) -> tuple[dict, dict, float]:
         "before_count": [1.0, 2.6],
         "after_row": 2.7,
         "after_count": [3.0, 4.0],
+        "before_show": count_show(0, rows[0]["value"], 1.0, 2.6, p.job.fps, decimals),
+        "after_show": count_show(0, rows[1]["value"], 3.0, 4.0, p.job.fps, decimals),
         "tag": 4.15 if tag else None,
     }
     land = 4.5 if tag else 4.0
@@ -952,9 +984,13 @@ def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
     first = 0.6
     item_cues = []
     for i, item in enumerate(items):
-        item_cues.append(
-            {"t": round(first + i * step, 3), "paper_h": round(item["y"] + item["h"] + pad, 1)}
-        )
+        t = round(first + i * step, 3)
+        cue = {"t": t, "paper_h": round(item["y"] + item["h"] + pad, 1)}
+        if item["amount"] is not None:
+            cue["show"] = count_show(
+                0, item["amount"], t + 0.05, t + 0.35, p.job.fps, decimals, "power1.out"
+            )
+        item_cues.append(cue)
     total_t = first + len(items) * step + 0.15
     cues = {
         "label": 0.0,

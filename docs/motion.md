@@ -136,7 +136,9 @@ Timing and frames (checked on the render):
   before. The render check fails a clip whose first frame has under 40 lit pixels
   (brighter than ink by 40) in the type area.
 * Frame 0 is ink plus grain, never black.
-* A number is hidden until its count starts (no "0 tokens" waiting on screen).
+* A number is hidden until its count is already past the start value: the planner
+  sets a `*_show` cue a quarter frame before the first frame whose value is non-zero,
+  so "0 tokens" never shows, not even for one frame (the tests walk every frame).
 * The last line holds max(1.5 s, 0.3 s per word), then hard-cuts. No fade.
 * The first and last frames are compared with the ink (not black); the last
   frame must still show type and must not be darker than 1.4 s earlier.
@@ -229,7 +231,7 @@ frames:
         - "Reread policy binder, 40 pages"
         - "Reread policy binder, again"
         - "Read all 10,000 rows"
-        - "Same instructions, again"
+        - "Instructions, again"
         - "Big model, easy question"
       total_label: "TOTAL:"
       total: 150000
@@ -267,6 +269,7 @@ frames:
     template: receipt-unroll
     start: 36
     vars:
+      header: "SANDWICH STAND, NEW BILL"   # on screen from frame 1
       lines: ["Read 5 rows"]
       total_label: "TOTAL:"
       total: 2000
@@ -279,7 +282,7 @@ frames:
   - {id: m-ch4, kind: motion, template: chapter-card, start: 80, vars: {title: "The trick: Have the AI *write* the code"}}
   - {id: m-ch5, kind: motion, template: chapter-card, start: 88, vars: {title: "Step four: *Right-size* the model"}}
   - {id: m-ch6, kind: motion, template: chapter-card, start: 96, vars: {title: "*Test* it before it replaces anything"}}
-  - {id: m-ch7, kind: motion, template: chapter-card, start: 104, vars: {title: "Where to start *this week*"}}
+  - {id: m-ch7, kind: motion, template: chapter-card, start: 104, vars: {title: "Where to *start* this week"}}
 ```
 
 Notes on the Galley copy:

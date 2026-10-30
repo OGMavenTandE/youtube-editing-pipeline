@@ -66,7 +66,7 @@ RECEIPT = {
         "Reread policy binder, 40 pages",
         "Reread policy binder, again",
         "Read all 10,000 rows",
-        "Same instructions, again",
+        "Instructions, again",
         "Big model, easy question",
     ],
     "total_label": "TOTAL:",
@@ -75,6 +75,7 @@ RECEIPT = {
     "source": "Example from a major AI lab, Nov 2025",
 }
 SLIP = {
+    "header": "SANDWICH STAND, NEW BILL",
     "lines": ["Read 5 rows"],
     "total_label": "TOTAL:",
     "total": 2000,
@@ -546,7 +547,56 @@ def test_counts_stay_hidden_until_they_run():
     house = (repo_root() / "templates" / "motion" / "_shared" / "house.js").read_text("utf-8")
     body = house.split("H.count = function", 1)[1].split("H.finish", 1)[0]
     assert "tl.set(node, { opacity: 0 }, 0)" in body
-    assert "tl.set(node, { opacity: 1 }, t0)" in body
+    assert "show === undefined ? t0 + 1 / Y.fps : show" in body
+    script = (repo_root() / "templates" / "motion" / "count-up" / "template.js").read_text("utf-8")
+    assert "c.before_show" in script and "c.after_show" in script
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_no_frame_ever_shows_a_zero_count(fonts, aspect):
+    """Frame-exact: walk every rendered frame time. A number is on screen from its show
+    cue on, and on every one of those frames its value must already be past 0."""
+    plan = plan_motion(_job("count-up"), aspect, fonts)
+    cues, fps = plan.payload["cues"], plan.job.fps
+    rows = {r["key"]: r["value"] for r in plan.payload["data"]["rows"]}
+    for key in ("before", "after"):
+        t0, t1 = cues[f"{key}_count"]
+        show = cues[f"{key}_show"]
+        visible = [n for n in range(plan.frames) if n / fps >= show]
+        assert visible, key
+        first = visible[0]
+        # the cue sits strictly inside the frame gap, so float seek can't slip a frame
+        assert (first - 1) / fps + 0.1 / fps < show < first / fps - 0.1 / fps
+        for n in visible:
+            value = motion.count_value(0, rows[key], t0, t1, n / fps, "power2.out")
+            assert motion.fmt_number(value) != "0", (key, n)
+        assert first / fps > t0  # never the t0 frame itself, where the value is exactly 0
+    # Studio's frames: before showed 0 at f031 (t 1.00 s), after at f091 (t 3.00 s)
+    assert cues["before_show"] > 30 / fps and cues["after_show"] > 90 / fps
+
+
+def test_count_show_catches_a_single_zero_frame():
+    # a slow count whose first two frames after t0 still round to 0
+    show = motion.count_show(0, 40, 1.0, 10.0, 30, 0, "power1.out")
+    first = math.ceil(show * 30)
+    assert motion.fmt_number(motion.count_value(0, 40, 1.0, 10.0, first / 30, "power1.out")) != "0"
+    before = motion.count_value(0, 40, 1.0, 10.0, (first - 1) / 30, "power1.out")
+    assert motion.fmt_number(before) == "0"
+
+
+def test_receipt_amounts_wait_for_their_count(fonts):
+    lines = [{"label": "Reread binder", "amount": 148000}, {"label": "Read 5 rows", "amount": 2000}]
+    plan = plan_motion(_job("receipt-unroll", vars={"lines": lines}), "16x9", fonts)
+    for cue, item in zip(plan.payload["cues"]["items"], plan.payload["data"]["items"]):
+        t0 = cue["t"] + 0.05
+        assert cue["show"] > t0
+        n = math.ceil(cue["show"] * 30)
+        value = motion.count_value(0, item["amount"], t0, t0 + 0.3, n / 30, "power1.out")
+        assert motion.fmt_number(value) != "0"
+    script = (repo_root() / "templates" / "motion" / "receipt-unroll" / "template.js").read_text(
+        "utf-8"
+    )
+    assert "cue.show" in script and "nodes.push(amt)" not in script
 
 
 def _receipt_on_screen(plan) -> None:

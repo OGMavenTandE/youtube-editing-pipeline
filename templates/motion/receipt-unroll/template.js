@@ -46,9 +46,9 @@
     var nodes = [put("rc-item", E["item" + i], item.y, "left")];
     tl.to(vp, { height: cue.paper_h, duration: 0.25, ease: "power2.out" }, cue.t);
     if (item.amount !== null) {
+      // The amount is not in the fade: H.count keeps it hidden until it is past 0.
       var amt = put("rc-amount", E["amount" + i], item.y, "right");
-      nodes.push(amt);
-      H.count(amt, 0, item.amount, cue.t + 0.05, cue.t + 0.35, format, "power1.out");
+      H.count(amt, 0, item.amount, cue.t + 0.05, cue.t + 0.35, format, "power1.out", cue.show);
     }
     tl.fromTo(nodes, { opacity: 0, y: -8 }, { opacity: 1, y: 0, duration: 0.2, ease: "power2.out" }, cue.t + 0.05);
   });
