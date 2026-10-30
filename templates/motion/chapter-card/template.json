@@ -1,0 +1,17 @@
+{
+  "name": "chapter-card",
+  "description": "Chapter card: series and episode label (from the scenes file), an amber rule, a Fraunces title with one amber word.",
+  "figures": false,
+  "vars": {
+    "label": {"type": "text", "required": true, "role": "label", "auto": "series", "note": "defaults to SERIES \u00b7 EP NN from the scenes file's series and episode"},
+    "title": {"type": "text", "required": true, "role": "headline", "note": "one *amber* word"},
+    "subline": {"type": "text", "required": false, "role": "subline"},
+    "source": {"type": "text", "required": false, "role": "source"}
+  },
+  "elements": {
+    "label": {"role": "label", "font": "sans", "weight": 600, "size": [26, 30], "tracking": 0.2, "upper": true, "max_lines": 1},
+    "title": {"role": "headline", "font": "display", "weight": 500, "size": [64, 100], "max_lines": 3, "wide": 1.25},
+    "subline": {"role": "subline", "font": "sans", "weight": 400, "size": [40, 46], "max_lines": 3, "wide": 1.15},
+    "source": {"role": "source", "font": "sans", "weight": 400, "size": [24, 26], "opacity": 0.7, "max_lines": 2, "wide": 1.0}
+  }
+}

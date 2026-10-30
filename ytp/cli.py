@@ -282,10 +282,63 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also write debug copies with the 9:16 safe area to <out>/guides/",
     )
+    scenes.add_argument("--no-clips", action="store_true", help="skip count-up clips (stills only)")
     scenes.add_argument(
-        "--no-clips", action="store_true", help="skip count-up clips (stills only)"
+        "--no-motion",
+        action="store_true",
+        help="don't render kind: motion clips; use cached ones (run ytp motion first)",
+    )
+    scenes.add_argument(
+        "--allow-placeholder",
+        action="store_true",
+        help="let motion frames with placeholder or sample copy render (test renders only)",
     )
     scenes.set_defaults(func=_cmd_scenes)
+
+    motion = sub.add_parser(
+        "motion",
+        help="render the kind: motion frames of a scene spec through HyperFrames",
+        description=(
+            "Lint, render (NVENC with --gpu, x264 fallback) and check each kind: motion "
+            "frame, cached under <episode>/clips/motion/. Writes their clip segments to "
+            "clips/motion/motion-plan.yaml, or merges them into the plan with --plan. "
+            "See docs/motion.md."
+        ),
+    )
+    motion.add_argument("spec", type=Path, help="scene spec (.yaml or .json)")
+    motion.add_argument(
+        "--episode", type=Path, default=None, help="episode folder (default: like ytp scenes)"
+    )
+    motion.add_argument(
+        "--only", action="append", default=None, help="only this frame id (repeatable)"
+    )
+    motion.add_argument(
+        "--aspect",
+        choices=["16x9", "9x16", "both"],
+        default="16x9",
+        help="16x9 for the episode, 9x16 for Shorts (its own layout), or both",
+    )
+    motion.add_argument(
+        "--plan",
+        nargs="?",
+        type=Path,
+        const=Path("__episode_plan__"),
+        default=None,
+        help="merge the 16x9 clip segments into this plan (default edit/plan.yaml)",
+    )
+    motion.add_argument(
+        "--allow-placeholder",
+        action="store_true",
+        help="render placeholder or sample copy anyway (test renders, never the episode)",
+    )
+    motion.add_argument("--force", action="store_true", help="re-render even when cached")
+    motion.add_argument("--no-gpu", action="store_true", help="x264 only, skip NVENC")
+    motion.add_argument(
+        "--lint-only",
+        action="store_true",
+        help="plan, lint and build the HyperFrames projects, then run hyperframes lint; no render",
+    )
+    motion.set_defaults(func=_cmd_motion)
 
     art = sub.add_parser(
         "art",
@@ -606,6 +659,30 @@ def _cmd_scenes(args: argparse.Namespace) -> int:
         only=args.only,
         safe_guides=args.safe_guides,
         clips=not args.no_clips,
+        motion=not args.no_motion,
+        allow_placeholder=args.allow_placeholder,
+    )
+    return 0
+
+
+def _cmd_motion(args: argparse.Namespace) -> int:
+    from ytp.motion import run_motion
+    from ytp.scenes import episode_for
+
+    episode = args.episode or episode_for(args.spec)
+    plan_path = args.plan
+    if plan_path is not None and plan_path == Path("__episode_plan__"):
+        plan_path = episode / "edit" / "plan.yaml"
+    run_motion(
+        args.spec,
+        episode_dir=episode,
+        only=args.only,
+        aspect=args.aspect,
+        allow_placeholder=args.allow_placeholder,
+        plan_path=plan_path,
+        force=args.force,
+        gpu=not args.no_gpu,
+        lint_only=args.lint_only,
     )
     return 0
 

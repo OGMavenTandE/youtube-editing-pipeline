@@ -1,0 +1,17 @@
+/* House look for ytp motion templates: ink, grain, Fraunces + IBM Plex. */
+html, body { margin: 0; padding: 0; background: #0f1115; }
+.ytp-root {
+  position: relative; overflow: hidden; color: #ECE7DD;
+  background: radial-gradient(ellipse 62% 58% at 50% 46%, #171b22 0%, #0f1115 74%);
+}
+.ytp-grain {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0.07; mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+.ytp-stage { position: absolute; display: flex; flex-direction: column; justify-content: center; }
+.ytp-text { margin: 0; font-optical-sizing: auto; font-kerning: normal; }
+.ytp-text .l { display: block; white-space: nowrap; }
+.ytp-text em { font-style: italic; color: #E8A33D; }
+.ytp-label { color: #B8B2A7; text-transform: uppercase; }
+.ytp-preload { position: absolute; left: -9999px; top: 0; opacity: 0; }
+.ytp-source { position: absolute; left: 0; bottom: 0; }

@@ -1,0 +1,16 @@
+#label { margin-bottom: 0.7em; }
+#title { margin-bottom: 44px; }
+.ytp-9x16 #title { margin-bottom: 72px; }
+.cu-rows { display: flex; flex-direction: column; gap: 34px; }
+.ytp-9x16 .cu-rows { gap: 56px; }
+.cu-row .ytp-label { margin-bottom: 12px; }
+.cu-track { position: relative; width: 100%; background: rgba(255, 255, 255, 0.06); border-radius: 4px; overflow: hidden; }
+.cu-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 4px; }
+.cu-before .cu-fill { background: #5B6472; }
+.cu-after .cu-fill { background: #E8A33D; }
+.cu-num { position: absolute; top: 50%; transform: translateY(-50%); white-space: nowrap; }
+.cu-before .cu-num { color: #FFFFFF; }
+.cu-after .cu-num.out { color: #E8A33D; }
+.cu-after .cu-num.in { color: #0f1115; }
+#tag { margin-top: 40px; }
+.ytp-9x16 #tag { margin-top: 64px; }

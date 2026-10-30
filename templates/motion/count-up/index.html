@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width={{WIDTH}}, height={{HEIGHT}}">
+{{YTP_HEAD}}
+</head>
+<body>
+<div id="root" class="ytp-root ytp-{{ASPECT}} ytp-{{LAYOUT}}" data-composition-id="{{COMPOSITION_ID}}" data-start="0" data-duration="{{DURATION}}" data-width="{{WIDTH}}" data-height="{{HEIGHT}}" data-fps="{{FPS}}" style="width:{{WIDTH}}px;height:{{HEIGHT}}px">
+  <div class="ytp-grain"></div>
+  <div id="stage" class="ytp-stage cu">
+    <div id="label" class="ytp-label"></div>
+    <div id="title"></div>
+    <div class="cu-rows">
+      <div id="row-before" class="cu-row cu-before">
+        <div id="before_label" class="ytp-label"></div>
+        <div class="cu-track"><div class="cu-fill"></div><div id="before_num" class="cu-num"></div></div>
+      </div>
+      <div id="row-after" class="cu-row cu-after">
+        <div id="after_label" class="ytp-label"></div>
+        <div class="cu-track"><div class="cu-fill"></div><div id="after_num" class="cu-num"></div></div>
+      </div>
+    </div>
+    <div id="tag"></div>
+    <div id="source" class="ytp-source"></div>
+  </div>
+  {{YTP_PRELOAD}}
+</div>
+<script src="assets/house.js"></script>
+<script src="assets/template.js"></script>
+<script>
+  window.__timelines = window.__timelines || {};
+  window.__timelines["{{COMPOSITION_ID}}"] = window.YTPH.tl;
+</script>
+</body>
+</html>

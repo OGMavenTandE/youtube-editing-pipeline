@@ -29,7 +29,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without Pillow
 
 SPEC_VERSION = 1
 SCENE_PREFIX = "scene-"
-FRAME_KINDS = ("key", "pause", "card", "endcard")
+FRAME_KINDS = ("key", "pause", "card", "endcard", "motion")
 PAN_DIRECTIONS = ("none", "left", "right", "up", "down")
 LAYER_ROLES = ("prop", "host", "text")
 
@@ -191,6 +191,11 @@ class Frame:
     beat: int | None = None
     motion: Motion | None = None
     file: str | None = None
+    # kind: motion (a HyperFrames template, see docs/motion.md)
+    template: str | None = None
+    vars: dict[str, Any] = field(default_factory=dict)
+    motion_layout: str | None = None
+    clip_duration: float | None = None
 
 
 @dataclass
@@ -208,6 +213,9 @@ class SceneSpec:
     assets: dict[str, str] = field(default_factory=dict)
     asset_dirs: list[str] = field(default_factory=list)
     frames: list[Frame] = field(default_factory=list)
+    series: str | None = None
+    episode: int | None = None
+    motion: dict[str, Any] = field(default_factory=dict)
 
     def palette(self, name: str) -> dict[str, str]:
         try:
@@ -364,6 +372,8 @@ def _parse_frame(item: Any, index: int, defaults: dict[str, Any]) -> Frame:
     if kind not in FRAME_KINDS:
         raise ValueError(f"{where}: kind must be one of {', '.join(FRAME_KINDS)}")
     art = item.get("art", item.get("plate"))
+    if kind == "motion":
+        return _parse_motion_frame(item, frame_id, defaults)
     if kind != "card" and not art:
         raise ValueError(f"{where}: needs art (a plate asset id), or use kind: card")
     caption = item.get("caption", item.get("cap"))
@@ -405,6 +415,34 @@ def _parse_frame(item: Any, index: int, defaults: dict[str, Any]) -> Frame:
     )
 
 
+def _parse_motion_frame(item: dict[str, Any], frame_id: str, defaults: dict[str, Any]) -> Frame:
+    where = f"frame {frame_id}"
+    template = item.get("template")
+    if not template:
+        raise ValueError(f"{where}: kind: motion needs a template (see docs/motion.md)")
+    variables = item.get("vars") or {}
+    if not isinstance(variables, dict):
+        raise ValueError(f"{where}: vars must be a mapping")
+    layout = item.get("layout")
+    if layout is not None and str(layout).lower() not in {"safe", "wide"}:
+        raise ValueError(f"{where}: layout must be safe or wide")
+    beat = item.get("beat")
+    return Frame(
+        id=frame_id,
+        kind="motion",
+        palette=str(item.get("palette") or defaults.get("palette") or "bright").lower(),
+        start=_opt_float(item.get("start"), f"{where} start"),
+        end=_opt_float(item.get("end"), f"{where} end"),
+        duration=_opt_float(item.get("duration"), f"{where} duration"),
+        line=str(item["line"]) if item.get("line") else None,
+        beat=int(beat) if beat not in (None, "") else None,
+        template=str(template),
+        vars=dict(variables),
+        motion_layout=str(layout).lower() if layout else None,
+        clip_duration=_opt_float(item.get("clip_duration"), f"{where} clip_duration"),
+    )
+
+
 def spec_from_dict(data: Any, path: Path | None = None) -> SceneSpec:
     if not isinstance(data, dict):
         raise ValueError("scene spec must be a mapping")
@@ -443,7 +481,12 @@ def spec_from_dict(data: Any, path: Path | None = None) -> SceneSpec:
         assets={str(key): str(value) for key, value in assets.items()},
         asset_dirs=[str(item) for item in data.get("asset_dirs") or []],
         frames=frames,
+        series=str(data["series"]) if data.get("series") else None,
+        episode=int(data["episode"]) if data.get("episode") not in (None, "") else None,
+        motion=dict(data.get("motion") or {}),
     )
+    if not isinstance(data.get("motion") or {}, dict):
+        raise ValueError("motion must be a mapping like {hyperframes: ..., fonts_dir: ...}")
     for frame in frames:
         spec.palette(frame.palette)
     if spec.layout["big"].get("fit") not in {"safe", "fixed"}:
@@ -1090,13 +1133,60 @@ def _source_path(path: Path, episode_dir: Path) -> str:
 
 
 def scene_segments(
-    timed: list[Timed], outputs: dict[str, Path], clips: dict[str, Path], episode_dir: Path
+    timed: list[Timed],
+    outputs: dict[str, Path],
+    clips: dict[str, Path],
+    episode_dir: Path,
+    motion: dict[str, tuple[Path, float]] | None = None,
 ) -> list[Segment]:
+    """Plan segments. ``motion`` maps a motion frame id to its (clip, length); a slot
+    longer than the clip holds the clip's last frame (``outputs[id]``) as a still."""
     segments: list[Segment] = []
+    motion = motion or {}
     for item in timed:
         frame = item.frame
         narration_ids = [frame.line] if frame.line else []
         start, remaining = item.start, item.duration
+        if frame.kind == "motion":
+            if frame.id not in motion:
+                continue
+            path, length = motion[frame.id]
+            if length - remaining > 0.05:
+                raise ValueError(
+                    f"frame {frame.id}: the motion clip is {length:.2f}s but its slot is only "
+                    f"{remaining:.2f}s, which would cut its hold. Give it a longer slot or "
+                    "shorter copy."
+                )
+            clip_len = round(min(length, remaining), 3)
+            segments.append(
+                Segment(
+                    id=f"{SCENE_PREFIX}{frame.id}",
+                    kind="clip",
+                    source=_source_path(path, episode_dir),
+                    start=round(start, 3),
+                    duration=clip_len,
+                    in_point=0.0,
+                    out_point=clip_len,
+                    palette=frame.palette,
+                    beat=frame.beat,
+                    narration_ids=list(narration_ids),
+                )
+            )
+            remaining = round(remaining - clip_len, 3)
+            if remaining > 0.0005 and frame.id in outputs:
+                segments.append(
+                    Segment(
+                        id=f"{SCENE_PREFIX}{frame.id}-hold",
+                        kind="still",
+                        source=_source_path(outputs[frame.id], episode_dir),
+                        start=round(start + clip_len, 3),
+                        duration=remaining,
+                        palette=frame.palette,
+                        beat=frame.beat,
+                        narration_ids=list(narration_ids),
+                    )
+                )
+            continue
         clip = clips.get(frame.id)
         if clip is not None and frame.count is not None:
             clip_len = round(min(frame.count.duration, remaining), 3)
@@ -1133,9 +1223,19 @@ def scene_segments(
     return segments
 
 
-def merge_segments(plan: EditPlan, segments: list[Segment]) -> list[str]:
-    """Replace earlier ``scene-`` segments; keep hand-made ones. Returns warnings."""
-    kept = [segment for segment in plan.segments if not segment.id.startswith(SCENE_PREFIX)]
+def merge_segments(
+    plan: EditPlan, segments: list[Segment], replace_ids: set[str] | None = None
+) -> list[str]:
+    """Replace earlier ``scene-`` segments; keep hand-made ones. Returns warnings.
+
+    With ``replace_ids`` only those ids (and the new segments' ids) are replaced, so
+    ``ytp motion --plan`` leaves the still frames from ``ytp scenes`` alone.
+    """
+    if replace_ids is None:
+        kept = [s for s in plan.segments if not s.id.startswith(SCENE_PREFIX)]
+    else:
+        drop = set(replace_ids) | {s.id for s in segments}
+        kept = [s for s in plan.segments if s.id not in drop]
     merged = sorted(kept + segments, key=lambda segment: segment.start)
     warnings: list[str] = []
     for before, after in zip(merged, merged[1:]):
@@ -1185,6 +1285,8 @@ def run_scenes(
     clips: bool = True,
     fonts: Fonts | None = None,
     log=print,
+    motion: bool = True,
+    allow_placeholder: bool = False,
 ) -> SceneResult:
     spec = load_spec(spec_path)
     episode = (episode_dir or episode_for(spec_path)).resolve()
@@ -1213,7 +1315,37 @@ def run_scenes(
         missing = sorted(set(only) - {f.id for f in spec.frames})
         if missing:
             raise ValueError(f"no frame with id {', '.join(missing)}")
+    motion_clips: dict[str, tuple[Path, float]] = {}
+    kit = None
     for frame in selected:
+        if frame.kind == "motion":
+            from ytp import motion as motion_mod
+
+            if kit is None:
+                kit = motion_mod.Toolkit.find(spec.motion, spec.path)
+            job = motion_mod.job_for(frame, spec)
+            job.fps = fps
+            result = motion_mod.ensure_clip(
+                job,
+                "16x9",
+                episode,
+                kit,
+                allow_placeholder=allow_placeholder,
+                render=motion,
+                log=log,
+            )
+            if result is None:
+                warnings.append(
+                    f"frame {frame.id}: no rendered motion clip; run ytp motion "
+                    f"(left out of the plan)"
+                )
+                continue
+            log(f"{'kept' if result.cached else 'wrote'} {result.path}")
+            warnings.extend(f"frame {frame.id}: {w}" for w in result.warnings)
+            motion_clips[frame.id] = (result.path, result.duration)
+            if frame.duration is None and frame.end is None and frame.line is None:
+                frame.duration = result.duration
+            continue
         fit = None
         if frame.count is not None:
             fit = [frame.count.text(frame.count.start), frame.count.text(frame.count.end)]
@@ -1236,7 +1368,13 @@ def run_scenes(
             log(f"wrote {clip} ({count} frames)")
     timed, timing_warnings = frame_timing(selected, narration)
     warnings.extend(timing_warnings)
-    segments = scene_segments(timed, outputs, clip_paths, episode)
+    for item in timed:
+        found = motion_clips.get(item.frame.id)
+        if found and item.duration > found[1] + 0.0005:
+            from ytp.motion import last_frame_png
+
+            outputs[item.frame.id] = last_frame_png(found[0], found[0].with_suffix(".last.png"))
+    segments = scene_segments(timed, outputs, clip_paths, episode, motion=motion_clips)
     fragment_path = None
     written_plan = None
     if plan_path is not None and plan is not None:
