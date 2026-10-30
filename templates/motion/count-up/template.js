@@ -19,12 +19,14 @@
   tl.fromTo("#row-before .cu-fill", { width: "0%" },
     { width: b.pct + "%", duration: c.before_count[1] - c.before_count[0], ease: "power2.out" },
     c.before_count[0]);
-  H.count(H.el("before_num"), 0, b.value, c.before_count[0], c.before_count[1], format);
+  H.count(H.el("before_num"), 0, b.value, c.before_count[0], c.before_count[1], format,
+    "power2.out", c.before_show);
   H.inUp("#row-after", c.after_row, 0.3, 16);
   tl.fromTo("#row-after .cu-fill", { width: "0%" },
     { width: a.pct + "%", duration: c.after_count[1] - c.after_count[0], ease: "power2.out" },
     c.after_count[0]);
-  H.count(H.el("after_num"), 0, a.value, c.after_count[0], c.after_count[1], format);
+  H.count(H.el("after_num"), 0, a.value, c.after_count[0], c.after_count[1], format,
+    "power2.out", c.after_show);
   H.inUp("#tag", c.tag, 0.35, 14);
   H.finish();
 })();

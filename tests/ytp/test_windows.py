@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.ytp.mediautil import require_ffmpeg, write_clip, write_png, write_wav
+from ytp import transcribe
 from ytp.ff import ffmpeg_bin, ffprobe_bin
 from ytp.finish import finish_episode
 from ytp.plan import EditPlan, NarrationLine, Segment, save_plan
@@ -102,6 +103,8 @@ def test_encoder_auto_falls_back_without_a_gpu() -> None:
     assert choose_encoder("auto", listed=listed, gpu_ok=True) == "h264_nvenc"
     assert choose_encoder("auto", listed={"libx264"}, gpu_ok=True) == "libx264"
     assert choose_encoder("libx264", listed=listed, gpu_ok=True) == "libx264"
+
+
 def test_encoder_auto_follows_the_nvenc_trial(monkeypatch) -> None:
     monkeypatch.setattr("ytp.render.ffmpeg_encoders", lambda: {"h264_nvenc", "libx264"})
     monkeypatch.setattr("ytp.render.nvenc_works", lambda: False)
@@ -212,3 +215,43 @@ def test_transcript_line_without_segments() -> None:
         Transcript(text="Hello there.", words=[Word("Hello", 1.0, 1.2), Word("there.", 1.2, 1.5)])
     )
     assert text == "[0:01.00-0:01.50] Hello there.\n"
+
+
+def test_whisper_extra_brings_the_cuda12_runtime_on_windows() -> None:
+    import tomllib
+
+    from ytp.rules import repo_root
+
+    data = tomllib.loads((repo_root() / "pyproject.toml").read_text(encoding="utf-8"))
+    whisper = data["project"]["optional-dependencies"]["whisper"]
+    for wheel in ("nvidia-cublas-cu12", "nvidia-cudnn-cu12"):
+        line = next(item for item in whisper if item.startswith(wheel))
+        assert "sys_platform == 'win32'" in line and "<" in line
+
+
+def test_missing_cuda_runtime_names_the_dlls(monkeypatch) -> None:
+    monkeypatch.setattr(transcribe, "enable_nvidia_dlls", lambda *a, **k: [])
+    have = {"cudnn64_9.dll"}
+
+    def loader(name: str) -> None:
+        if name not in have:
+            raise OSError(f"{name} not found")
+
+    assert transcribe.missing_cuda_runtime(loader) == ["cublas64_12.dll", "cublasLt64_12.dll"]
+    have.update(transcribe.CUDA_RUNTIME_DLLS)
+    assert transcribe.missing_cuda_runtime(loader) == []
+
+
+def test_cuda_or_cpu_falls_back_with_a_fix_when_cublas_is_missing(monkeypatch, capsys) -> None:
+    import sys
+    import types
+
+    monkeypatch.delenv("YTP_WHISPER_DEVICE", raising=False)
+    fake = types.SimpleNamespace(get_cuda_device_count=lambda: 1)
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake)
+    monkeypatch.setattr(transcribe, "missing_cuda_runtime", lambda: ["cublas64_12.dll"])
+    assert transcribe._cuda_or_cpu() == "cpu"
+    err = capsys.readouterr().err
+    assert "cublas64_12.dll" in err and "nvidia-cublas-cu12" in err
+    monkeypatch.setattr(transcribe, "missing_cuda_runtime", lambda: [])
+    assert transcribe._cuda_or_cpu() == "cuda"

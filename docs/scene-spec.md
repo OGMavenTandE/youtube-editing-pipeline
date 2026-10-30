@@ -101,7 +101,7 @@ order (low first) with their alpha kept:
 | `scale` | Multiplier on the PNG's own size. |
 | `flip` | `true` or `h` mirrors left-right; `v` flips upside down; `hv` both. |
 | `z` | Draw order. Text always goes on top of every layer. |
-| `role` | `prop` (default), `host`, or `text`. Host and text layers are checked against the safe area. |
+| `role` | `prop` (default), `host`, or `text`. Host and text layers are checked against the safe area by their visible pixels (alpha above 8), not the PNG canvas, so a full-frame 1920x1080 lower-third whose type spans x 666-1254 passes. |
 | `opacity` | 0 to 1. |
 
 Layers may hang off the edge of the frame; the off-screen part is cut.
@@ -191,8 +191,11 @@ first match wins (the same idea as the end card):
 1. each folder in `asset_dirs` (relative to the episode folder)
 2. the episode folder
 3. the spec's folder
-4. each folder in `YTP_SCENE_ASSETS` (`;`-separated on Windows, `:` elsewhere)
-5. `<repo parent>\assets\scenes`, e.g. `C:\AI Eval\YouTube\assets\scenes`
+4. each folder in `YTP_SCENE_ASSETS` (`;`-separated on Windows, `:` elsewhere),
+   the override
+5. where `ytp art` writes: `YTP_ART_OUT` if set, else
+   `C:\AI Eval\YouTube\assets\scenes` on Windows (`<repo parent>/assets/scenes`
+   elsewhere). Art made with `ytp art` is found with no extra setup.
 6. `<episode>\assets\scenes`
 7. the repo's own `assets/scenes` (gitignored, local development only)
 

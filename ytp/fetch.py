@@ -31,12 +31,25 @@ LOG_NAME = "transcribe.log"
 
 _URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _BARE_X_RE = re.compile(r"^(?:www\.|mobile\.)?(?:x|twitter)\.com/", re.IGNORECASE)
-_X_HOSTS = {"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com", "fxtwitter.com",
-            "vxtwitter.com", "fixupx.com"}
+_X_HOSTS = {
+    "x.com",
+    "twitter.com",
+    "mobile.twitter.com",
+    "mobile.x.com",
+    "fxtwitter.com",
+    "vxtwitter.com",
+    "fixupx.com",
+}
 _X_STATUS_RE = re.compile(r"^/(?:(?P<user>[^/]+)/)?(?:status|statuses)/(?P<id>\d+)")
 # Windows reserved device names cannot be folder names.
-_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
-             *(f"lpt{i}" for i in range(1, 10))}
+_RESERVED = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
 
 
 class TranscribeError(RuntimeError):
@@ -147,21 +160,53 @@ def folder_name(item: Item) -> str:
 
 
 _REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("no video could be found", "no video formats", "no media found", "there's no video",
-      "does not contain a video", "no formats found", "requested format is not available"),
-     "no video found (text-only, deleted, or protected post)"),
-    (("protected", "private"),
-     "protected or private post; needs a public post"),
-    (("login", "log in", "sign in", "authenticat", "cookies", "nsfw", "age-restricted",
-      "age restricted", "sensitive"),
-     "login required; needs a public post"),
-    (("404", "not found", "does not exist", "deleted", "suspended", "unavailable",
-      "has been removed", "no status found", "tombstone"),
-     "post deleted or unavailable"),
+    (
+        (
+            "no video could be found",
+            "no video formats",
+            "no media found",
+            "there's no video",
+            "does not contain a video",
+            "no formats found",
+            "requested format is not available",
+        ),
+        "no video found (text-only, deleted, or protected post)",
+    ),
+    (("protected", "private"), "protected or private post; needs a public post"),
+    (
+        (
+            "login",
+            "log in",
+            "sign in",
+            "authenticat",
+            "cookies",
+            "nsfw",
+            "age-restricted",
+            "age restricted",
+            "sensitive",
+        ),
+        "login required; needs a public post",
+    ),
+    (
+        (
+            "404",
+            "not found",
+            "does not exist",
+            "deleted",
+            "suspended",
+            "unavailable",
+            "has been removed",
+            "no status found",
+            "tombstone",
+        ),
+        "post deleted or unavailable",
+    ),
     (("unsupported url",), "unsupported link"),
     (("ffmpeg", "ffprobe"), "ffmpeg not found; install ffmpeg or set YTP_FFMPEG"),
-    (("timed out", "connection", "network", "getaddrinfo", "temporary failure", "ssl"),
-     "network error"),
+    (
+        ("timed out", "connection", "network", "getaddrinfo", "temporary failure", "ssl"),
+        "network error",
+    ),
 )
 
 
@@ -187,7 +232,7 @@ def _load_yt_dlp():
         import yt_dlp
     except ImportError as exc:
         raise TranscribeError(
-            "yt-dlp is not installed; pip install -e \".[whisper]\" in the ytp venv"
+            'yt-dlp is not installed; pip install -e ".[whisper]" in the ytp venv'
         ) from exc
     return yt_dlp
 
@@ -576,8 +621,10 @@ class Engine:
         try:
             return self._run(media, log)
         except RuntimeError as exc:
-            if self.device == "cuda" and self.options.device == "auto" and (
-                "faster-whisper" not in str(exc)
+            if (
+                self.device == "cuda"
+                and self.options.device == "auto"
+                and ("faster-whisper" not in str(exc))
             ):
                 log.write(f"warning: CUDA transcription failed ({exc}); retrying on CPU int8")
                 self._transcriber = self._make("cpu")

@@ -275,8 +275,7 @@ class FasterWhisperTranscriber(Transcriber):
 
         if importlib.util.find_spec("faster_whisper") is None:
             raise RuntimeError(
-                "faster-whisper is not installed. "
-                "pip install -r requirements-ytp-whisper.txt"
+                "faster-whisper is not installed. pip install -r requirements-ytp-whisper.txt"
             )
         device = self.device_request
         if device == "auto":
@@ -398,6 +397,37 @@ class FasterWhisperTranscriber(Transcriber):
         return transcript.shifted(offset)
 
 
+CUDA_RUNTIME_DLLS = ("cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll")
+CUDA_RUNTIME_HINT = (
+    "install the CUDA 12 runtime wheels into this venv: "
+    'pip install -e ".[whisper]" (nvidia-cublas-cu12, nvidia-cudnn-cu12)'
+)
+
+
+def missing_cuda_runtime(loader=None) -> list[str]:
+    """CUDA 12 DLLs ctranslate2 needs that this process can't load. Windows only.
+
+    ``get_cuda_device_count`` only needs the driver, so a missing cuBLAS shows up
+    later as a failed GPU run. Checking first lets `ytp` say why and what to install.
+    """
+    if sys.platform != "win32" and loader is None:
+        return []
+    enable_nvidia_dlls()
+    if loader is None:
+        import ctypes
+
+        def loader(name: str) -> None:
+            ctypes.WinDLL(name, winmode=0)  # standard search, PATH included
+
+    missing = []
+    for name in CUDA_RUNTIME_DLLS:
+        try:
+            loader(name)
+        except OSError:
+            missing.append(name)
+    return missing
+
+
 def _cuda_or_cpu() -> str:
     forced = os.environ.get("YTP_WHISPER_DEVICE", "").strip()
     if forced:
@@ -408,8 +438,16 @@ def _cuda_or_cpu() -> str:
     except ImportError:
         return "cpu"
     try:
-        if ctranslate2.get_cuda_device_count() > 0:
-            return "cuda"
+        if ctranslate2.get_cuda_device_count() <= 0:
+            return "cpu"
     except Exception:
         return "cpu"
-    return "cpu"
+    missing = missing_cuda_runtime()
+    if missing:
+        print(
+            f"warning: GPU found but {', '.join(missing)} can't be loaded, so Whisper runs "
+            f"on CPU; {CUDA_RUNTIME_HINT}",
+            file=sys.stderr,
+        )
+        return "cpu"
+    return "cuda"

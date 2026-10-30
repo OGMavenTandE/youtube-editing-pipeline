@@ -118,8 +118,7 @@ def note_from_sidecar(data: dict[str, object], target_i: float) -> str | None:
 
 def measure_loudnorm_filter(*, target_i: float, target_tp: float, target_lra: float) -> str:
     return (
-        f"loudnorm=I={_num(target_i)}:TP={_num(target_tp)}:LRA={_num(target_lra)}:"
-        "print_format=json"
+        f"loudnorm=I={_num(target_i)}:TP={_num(target_tp)}:LRA={_num(target_lra)}:print_format=json"
     )
 
 

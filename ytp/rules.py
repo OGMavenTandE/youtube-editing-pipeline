@@ -217,7 +217,7 @@ def _next_id(items: list[dict[str, Any]], section: str) -> str:
 def blank_series(series: str) -> dict[str, Any]:
     """New series file. Loudness, pace, and the vendor ban are channel rules."""
     vendor_text = (
-        'Never name or criticize an AI vendor on camera. Never say '
+        "Never name or criticize an AI vendor on camera. Never say "
         + ", ".join(f'"{name}"' for name in VENDOR_NAMES)
         + '. Say "some vendors" instead.'
     )

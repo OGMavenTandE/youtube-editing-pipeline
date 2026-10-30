@@ -197,7 +197,9 @@ def music_filtergraph(
         bed = "[bed]"
     else:
         bed = music
-    chains.append(f"[voice]{bed}amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]")
+    chains.append(
+        f"[voice]{bed}amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
+    )
     return ";".join(chains)
 
 
@@ -350,9 +352,7 @@ def render_plan(
             short_path = out.with_name(f"{out.stem}-short-{short.id}{out.suffix}")
             if short_path.exists():
                 raise FileExistsError(f"refusing to overwrite {short_path}")
-            _render_short(
-                final, short, short_path, work, encoder, preset, warnings, sample_rate
-            )
+            _render_short(final, short, short_path, work, encoder, preset, warnings, sample_rate)
         _write_render_log(final, logs, warnings)
         if loudness_meta is not None:
             payload = json.dumps(loudness_meta, indent=2) + "\n"
@@ -809,9 +809,7 @@ def _audio(
     args = ["-y", "-i", str(voice_path)]
     for source, _cue in active:
         args += ["-i", str(source)]
-    run_ffmpeg(
-        [*args, "-filter_complex", graph, "-map", "[aout]", "-c:a", "pcm_s16le", str(mixed)]
-    )
+    run_ffmpeg([*args, "-filter_complex", graph, "-map", "[aout]", "-c:a", "pcm_s16le", str(mixed)])
     return mixed
 
 
@@ -921,4 +919,3 @@ def _render_short(
             str(dest),
         ]
     )
-

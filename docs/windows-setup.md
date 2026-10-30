@@ -29,7 +29,9 @@ From the repo folder:
 powershell -File scripts\setup-windows.ps1
 ```
 
-That creates `C:\AI Eval\YouTube\ytp\.venv` with Python 3.11 or 3.12, installs `ytp` with local Whisper, and installs the CUDA 12 libraries that match ctranslate2 4.x (cuBLAS 12 and cuDNN 9). Those DLLs are loaded from the venv when `ytp` starts. Nothing is written to the system PATH.
+That creates `C:\AI Eval\YouTube\ytp\.venv` with Python 3.11 or 3.12, installs `ytp` with local Whisper. The `[whisper]` extra brings the CUDA 12 libraries that match ctranslate2 4.x as NVIDIA's wheels (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, Windows only). Before ctranslate2 loads, `ytp` puts their `site-packages\nvidia\*\bin` folders on the DLL search path (`os.add_dll_directory` plus the process PATH). Nothing is written to the system PATH.
+
+If an existing venv falls back to the CPU with `cublas64_12.dll` missing, `ytp` names the missing DLLs in its warning. To fix it, run `pip install -e ".[whisper]"` in that venv (add `art` if you use `ytp art`: `".[art,whisper]"`).
 
 The script ends with a self-test. It prints the Python version, where ffmpeg was found, whether `h264_nvenc` is listed, whether CUDA is visible, and a tiny Whisper run. A missing GPU is a warning. A failed Whisper run, or a pip error, stops the script with a non-zero exit.
 

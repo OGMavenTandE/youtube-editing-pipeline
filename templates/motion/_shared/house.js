@@ -80,11 +80,13 @@
 
   /* A number that counts from a to b between t0 and t1. It stays hidden until t0,
      so a row never shows its starting value ("0 tokens") before the count runs. */
-  H.count = function (node, a, b, t0, t1, format, ease) {
+  /* The number stays hidden until `show`: the planner puts that just before the first
+     frame whose value is past the start, so "0 tokens" is never on screen. */
+  H.count = function (node, a, b, t0, t1, format, ease, show) {
     var o = { v: a };
     node.textContent = format(a);
     tl.set(node, { opacity: 0 }, 0);
-    tl.set(node, { opacity: 1 }, t0);
+    tl.set(node, { opacity: 1 }, show === undefined ? t0 + 1 / Y.fps : show);
     tl.to(o, {
       v: b, duration: t1 - t0, ease: ease || "power2.out",
       onUpdate: function () { node.textContent = format(o.v); }
