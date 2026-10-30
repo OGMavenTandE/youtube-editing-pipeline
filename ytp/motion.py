@@ -1026,8 +1026,11 @@ def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
     return data, cues, land + p.hold(words)
 
 
-RECEIPT_IMAGE_TOP = 60  # Studio's receipts hang from y 60 in the 16:9 frame
-RECEIPT_IMAGE_LIP = 24  # image px of blank paper out of the slot on frame 1 (above the ink)
+# 16:9 paper top. Studio's spec says y 60, but then the slot and the frame-1 lip sit above the
+# stage (y 90) and frame 1 reads as empty; at 72 the lip reaches 10px into the stage and the
+# tallest Studio strip (918px) ends on the stage bottom (990).
+RECEIPT_IMAGE_TOP = 72
+RECEIPT_IMAGE_LIP = 28  # image px of blank paper out of the slot on frame 1 (first ink is row 31)
 
 
 def png_size(path: Path) -> tuple[int, int]:
@@ -1072,7 +1075,7 @@ def _plan_receipt_image(p: Planner) -> tuple[dict, dict, float]:
         left, right = SAFE_SLICE
         top = RECEIPT_IMAGE_TOP
         max_w = right - left
-        max_h = s.height - 2 * top
+        max_h = s.y + s.h - top
     else:
         top = s.y + slot_h
         max_w, max_h = s.w, s.h - slot_h

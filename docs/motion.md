@@ -215,13 +215,14 @@ warns if amounts don't add up to the total.
 Studio's finished receipt art (a PNG strip) prints in from a fixed top edge, then
 holds; hard cut. The image is the art: it is never redrawn, recolored or cropped,
 only revealed. A dark slot sits at the top edge, and on frame 1 the slot plus a
-24px lip of blank paper (above the first ink) is already on screen. The paper
+28px lip of blank paper (above the first ink) is already on screen. The paper
 then feeds down at a steady speed for `print` seconds over the house ink and
 grain, and holds for `hold` seconds.
 
 * 16:9: drawn 1:1, centred on the Shorts slice (a 608px strip fills x 656-1264),
-  hanging from y 60 (Studio's spec). Never enlarged; a strip wider than 608px or
-  taller than 960px is shrunk to fit, with a warning.
+  hanging from y 72 so the frame-1 lip is inside the stage (Studio's spec said 60;
+  the tallest strip, 918px, ends on the stage bottom at 990). Never enlarged; a
+  strip wider than 608px or taller than 918px is shrunk to fit, with a warning.
 * 9:16: one scale that fits the safe area (x 90-990, y 200-1720). A 608px strip
   is scaled to 900px (1.48x), so 40px receipt type lands at about 59px. The art
   is upscaled by the browser; for the sharpest 9:16, Studio can supply a 2x strip.

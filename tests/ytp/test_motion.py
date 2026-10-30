@@ -765,7 +765,7 @@ def test_receipt_image_is_one_to_one_in_the_16x9_slice(fonts):
     d = plan.payload["data"]
     assert d["image_size"] == [608, 918] and d["scale"] == 1
     assert (d["x"], d["w"], d["h"]) == (656, 608, 918)  # exactly the slice x 656-1264
-    assert d["y"] == 60 and d["y"] + d["h"] <= 1080 - 60
+    assert d["y"] == 72 and d["y"] + d["h"] <= 990 and d["y"] + d["lip"] > 90
     assert d["slot_x"] >= motion.SAFE_SLICE[0] and d["slot_x"] + d["slot_w"] <= 1264
     assert 0 < d["lip"] <= 31  # frame 1: the slot plus blank paper, above the first ink
 
