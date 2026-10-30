@@ -457,8 +457,10 @@ def test_cli_fails_on_placeholder_copy(tmp_path, mock_hf, capsys):
 # --------------------------------------------------------------------------- plan integration
 
 
-def test_scenes_plan_picks_up_motion_clips(tmp_path, mock_hf):
+def test_scenes_plan_picks_up_motion_clips(tmp_path, mock_hf, monkeypatch):
     require_ffmpeg()
+    # ytp scenes needs Inter; use the repo's copy so machines without it installed pass.
+    monkeypatch.setenv("YTP_SCENE_FONT", str(repo_root() / "pipeline" / "fonts" / "Inter-Bold.ttf"))
     episode = tmp_path / "ep"
     plan_path = episode / "edit" / "plan.yaml"
     plan_path.parent.mkdir(parents=True)
