@@ -44,10 +44,7 @@ def _noise(path: Path, *, seconds: float = 3.0, amplitude: float = 0.08) -> Path
             "-f",
             "lavfi",
             "-i",
-            (
-                "anoisesrc=color=white:sample_rate=48000:"
-                f"amplitude={amplitude}:duration={seconds}"
-            ),
+            (f"anoisesrc=color=white:sample_rate=48000:amplitude={amplitude}:duration={seconds}"),
             "-c:a",
             "pcm_s16le",
             str(path),
@@ -151,10 +148,7 @@ def test_dynamic_mode_is_an_info_note_not_a_warning(tmp_path: Path) -> None:
     markdown, _payload = write_report(report, tmp_path / "qc")
     text = markdown.read_text(encoding="utf-8")
     assert "## loudness — PASS" in text
-    expected = (
-        "mastered from input -23.76 LUFS / -16.54 dBTP "
-        "to output -16.01 LUFS / -8.78 dBTP"
-    )
+    expected = "mastered from input -23.76 LUFS / -16.54 dBTP to output -16.01 LUFS / -8.78 dBTP"
     assert expected in text
     assert "loudnorm used dynamic mode" in text
     assert "would peak at -8.8 dBTP" in text

@@ -610,9 +610,10 @@ def asset_search_dirs(spec: SceneSpec, episode_dir: Path) -> list[Path]:
 
     Order: folders listed in the spec's ``asset_dirs`` (relative to the episode),
     the episode folder, the spec's folder, ``YTP_SCENE_ASSETS`` (path list),
-    ``<repo parent>/assets/scenes``, the episode's ``assets/scenes``, then the
-    gitignored in-repo ``assets/scenes`` for local development. Same idea as the
-    end card: the art lives on the PC, never in the public repo.
+    ``ytp art``'s output root (``YTP_ART_OUT``, else ``C:\\AI Eval\\YouTube\\assets\\scenes``
+    on Windows), the episode's ``assets/scenes``, then the gitignored in-repo
+    ``assets/scenes`` for local development. Same idea as the end card: the art
+    lives on the PC, never in the public repo.
     """
     dirs: list[Path] = []
     for item in spec.asset_dirs:
@@ -624,8 +625,12 @@ def asset_search_dirs(spec: SceneSpec, episode_dir: Path) -> list[Path]:
     env = os.environ.get("YTP_SCENE_ASSETS", "").strip().strip('"')
     if env:
         dirs += [Path(part) for part in env.split(os.pathsep) if part.strip()]
+    # Where `ytp art` writes. Not <repo parent>: on the PC the repo is ytp\src, so
+    # that pointed at ytp\assets\scenes instead of YouTube\assets\scenes.
+    from ytp.art import default_out_dir
+
     root = repo_root()
-    dirs.append(root.parent / "assets" / "scenes")
+    dirs.append(default_out_dir())
     dirs.append(episode_dir / "assets" / "scenes")
     dirs.append(root / "assets" / "scenes")
     unique: list[Path] = []
@@ -696,6 +701,20 @@ def _layer_image(path: Path, layer: Layer) -> Image.Image:
     return image
 
 
+def visible_box(
+    art: Image.Image, box: tuple[int, int, int, int], threshold: int = 8
+) -> tuple[int, int, int, int] | None:
+    """Canvas box of the layer's visible pixels (alpha above ``threshold``), or None if
+    it has none. A full-frame lower-third PNG is judged by its type, not its canvas."""
+    alpha = art.getchannel("A") if "A" in art.getbands() else None
+    if alpha is None:
+        return box
+    inner = alpha.point(lambda v: 255 if v > threshold else 0).getbbox()
+    if inner is None:
+        return None
+    return (box[0] + inner[0], box[1] + inner[1], box[0] + inner[2], box[1] + inner[3])
+
+
 def layer_box(layer: Layer, size: tuple[int, int]) -> tuple[int, int, int, int]:
     w, h = size
     if layer.anchor == "topleft":
@@ -733,21 +752,23 @@ class SceneRenderer:
             image = cover(plate, spec.width, spec.height, spec.trim_plates)
         else:
             image = Image.new("RGB", (spec.width, spec.height), palette["card"])
-        placed: list[tuple[Layer, tuple]] = []
+        placed: list[tuple[Layer, tuple, tuple | None]] = []
         if frame.layers:
             canvas = image.convert("RGBA")
             for layer in sorted(frame.layers, key=lambda item: item.z):
                 art = _layer_image(resolve_asset(layer.asset, spec, self.episode_dir), layer)
                 box = layer_box(layer, art.size)
                 _composite_clipped(canvas, art, box)
-                placed.append((layer, box))
+                placed.append((layer, box, visible_box(art, box)))
             image = canvas.convert("RGB")
         return image, placed
 
     def render(self, frame: Frame, big_text: str | None = None, fit_texts=None) -> Rendered:
         image, placed = self.base(frame)
         boxes, warnings = self.draw_text(image, frame, big_text, fit_texts)
-        boxes["layers"] = [(layer.asset, layer.role, box) for layer, box in placed]
+        boxes["layers"] = [(layer.asset, layer.role, box) for layer, box, _vis in placed]
+        # What the safe-area check measures: the visible pixels, not the canvas.
+        boxes["layers_visible"] = [(layer.asset, layer.role, vis) for layer, _box, vis in placed]
         warnings = self.safe_warnings(frame, boxes) + warnings
         return Rendered(image=image, boxes=boxes, warnings=warnings)
 
@@ -946,11 +967,13 @@ class SceneRenderer:
                     f"frame {frame.id}: {what} sits outside the 9:16 safe area "
                     f"(x {round(box[0])}..{round(box[2])}, safe {x1}..{x2})"
                 )
-        for asset, role, box in boxes.get("layers", []):
-            if role in {"host", "text"} and (box[0] < x1 or box[2] > x2):
+        for asset, role, box in boxes.get("layers_visible", []):
+            if box is None or role not in {"host", "text"}:
+                continue
+            if box[0] < x1 or box[2] > x2:
                 out.append(
                     f"frame {frame.id}: {role} layer {asset} sits outside the 9:16 safe area "
-                    f"(x {box[0]}..{box[2]}, safe {x1}..{x2})"
+                    f"(visible x {box[0]}..{box[2]}, safe {x1}..{x2})"
                 )
         return out
 

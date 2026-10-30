@@ -452,3 +452,59 @@ def test_render_applies_motion_to_still_segment(tmp_path):
         check=True,
     )
     assert probe.stdout.strip() == "320,180,30"
+
+
+def test_safe_area_measures_visible_pixels_not_the_canvas(episode):
+    art = episode / "art"
+    lower = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
+    ImageDraw.Draw(lower).rectangle((666, 860, 1254, 980), fill=(20, 20, 20, 230))
+    lower.save(art / "lower.png")
+    wide = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
+    ImageDraw.Draw(wide).rectangle((600, 860, 1254, 980), fill=(20, 20, 20, 230))
+    wide.save(art / "wide.png")
+    Image.new("RGBA", (1920, 1080), (0, 0, 0, 0)).save(art / "empty.png")
+    layer = {"x": 0, "y": 0, "anchor": "topleft", "role": "text"}
+    frames = [
+        {"id": "lt", "art": "plate", "layers": [{**layer, "asset": "lower"}]},
+        {"id": "wide", "art": "plate", "layers": [{**layer, "asset": "wide"}]},
+        {"id": "empty", "art": "plate", "layers": [{**layer, "asset": "empty"}]},
+    ]
+    data = _spec(frames)
+    data["assets"].update({"lower": "lower.png", "wide": "wide.png", "empty": "empty.png"})
+    renderer, spec = _renderer(episode, data)
+    lt = renderer.render(spec.frames[0])
+    assert lt.warnings == []
+    assert lt.boxes["layers"][0][2] == (0, 0, 1920, 1080)
+    assert lt.boxes["layers_visible"][0][2] == (666, 860, 1255, 981)
+    wide_out = renderer.render(spec.frames[1])
+    assert len(wide_out.warnings) == 1 and "visible x 600..1255" in wide_out.warnings[0]
+    assert renderer.render(spec.frames[2]).warnings == []
+
+
+def test_scene_assets_default_to_ytp_art_output(episode, tmp_path, monkeypatch):
+    from ytp import art
+    from ytp.scenes import asset_search_dirs
+
+    out = tmp_path / "YouTube" / "assets" / "scenes"
+    monkeypatch.setenv("YTP_ART_OUT", str(out))
+    spec = spec_from_dict(_spec([{"id": "a", "art": "plate"}]), episode / "edit" / "scenes.yaml")
+    dirs = asset_search_dirs(spec, episode)
+    assert out in dirs and dirs.index(out) < dirs.index(episode / "assets" / "scenes")
+    assert repo_root().parent / "assets" / "scenes" not in dirs
+    override = tmp_path / "override"
+    monkeypatch.setenv("YTP_SCENE_ASSETS", str(override))
+    dirs = asset_search_dirs(spec, episode)
+    assert dirs.index(override) < dirs.index(out)
+    monkeypatch.delenv("YTP_ART_OUT")
+    assert art.default_out_dir() in asset_search_dirs(spec, episode)
+    (out / "plate2.png").parent.mkdir(parents=True)
+    Image.new("RGB", (16, 9), PLATE).save(out / "plate2.png")
+    monkeypatch.setenv("YTP_ART_OUT", str(out))
+    monkeypatch.delenv("YTP_SCENE_ASSETS")
+    from ytp.scenes import resolve_asset
+
+    data = _spec([{"id": "a", "art": "plate"}])
+    data["assets"]["p2"] = "plate2.png"
+    assert resolve_asset("p2", spec_from_dict(data, episode / "edit" / "scenes.yaml"), episode) == (
+        out / "plate2.png"
+    )

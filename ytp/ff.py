@@ -196,9 +196,4 @@ def escape_filter_path(path: Path) -> str:
 
 
 def escape_drawtext(text: str) -> str:
-    return (
-        text.replace("\\", "\\\\")
-        .replace(":", r"\:")
-        .replace("'", r"\'")
-        .replace("%", r"\%")
-    )
+    return text.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'").replace("%", r"\%")

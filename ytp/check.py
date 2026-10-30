@@ -665,9 +665,7 @@ def _check_wpm(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -> Ch
     }
     low, high, severity = _pace_band(rules, source, "overall")
     if pace < low or pace > high:
-        message = (
-            f"overall pace is {pace:.1f} wpm; {source} band {low:.0f}-{high:.0f} ({severity})"
-        )
+        message = f"overall pace is {pace:.1f} wpm; {source} band {low:.0f}-{high:.0f} ({severity})"
         marker = _fail if severity == "fail" else _warn
         findings.append(marker("wpm", "overall_wpm", message))
     if articulation is None:
@@ -708,9 +706,7 @@ def _check_closers(plan: EditPlan, rules: SeriesRules, asr: Transcript | None) -
     if not phrases:
         return CheckResult("closers", True, "no closer list", skipped=True)
     findings: list[Finding] = []
-    blobs: list[tuple[str, float | None]] = [
-        (line.text, line.start) for line in plan.narration
-    ]
+    blobs: list[tuple[str, float | None]] = [(line.text, line.start) for line in plan.narration]
     blobs.extend((cue.text, cue.start) for cue in plan.captions)
     for segment in plan.segments:
         if segment.template_text:
@@ -774,8 +770,10 @@ def open_line_match(required: str, heard: str) -> tuple[str, str]:
             continue
         for start in range(len(haystack) - length + 1):
             window = haystack[start : start + length]
-            matched = window == needle or _one_extra_token(needle, window) or _one_extra_token(
-                window, needle
+            matched = (
+                window == needle
+                or _one_extra_token(needle, window)
+                or _one_extra_token(window, needle)
             )
             if matched:
                 kind = "exact" if window == needle else "fuzzy"
@@ -1178,10 +1176,7 @@ def _one_join_finding(code: str, words: list[Word], join: float) -> Finding:
     return _fail(
         "splice_fragments",
         code,
-        (
-            f'{code.replace("_", " ")} "{label}" near a narration join '
-            "is not in the approved script"
-        ),
+        (f'{code.replace("_", " ")} "{label}" near a narration join is not in the approved script'),
         words[0].start if words else join,
         label,
     )

@@ -133,11 +133,7 @@ def test_partial_word_left_at_cut_fails_the_check(tmp_path: Path, rules_root) ->
     assert "FAIL" in markdown
     assert "00:" in markdown
     assert payload["passed"] is False
-    words = [
-        finding.get("word")
-        for check in payload["checks"]
-        for finding in check["findings"]
-    ]
+    words = [finding.get("word") for check in payload["checks"] for finding in check["findings"]]
     assert "if" in words
 
 

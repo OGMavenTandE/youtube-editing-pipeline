@@ -98,9 +98,7 @@ def test_buzz_in_the_sentence_is_not_a_banned_sound(tmp_path: Path, rules_root) 
 
 def test_wpm_outside_the_band_warns_from_the_transcript(tmp_path: Path, rules_root) -> None:
     video = _video(tmp_path, "fast.mp4")
-    plan = _base_plan(
-        narration=[NarrationLine(id="n", text="one two three", start=0.0, end=10.0)]
-    )
+    plan = _base_plan(narration=[NarrationLine(id="n", text="one two three", start=0.0, end=10.0)])
     heard = Transcript(
         text="one two three",
         words=[Word("one", 2.0, 2.1), Word("two", 2.1, 2.25), Word("three", 2.25, 2.4)],
@@ -357,9 +355,7 @@ def test_check_cli_writes_a_failing_report(tmp_path: Path, rules_root) -> None:
     assert "if" in markdown
     assert payload["passed"] is False
     stamps = [
-        item.get("timestamp_text", "")
-        for check in payload["checks"]
-        for item in check["findings"]
+        item.get("timestamp_text", "") for check in payload["checks"] for item in check["findings"]
     ]
     assert any(stamp.startswith("00:") for stamp in stamps)
 
@@ -487,9 +483,7 @@ def test_talking_head_open_line_end_screen_and_description(tmp_path: Path, rules
     assert opened.passed is False
 
     plan.narration[0].text = open_line
-    plan.meta["end_card"]["elements"] = [
-        {"id": "bug", "x1": 944, "y1": 170, "x2": 1760, "y2": 629}
-    ]
+    plan.meta["end_card"]["elements"] = [{"id": "bug", "x1": 944, "y1": 170, "x2": 1760, "y2": 629}]
     overlap = _check(video, plan, rules_root, series="talking-head")
     end_card = next(item for item in overlap.checks if item.id == "end_card")
     overlap_hits = [item for item in end_card.findings if item.code == "end_screen_overlap"]
