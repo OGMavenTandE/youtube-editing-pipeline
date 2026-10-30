@@ -665,16 +665,19 @@ def load_mask(path: Path, size: tuple[int, int]) -> Image.Image:
         return fit(gray, *size, resample=Image.Resampling.NEAREST)
 
 
+SOLID_ALPHA = 250  # mattes such as u2net leave most of the subject at 250..254
+
+
 def alpha_stats(image: Image.Image) -> dict[str, float]:
-    """Share of fully transparent, partial, and opaque pixels."""
+    """Share of pixels that are clear (alpha 0), edge (1..249), and solid (250..255)."""
     if image.mode != "RGBA":
-        return {"transparent": 0.0, "partial": 0.0, "opaque": 1.0}
+        return {"transparent": 0.0, "edge": 0.0, "solid": 1.0}
     histogram = image.getchannel("A").histogram()
     total = float(sum(histogram)) or 1.0
     return {
         "transparent": round(histogram[0] / total, 4),
-        "partial": round(sum(histogram[1:255]) / total, 4),
-        "opaque": round(histogram[255] / total, 4),
+        "edge": round(sum(histogram[1:SOLID_ALPHA]) / total, 4),
+        "solid": round(sum(histogram[SOLID_ALPHA:]) / total, 4),
     }
 
 
@@ -785,8 +788,16 @@ class DiffusersBackend:
         if device == "cuda":
             torch.cuda.reset_peak_memory_stats()
 
+    def _dtype_key(self) -> str:
+        """diffusers 0.42 renamed torch_dtype to dtype (the old name warns)."""
+        import diffusers
+
+        parts = re.findall(r"\d+", diffusers.__version__)[:2]
+        version = tuple(int(part) for part in parts) if len(parts) == 2 else (0, 0)
+        return "dtype" if version >= (0, 42) else "torch_dtype"
+
     def _from_pretrained(self, cls, model: str):
-        kwargs = {"torch_dtype": self.dtype, "use_safetensors": True}
+        kwargs = {self._dtype_key(): self.dtype, "use_safetensors": True}
         if self.dtype == self.torch.float16:
             try:
                 return cls.from_pretrained(model, variant="fp16", **kwargs)
@@ -889,6 +900,12 @@ class DiffusersBackend:
 # --------------------------------------------------------------------------- run
 
 
+def _load_total(backend: Any) -> float:
+    """Seconds the backend has spent loading models so far (0 when it does not say)."""
+    loads = getattr(backend, "load_seconds", None)
+    return float(sum(loads.values())) if isinstance(loads, dict) else 0.0
+
+
 @dataclass
 class ImageResult:
     path: Path
@@ -896,6 +913,7 @@ class ImageResult:
     seconds: float
     generated_size: tuple[int, int]
     alpha: dict[str, float] | None = None
+    load_seconds: float = 0.0
 
 
 @dataclass
@@ -966,12 +984,14 @@ def _sidecar(
                 "file": image.path.name,
                 "seed": image.seed,
                 "seconds": image.seconds,
+                "load_seconds": image.load_seconds,
                 "generated_size": list(image.generated_size),
                 "alpha_stats": image.alpha,
             }
             for image in images
         ],
         "seconds_total": round(sum(image.seconds for image in images), 2),
+        "load_seconds_total": round(sum(image.load_seconds for image in images), 2),
         "runtime": backend_stats,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
@@ -1045,6 +1065,7 @@ def run_art(
         folder.mkdir(parents=True, exist_ok=True)
         images: list[ImageResult] = []
         for index, (seed, path) in enumerate(zip(job.seeds(), output_paths(job, out_dir))):
+            loaded_before = _load_total(backend)
             t0 = time.perf_counter()
             raw = backend.generate(job, seed, gen, init, mask)
             generated_size = tuple(raw.size)
@@ -1054,12 +1075,15 @@ def run_art(
                 image = backend.matte(image, job.matte_model)
                 stats = alpha_stats(image)
             image.save(path)
-            seconds = round(time.perf_counter() - t0, 2)
-            images.append(ImageResult(path, seed, seconds, generated_size, stats))
+            # Model download and load time is reported apart from making the image.
+            load = round(_load_total(backend) - loaded_before, 2)
+            seconds = round(max(0.0, time.perf_counter() - t0 - load), 2)
+            images.append(ImageResult(path, seed, seconds, generated_size, stats, load))
             label = f"{variant_name(job.id, index)}  {job.kind}  seed {seed}"
             sheet_items.append((label, path))
             note = f"  alpha {stats['transparent']:.0%} clear" if stats else ""
-            log(f"wrote {path} ({seconds:.1f}s, seed {seed}){note}")
+            loading = f" + {load:.1f}s model load" if load else ""
+            log(f"wrote {path} ({seconds:.1f}s{loading}, seed {seed}){note}")
         sidecar = sidecar_path(job, out_dir)
         data = _sidecar(job, images, infos, backend.stats(), jobs_file.path)
         sidecar.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -1073,7 +1097,11 @@ def run_art(
     downloaded = max(0, folder_bytes(models_dir) - before)
     count = sum(len(result.images) for result in results)
     per_image = sum(i.seconds for r in results for i in r.images) / max(1, count)
-    summary = f"done: {count} image(s) in {seconds:.1f}s ({per_image:.1f} s/image)"
+    loading = sum(i.load_seconds for r in results for i in r.images)
+    summary = (
+        f"done: {count} image(s) in {seconds:.1f}s ({per_image:.1f} s/image, "
+        f"{loading:.1f}s loading models)"
+    )
     if "vram_peak_gb" in stats:
         summary += f", VRAM peak {stats['vram_peak_gb']:.2f} GB"
     if downloaded:

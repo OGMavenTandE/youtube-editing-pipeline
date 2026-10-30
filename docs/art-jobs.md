@@ -39,8 +39,11 @@ ytp art art.yaml --out "C:\AI Eval\YouTube\ytp-test\art"       # scratch folder 
 ```
 
 The sidecar records the prompt, negative, size, steps, cfg, strength, each
-variant's seed, seconds, generated size and alpha stats (share of clear,
-partial, and opaque pixels), the diffusion and matte models with their
+variant's seed, generation seconds, model download and load seconds (the
+first image that needs a model pays for loading it), generated size, and alpha
+stats (share of clear pixels at alpha 0, edge pixels at 1..249, and solid
+pixels at 250..255; u2net leaves most of the subject at 250..254), the
+diffusion and matte models with their
 organization, origin, and license, and the runtime (GPU, torch and diffusers
 versions, offload mode, model load times, VRAM peak).
 

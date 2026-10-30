@@ -339,8 +339,10 @@ def test_alpha_stats_and_flatten():
     rgba.paste((255, 0, 0, 255), (0, 0, 5, 10))
     rgba.putpixel((9, 9), (255, 0, 0, 128))
     stats = alpha_stats(rgba)
-    assert stats == {"transparent": 0.49, "partial": 0.01, "opaque": 0.5}
-    assert alpha_stats(Image.new("RGB", (4, 4)))["opaque"] == 1.0
+    assert stats == {"transparent": 0.49, "edge": 0.01, "solid": 0.5}
+    rgba.putpixel((9, 8), (255, 0, 0, 252))  # u2net-style near-opaque counts as solid
+    assert alpha_stats(rgba)["solid"] == 0.51
+    assert alpha_stats(Image.new("RGB", (4, 4)))["solid"] == 1.0
     flat = art.flatten(rgba)
     assert flat.mode == "RGB" and flat.getpixel((9, 0)) == (255, 255, 255)
 
@@ -694,3 +696,38 @@ def test_diffusers_backend_offloads_reuses_weights_and_reports(tmp_path, fake_st
         f"{art.DEFAULT_INPAINT_MODEL} (inpaint)",
         "u2net (matte)",
     }
+
+
+def test_model_load_time_is_reported_apart_from_generation(tmp_path):
+    class LoadingBackend(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.load_seconds: dict[str, float] = {}
+
+        def generate(self, job, seed, size, init, mask):
+            self.load_seconds.setdefault(job.diffusion_model, 75.0)
+            return super().generate(job, seed, size, init, mask)
+
+    lines: list[str] = []
+    result = run_art(
+        _jobs(tmp_path),
+        out_dir=tmp_path / "o",
+        only=["plate-a"],
+        backend=LoadingBackend(),
+        log=lines.append,
+    )
+    side = json.loads(result.jobs[0].sidecar.read_text(encoding="utf-8"))
+    assert [v["load_seconds"] for v in side["variants"]] == [75.0, 0.0]
+    assert side["load_seconds_total"] == 75.0
+    assert all(v["seconds"] < 75 for v in side["variants"])
+    assert "+ 75.0s model load" in lines[-4] and "75.0s loading models" in lines[-1]
+
+
+def test_dtype_keyword_follows_diffusers_version(fake_stack, monkeypatch):
+    import sys
+
+    backend = art.DiffusersBackend()
+    monkeypatch.setattr(sys.modules["diffusers"], "__version__", "0.42.1")
+    assert backend._dtype_key() == "dtype"
+    monkeypatch.setattr(sys.modules["diffusers"], "__version__", "0.31.0")
+    assert backend._dtype_key() == "torch_dtype"
