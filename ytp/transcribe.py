@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -175,6 +177,68 @@ def extract_audio(source: Path, dest: Path, *, start: float | None, end: float |
     run_ffmpeg(args)
 
 
+# Lines Whisper invents over music, noise, or silence (training-data captions).
+# `ytp transcribe` drops a short segment that is only one of these.
+STOCK_HALLUCINATIONS = frozenset(
+    {
+        "thank you",
+        "thank you very much",
+        "thanks",
+        "thanks for watching",
+        "thank you for watching",
+        "thank you so much for watching",
+        "please subscribe",
+        "like and subscribe",
+        "subscribe",
+        "bye",
+        "you",
+        "well be right back",
+        "ill see you next time",
+        "see you next time",
+        "see you in the next video",
+        "thanks for listening",
+        "subtitles by the amaraorg community",
+        "transcription by castingwords",
+    }
+)
+# A real sentence of thanks can be longer; a stock line over noise is short.
+STOCK_MAX_SECONDS = 4.0
+# Portable keys: faster-whisper 1.1 and 1.2 name the thresholds differently.
+_QUICK_VAD = {"min_silence_duration_ms": 2000, "speech_pad_ms": 400}
+
+
+def _normal_text(text: str) -> str:
+    normal = re.sub(r"[^a-z0-9 ]+", "", text.lower().replace("-", " "))
+    return " ".join(normal.split())
+
+
+def repeated_runs(texts: list[str], min_run: int = 3) -> set[int]:
+    """Indexes of segments in a run of ``min_run`` or more identical texts in a row.
+
+    Whisper loops a line ("It's a good idea." x19) over music or engine noise.
+    Real speech that repeats ("Go." between other calls) is not consecutive.
+    """
+    drop: set[int] = set()
+    index = 0
+    while index < len(texts):
+        end = index + 1
+        key = _normal_text(texts[index])
+        while end < len(texts) and key and _normal_text(texts[end]) == key:
+            end += 1
+        if key and end - index >= min_run:
+            drop.update(range(index, end))
+        index = end
+    return drop
+
+
+def is_stock_hallucination(text: str, start: float, end: float) -> bool:
+    """True for a short segment that is only a stock Whisper line ("Thank you.")."""
+    if end - start > STOCK_MAX_SECONDS:
+        return False
+    normal = _normal_text(text)
+    return bool(normal) and normal in STOCK_HALLUCINATIONS
+
+
 class FasterWhisperTranscriber(Transcriber):
     """Local CTranslate2 model. CUDA float16 on the RTX 4070 Super, int8 on CPU."""
 
@@ -184,7 +248,18 @@ class FasterWhisperTranscriber(Transcriber):
         device: str = "auto",
         language: str = "en",
         window_model: str | None = None,
+        *,
+        quick: bool = False,
+        vad: bool = False,
     ) -> None:
+        # quick: `ytp transcribe`. Silence-hallucination skip plus the stock-line,
+        # loop, and repeated-run filters. vad adds Silero VAD (quick mode only); it
+        # drops speech under loud noise, so it is opt-in.
+        self.quick = quick
+        self.vad = vad
+        self.compute_type = ""
+        self.load_seconds = 0.0
+        self.dropped_segments = 0
         self.model_name = model
         self.window_model_name = window_model or model
         self.device_request = device
@@ -207,6 +282,7 @@ class FasterWhisperTranscriber(Transcriber):
         if device == "auto":
             device = _cuda_or_cpu()
         compute = "float16" if device == "cuda" else "int8"
+        started = time.monotonic()
         # Pin the pool before CTranslate2 reads it. cpu_threads=0 means "all cores".
         os.environ["OMP_NUM_THREADS"] = str(_CPU_THREADS)
         os.environ["CT2_VERBOSE"] = "0"
@@ -223,8 +299,14 @@ class FasterWhisperTranscriber(Transcriber):
             cpu_threads=_CPU_THREADS,
             num_workers=_NUM_WORKERS,
         )
+        self.compute_type = compute
+        self.load_seconds = time.monotonic() - started
         self._models[model_name] = model
         return model
+
+    def load(self) -> None:
+        """Load the whole-file model now, so its load time can be logged on its own."""
+        self._load(self.model_name)
 
     def transcribe(
         self,
@@ -265,13 +347,27 @@ class FasterWhisperTranscriber(Transcriber):
                 prompt_reset_on_temperature=0.5,
                 suppress_blank=True,
                 without_timestamps=False,
-                vad_filter=False,
-                vad_parameters=dict(_WHISPER_VAD),
-                hallucination_silence_threshold=2.0 if window else None,
+                vad_filter=self.quick and self.vad and not window,
+                vad_parameters=dict(_QUICK_VAD if self.quick else _WHISPER_VAD),
+                hallucination_silence_threshold=2.0 if (window or self.quick) else None,
             )
             segments, info = model.transcribe(str(temporary), **kwargs)
-            for segment in segments:
+            self.dropped_segments = 0
+            repeats: set[int] = set()
+            if self.quick:
+                segments = list(segments)
+                repeats = repeated_runs([str(segment.text or "") for segment in segments])
+            for position, segment in enumerate(segments):
                 if window and _segment_is_loop(segment):
+                    continue
+                if self.quick and (
+                    position in repeats
+                    or is_stock_hallucination(
+                        str(segment.text or ""), float(segment.start), float(segment.end)
+                    )
+                    or _segment_is_loop(segment)
+                ):
+                    self.dropped_segments += 1
                     continue
                 pieces.append((float(segment.start), float(segment.end), segment.text.strip()))
                 segment_words = list(segment.words or [])

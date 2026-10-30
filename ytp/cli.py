@@ -80,6 +80,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="keep the downloaded audio in the video folder (default: keep)",
     )
     quick.add_argument(
+        "--vad",
+        action="store_true",
+        help="also run Silero VAD; cuts more noise but can drop speech under loud noise",
+    )
+    quick.add_argument(
+        "--refresh",
+        action="store_true",
+        help="download again even when the video folder already has media.* from a past run",
+    )
+    quick.add_argument(
         "--quiet",
         action="store_true",
         help="logs go to transcribe.log; stdout is one OK/FAIL line per input",
@@ -484,6 +494,8 @@ def _cmd_transcribe(args: argparse.Namespace) -> int:
         keep_media=args.keep_media,
         quiet=args.quiet,
         summary_lines=args.summary_lines,
+        refresh=args.refresh,
+        vad=args.vad,
     )
     return run_transcribe(inputs, options)
 

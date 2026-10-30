@@ -4,17 +4,32 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
 from ytp import cli, fetch
-from ytp.transcribe import Transcriber, Transcript, Word
+from ytp.transcribe import (
+    FasterWhisperTranscriber,
+    Transcriber,
+    Transcript,
+    Word,
+    is_stock_hallucination,
+    repeated_runs,
+)
 
 
 class FakeTranscriber(Transcriber):
-    def __init__(self, model: str, device: str, language: str) -> None:
+    def __init__(
+        self, model: str, device: str, language: str, *, quick: bool = False, vad: bool = False
+    ) -> None:
+        self.quick = quick
+        self.vad = vad
+        self.compute_type = "float16" if device == "cuda" else "int8"
+        self.load_seconds = 0.0
+        self.dropped_segments = 0
         self.model = model
         self.device = device
         self.language = language
@@ -89,8 +104,8 @@ def mocked(monkeypatch, tmp_path):
     monkeypatch.setattr(fetch, "_cuda_or_cpu", lambda: "cuda")
     made: list[FakeTranscriber] = []
 
-    def factory(model, device, language):
-        made.append(FakeTranscriber(model, device, language))
+    def factory(model, device, language, *, quick=False, vad=False):
+        made.append(FakeTranscriber(model, device, language, quick=quick, vad=vad))
         return made[-1]
 
     monkeypatch.setattr(fetch, "FasterWhisperTranscriber", factory)
@@ -222,12 +237,17 @@ def test_partial_failure_keeps_going_and_exits_1(mocked, tmp_path):
     assert code == 1
     lines = out.splitlines()
     assert len(lines) == 6
-    assert lines[0] == "FAIL https://x.com/a/status/404 post deleted or unavailable"
+    failed_log = (tmp_path / "out" / "x-a-404-failed" / fetch.LOG_NAME).resolve()
+    assert lines[0] == (
+        f"FAIL https://x.com/a/status/404 post deleted or unavailable; log {failed_log}"
+    )
     folder = (tmp_path / "out" / "x-a-7").resolve()
     assert lines[1] == f"OK {folder / 'transcript.txt'} 1:23"
-    assert lines[2] == "FAIL https://x.com/a/status/401 login required; needs a public post"
+    assert lines[2].startswith(
+        "FAIL https://x.com/a/status/401 login required; needs a public post; log "
+    )
     assert lines[3].startswith("FAIL https://x.com/a/status/0 no video found")
-    assert lines[4] == f"FAIL {tmp_path / 'missing.mp4'} file not found"
+    assert lines[4].startswith(f"FAIL {tmp_path / 'missing.mp4'} file not found; log ")
     assert lines[5].startswith("OK ")
     # one model load for the whole batch
     assert len(mocked) == 1 and len(mocked[0].calls) == 2
@@ -263,8 +283,8 @@ def test_missing_ffmpeg_is_a_clear_failure(mocked, monkeypatch, tmp_path):
     monkeypatch.setattr(fetch, "ffmpeg_bin", boom)
     code, out, _ = _run(["https://x.com/a/status/7"], tmp_path, quiet=True)
     assert code == 1
-    assert out == (
-        "FAIL https://x.com/a/status/7 ffmpeg not found; install ffmpeg or set YTP_FFMPEG\n"
+    assert out.startswith(
+        "FAIL https://x.com/a/status/7 ffmpeg not found; install ffmpeg or set YTP_FFMPEG; log "
     )
 
 
@@ -275,7 +295,7 @@ def test_missing_yt_dlp_is_a_clear_failure(mocked, monkeypatch, tmp_path):
     monkeypatch.setattr(fetch, "_load_yt_dlp", missing)
     code, out, _ = _run(["https://x.com/a/status/7"], tmp_path, quiet=True)
     assert code == 1
-    assert out == "FAIL https://x.com/a/status/7 yt-dlp is not installed\n"
+    assert out.startswith("FAIL https://x.com/a/status/7 yt-dlp is not installed; log ")
 
 
 def test_duplicate_inputs_get_separate_folders(mocked, tmp_path):
@@ -339,3 +359,205 @@ def test_cli_needs_input(capsys):
 def test_default_out_folder_is_gitignored():
     ignore = (Path(__file__).resolve().parents[2] / ".gitignore").read_text("utf-8")
     assert "transcripts/" in ignore.splitlines()
+
+
+# ---------------------------------------------------------------- polish (PC test findings)
+
+
+def test_log_and_json_record_compute_type_and_load_time(mocked, tmp_path):
+    code, _out, _ = _run(["https://x.com/a/status/7"], tmp_path, quiet=True)
+    assert code == 0
+    folder = tmp_path / "out" / "x-a-7"
+    log = (folder / fetch.LOG_NAME).read_text("utf-8")
+    assert re.search(
+        rf"whisper model={fetch.GPU_MODEL} device=cuda compute_type=float16 load=\d+\.\ds", log
+    )
+    payload = json.loads((folder / "transcript.json").read_text("utf-8"))
+    assert payload["compute_type"] == "float16"
+    assert mocked[0].quick is True  # the hallucination filters are on for this command
+    assert mocked[0].vad is False  # VAD is opt-in
+
+
+def test_cli_vad_flag(mocked, tmp_path, capsys):
+    out = str(tmp_path / "t")
+    assert cli.main(["transcribe", "--quiet", "--vad", "--out", out, "x.com/a/status/7"]) == 0
+    assert mocked[0].vad is True
+
+
+def test_cpu_compute_type_is_int8(mocked, tmp_path):
+    _run(["https://x.com/a/status/7"], tmp_path, quiet=True, device="cpu")
+    payload = json.loads((tmp_path / "out" / "x-a-7" / "transcript.json").read_text("utf-8"))
+    assert payload["compute_type"] == "int8" and payload["device"] == "cpu"
+
+
+def test_second_run_reuses_media_and_metadata(mocked, tmp_path):
+    url = "https://x.com/ScottTestsAI/status/7"
+    assert _run([url], tmp_path, quiet=True)[0] == 0
+    assert len(FakeYoutubeDL.seen_options) == 1
+    code, out, _ = _run([url], tmp_path, quiet=True)
+    assert code == 0 and out.startswith("OK ")
+    assert len(FakeYoutubeDL.seen_options) == 1  # no second download
+    folder = tmp_path / "out" / "x-ScottTestsAI-7"
+    assert "reusing media.m4a" in (folder / fetch.LOG_NAME).read_text("utf-8")
+    source = json.loads((folder / "source.json").read_text("utf-8"))
+    assert source["title"] == "A test post" and source["uploader"] == "Scott Mastin"
+    assert source["duration"] == 83.4 and source["upload_date"] == "2026-10-29"
+
+
+def test_refresh_downloads_again(mocked, tmp_path):
+    url = "https://x.com/a/status/7"
+    _run([url], tmp_path, quiet=True)
+    _run([url], tmp_path, quiet=True, refresh=True)
+    assert len(FakeYoutubeDL.seen_options) == 2
+
+
+def test_no_keep_media_never_reuses(mocked, tmp_path):
+    folder = tmp_path / "out" / "x-a-7"
+    folder.mkdir(parents=True)
+    (folder / "media.m4a").write_bytes(b"old")
+    _run(["https://x.com/a/status/7"], tmp_path, quiet=True, keep_media=False)
+    assert len(FakeYoutubeDL.seen_options) == 1
+
+
+def test_partial_download_is_not_reused(mocked, tmp_path):
+    folder = tmp_path / "out" / "x-a-7"
+    folder.mkdir(parents=True)
+    (folder / "media.mp4.part").write_bytes(b"half")
+    (folder / "media.m4a").write_bytes(b"")  # zero bytes is not a finished download
+    assert fetch.existing_media(folder) is None
+    _run(["https://x.com/a/status/7"], tmp_path, quiet=True)
+    assert len(FakeYoutubeDL.seen_options) == 1
+
+
+def test_cli_refresh_flag(mocked, tmp_path, capsys):
+    out = str(tmp_path / "t")
+    assert cli.main(["transcribe", "--quiet", "--out", out, "https://x.com/a/status/7"]) == 0
+    assert cli.main(["transcribe", "--quiet", "--out", out, "--refresh", "x.com/a/status/7"]) == 0
+    assert len(FakeYoutubeDL.seen_options) == 2
+
+
+def test_failed_input_folder_gets_failed_suffix(mocked, tmp_path):
+    code, out, _ = _run(["https://x.com/a/status/404"], tmp_path, quiet=True)
+    assert code == 1
+    assert not (tmp_path / "out" / "x-a-404").exists()
+    failed = tmp_path / "out" / "x-a-404-failed"
+    assert (failed / fetch.LOG_NAME).is_file()
+    assert not (failed / "transcript.txt").exists()
+    assert out.rstrip().endswith(str((failed / fetch.LOG_NAME).resolve()))
+    # a second failure merges into the same -failed folder
+    assert _run(["https://x.com/a/status/404"], tmp_path, quiet=True)[0] == 1
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["x-a-404-failed"]
+    assert (failed / fetch.LOG_NAME).read_text("utf-8").count("input https://") == 2
+
+
+def test_failed_rerun_keeps_earlier_good_transcript(mocked, monkeypatch, tmp_path):
+    url = "https://x.com/a/status/7"
+    assert _run([url], tmp_path, quiet=True)[0] == 0
+
+    def broken(self, media):
+        raise ValueError("decoder exploded")
+
+    monkeypatch.setattr(FakeTranscriber, "transcribe", broken)
+    code, out, _ = _run([url], tmp_path, quiet=True)
+    assert code == 1 and out.startswith("FAIL ")
+    folder = tmp_path / "out" / "x-a-7"
+    assert (folder / "transcript.txt").is_file()
+    assert not (tmp_path / "out" / "x-a-7-failed").exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end", "dropped"),
+    [
+        (" Thank you.", 100.0, 101.5, True),
+        ("Thanks for watching!", 0.0, 2.0, True),
+        ("you", 5.0, 5.4, True),
+        ("Thank you.", 0.0, 12.0, False),  # too long to be a stock line
+        ("Thank you, Houston, we copy.", 0.0, 2.0, False),
+        ("Stage 1, go.", 0.0, 1.0, False),
+        ("We'll be right back.", 103.0, 106.9, True),
+    ],
+)
+def test_stock_hallucination_lines(text, start, end, dropped):
+    assert is_stock_hallucination(text, start, end) is dropped
+
+
+class _Seg:
+    def __init__(self, start, end, text, words=None, compression_ratio=1.2):
+        self.start = start
+        self.end = end
+        self.text = text
+        self.words = words or []
+        self.compression_ratio = compression_ratio
+
+
+class _Model:
+    def __init__(self):
+        self.kwargs = {}
+
+    def transcribe(self, path, **kwargs):
+        self.kwargs = kwargs
+        segments = [
+            _Seg(0.0, 3.0, " Attention all operators."),
+            _Seg(40.0, 41.0, " Thank you."),
+            _Seg(41.0, 44.0, " go go go go go go go go go go", compression_ratio=3.1),
+            _Seg(50.0, 50.5, " Go."),
+            _Seg(51.0, 51.5, " Stage two."),
+            _Seg(52.0, 52.5, " Go."),
+            _Seg(61.0, 62.0, " It's a good idea."),
+            _Seg(62.0, 63.0, " It's a good idea."),
+            _Seg(63.0, 64.0, " it's a good idea"),
+            _Seg(70.0, 72.0, " Liftoff."),
+        ]
+        return iter(segments), type("Info", (), {"language": "en"})()
+
+
+def _whisper_with(monkeypatch, quick):
+    from ytp import transcribe as tr
+
+    monkeypatch.setattr(tr, "extract_audio", lambda *a, **k: None)
+    model = _Model()
+    whisper = FasterWhisperTranscriber("tiny", "cpu", "en", quick=quick)
+    whisper._models["tiny"] = model
+    return whisper, model
+
+
+def test_quick_mode_drops_hallucinations(monkeypatch, tmp_path):
+    whisper, model = _whisper_with(monkeypatch, quick=True)
+    transcript = whisper.transcribe(tmp_path / "a.wav")
+    assert model.kwargs["vad_filter"] is False
+    assert model.kwargs["hallucination_silence_threshold"] == 2.0
+    assert [text for _s, _e, text in transcript.segments] == [
+        "Attention all operators.",
+        "Go.",
+        "Stage two.",
+        "Go.",
+        "Liftoff.",
+    ]
+    assert whisper.dropped_segments == 5
+    assert "idea" not in transcript.text and "Thank" not in transcript.text
+
+
+def test_quick_mode_vad_is_opt_in(monkeypatch, tmp_path):
+    from ytp import transcribe as tr
+
+    monkeypatch.setattr(tr, "extract_audio", lambda *a, **k: None)
+    model = _Model()
+    whisper = FasterWhisperTranscriber("tiny", "cpu", "en", quick=True, vad=True)
+    whisper._models["tiny"] = model
+    whisper.transcribe(tmp_path / "a.wav")
+    assert model.kwargs["vad_filter"] is True
+    # keys that exist in both faster-whisper 1.1 and 1.2 VadOptions
+    assert set(model.kwargs["vad_parameters"]) <= {"min_silence_duration_ms", "speech_pad_ms"}
+
+
+def test_repeated_runs():
+    texts = ["Go.", "Stage one.", "Go.", "a", "A.", "a!", "b", "b"]
+    assert repeated_runs(texts) == {3, 4, 5}
+
+
+def test_other_commands_keep_the_old_whisper_settings(monkeypatch, tmp_path):
+    whisper, model = _whisper_with(monkeypatch, quick=False)
+    transcript = whisper.transcribe(tmp_path / "a.wav")
+    assert model.kwargs["vad_filter"] is False
+    assert model.kwargs["hallucination_silence_threshold"] is None
+    assert len(transcript.segments) == 10
