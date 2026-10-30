@@ -95,6 +95,17 @@ python -m ytp finish "C:\AI Eval\YouTube\ep02"
 
 Frames go to `<episode>\frames`. Without `--plan` the segments go to `frames\scenes-plan.yaml` for review. `--safe-guides` writes debug copies with the 9:16 Shorts slice outlined, and the run warns when the big word or a host layer falls outside it. A frame's `motion: {zoom: 1.0->1.08, pan: left}` makes `ytp render` add a slow Ken Burns move to that still (off by default). Art stays on the PC (`asset_dirs`, `YTP_SCENE_ASSETS`, or `C:\AI Eval\YouTube\assets\scenes`), and Inter must be installed (or set `YTP_SCENE_FONT`). Format and a full example: [docs/scene-spec.md](docs/scene-spec.md).
 
+### Studio art on the local GPU (`ytp art`)
+
+A YAML jobs file becomes plates, host poses, and props, made on the PC's GPU with local diffusion models: text to image, img2img from a style reference or an init image, and inpaint fixes with a mask. Jobs with `alpha: true` get a transparent background.
+
+```powershell
+ytp art "C:\AI Eval\YouTube\ep02\edit\art.yaml" --dry-run
+ytp art "C:\AI Eval\YouTube\ep02\edit\art.yaml" --only host-wave
+```
+
+Images go to `C:\AI Eval\YouTube\assets\scenes\<plate|pose|prop>\<id>.png` (or `--out`), with a JSON sidecar per job (prompt, seeds, model, origin, license, timing) and a contact sheet. Existing files are never replaced without `--force`. Models cache in `C:\AI Eval\YouTube\models`. Model ids are configurable, and each must have a declared origin on the allowed list or the run refuses it. Defaults, their origins and licenses, and the job format: [docs/art-jobs.md](docs/art-jobs.md). Needs the optional extra: a CUDA torch build, then `pip install -e .[art]`.
+
 ### Full pass on an existing episode folder
 
 Put the voice, mix, and score under `audio/`, stills under `frames/`, and raw clips under `source/`. `init` only adds folders; it does not move or delete media. From the repo:

@@ -287,6 +287,53 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scenes.set_defaults(func=_cmd_scenes)
 
+    art = sub.add_parser(
+        "art",
+        help="make Studio's plates, poses, and props on the local GPU from a jobs file",
+        description=(
+            "Generate plates, poses, and props from a YAML jobs file with local diffusion "
+            "models (text to image, img2img from a reference or init, inpaint with a mask), "
+            "cut out the background for alpha jobs, and write PNGs, JSON sidecars, and a "
+            "contact sheet. Needs the [art] extra. See docs/art-jobs.md."
+        ),
+    )
+    art.add_argument("jobs", type=Path, help="jobs file (.yaml or .json)")
+    art.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=r"output root (default YTP_ART_OUT or C:\AI Eval\YouTube\assets\scenes)",
+    )
+    art.add_argument(
+        "--only", action="append", default=None, help="run only this job id (repeatable)"
+    )
+    art.add_argument("--force", action="store_true", help="replace existing PNGs and sidecars")
+    art.add_argument(
+        "--dry-run", action="store_true", help="validate and list outputs; load no models"
+    )
+    art.add_argument(
+        "--models-dir",
+        type=Path,
+        default=None,
+        help=r"model cache, used as HF_HOME (default YTP_MODELS_DIR or C:\AI Eval\YouTube\models)",
+    )
+    art.add_argument("--model", default=None, help="diffusion model id for every job")
+    art.add_argument("--inpaint-model", default=None, help="inpaint model id for inpaint jobs")
+    art.add_argument("--matte-model", default=None, help="rembg model name for alpha jobs")
+    art.add_argument(
+        "--allow-origin",
+        action="append",
+        default=None,
+        help="allowed model origin country code (repeatable; replaces the default list)",
+    )
+    art.add_argument(
+        "--offload",
+        choices=["auto", "model", "sequential", "none"],
+        default="auto",
+        help="CPU offload for 12 GB cards (auto: model offload under 16 GB)",
+    )
+    art.set_defaults(func=_cmd_art)
+
     probe = sub.add_parser(
         "self-test",
         help="print Python, ffmpeg, NVENC, CUDA, and a tiny whisper run",
@@ -560,6 +607,30 @@ def _cmd_scenes(args: argparse.Namespace) -> int:
         safe_guides=args.safe_guides,
         clips=not args.no_clips,
     )
+    return 0
+
+
+def _cmd_art(args: argparse.Namespace) -> int:
+    # Imported here so the rest of the CLI works without the [art] extra.
+    from ytp.art import ArtExtraMissing, DiffusersBackend, run_art
+
+    try:
+        run_art(
+            args.jobs,
+            out_dir=args.out,
+            only=args.only,
+            force=args.force,
+            dry_run=args.dry_run,
+            backend_factory=lambda: DiffusersBackend(offload=args.offload),
+            models_dir=args.models_dir,
+            allowed_origins=args.allow_origin,
+            model=args.model,
+            inpaint_model=args.inpaint_model,
+            matte_model=args.matte_model,
+        )
+    except (ArtExtraMissing, FileExistsError) as exc:
+        print(f"ytp: {exc}", file=sys.stderr)
+        return 2
     return 0
 
 
