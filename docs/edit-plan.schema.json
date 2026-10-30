@@ -51,7 +51,21 @@
           "template_text": { "type": ["string", "null"] },
           "palette": { "type": ["string", "null"] },
           "beat": { "type": ["integer", "null"] },
-          "narration_ids": { "type": "array", "items": { "type": "string" } }
+          "narration_ids": { "type": "array", "items": { "type": "string" } },
+          "motion": {
+            "type": ["object", "null"],
+            "description": "Ken Burns on a still segment. Off when null or missing.",
+            "properties": {
+              "zoom": {
+                "type": "array",
+                "items": { "type": "number", "minimum": 1.0, "maximum": 3.0 },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Zoom at the first and last frame, e.g. [1.0, 1.08]."
+              },
+              "pan": { "enum": ["none", "left", "right", "up", "down"] }
+            }
+          }
         }
       }
     },

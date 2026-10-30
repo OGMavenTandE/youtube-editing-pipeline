@@ -244,6 +244,49 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     finish.set_defaults(func=_cmd_finish)
 
+    scenes = sub.add_parser(
+        "scenes",
+        help="draw 1920x1080 scene frames from a scene spec and write their plan segments",
+        description=(
+            "Render PNG frames (plate, art layers, big word, caption, tags) from a YAML or "
+            "JSON scene spec, plus count-up clips. Writes frames/scenes-plan.yaml, or "
+            "merges the segments into the edit plan with --plan. See docs/scene-spec.md."
+        ),
+    )
+    scenes.add_argument("spec", type=Path, help="scene spec (.yaml or .json)")
+    scenes.add_argument(
+        "--episode",
+        type=Path,
+        default=None,
+        help="episode folder (default: the spec's folder, or its parent when it is edit/)",
+    )
+    scenes.add_argument(
+        "--out", type=Path, default=None, help="frames folder (default: <episode>/frames)"
+    )
+    scenes.add_argument(
+        "--plan",
+        nargs="?",
+        type=Path,
+        const=Path("__episode_plan__"),
+        default=None,
+        help=(
+            "merge the scene segments into this edit plan (default edit/plan.yaml when "
+            "given without a path). Replaces earlier scene- segments, keeps the rest."
+        ),
+    )
+    scenes.add_argument(
+        "--only", action="append", default=None, help="render only this frame id (repeatable)"
+    )
+    scenes.add_argument(
+        "--safe-guides",
+        action="store_true",
+        help="also write debug copies with the 9:16 safe area to <out>/guides/",
+    )
+    scenes.add_argument(
+        "--no-clips", action="store_true", help="skip count-up clips (stills only)"
+    )
+    scenes.set_defaults(func=_cmd_scenes)
+
     probe = sub.add_parser(
         "self-test",
         help="print Python, ffmpeg, NVENC, CUDA, and a tiny whisper run",
@@ -498,6 +541,26 @@ def _cmd_transcribe(args: argparse.Namespace) -> int:
         vad=args.vad,
     )
     return run_transcribe(inputs, options)
+
+
+def _cmd_scenes(args: argparse.Namespace) -> int:
+    # Imported here so the rest of the CLI works without Pillow installed.
+    from ytp.scenes import episode_for, run_scenes
+
+    episode = args.episode or episode_for(args.spec)
+    plan_path = args.plan
+    if plan_path is not None and plan_path == Path("__episode_plan__"):
+        plan_path = episode / "edit" / "plan.yaml"
+    run_scenes(
+        args.spec,
+        episode_dir=episode,
+        out_dir=args.out,
+        plan_path=plan_path,
+        only=args.only,
+        safe_guides=args.safe_guides,
+        clips=not args.no_clips,
+    )
+    return 0
 
 
 def _cmd_self_test(args: argparse.Namespace) -> int:

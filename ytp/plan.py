@@ -42,6 +42,8 @@ class Segment:
     palette: str | None = None
     beat: int | None = None
     narration_ids: list[str] = field(default_factory=list)
+    # Ken Burns on a still: {"zoom": [1.0, 1.08], "pan": "left"}. None means no motion.
+    motion: dict[str, Any] | None = None
 
 
 @dataclass
@@ -180,6 +182,7 @@ def plan_to_dict(plan: EditPlan) -> dict[str, Any]:
                 "palette": segment.palette,
                 "beat": segment.beat,
                 "narration_ids": list(segment.narration_ids),
+                "motion": _motion_dict(segment.motion),
             }
             for segment in plan.segments
         ],
@@ -281,6 +284,7 @@ def plan_from_dict(data: dict[str, Any]) -> EditPlan:
                 palette=item.get("palette") or None,
                 beat=_opt_int(item.get("beat")),
                 narration_ids=[str(value) for value in item.get("narration_ids") or []],
+                motion=_motion_dict(item.get("motion")),
             )
             for item in data.get("segments") or []
         ],
@@ -388,6 +392,41 @@ def save_plan(plan: EditPlan, path: Path) -> None:
             yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True, width=4096)
 
 
+MOTION_PANS = ("none", "left", "right", "up", "down")
+
+
+def _motion_dict(value: Any) -> dict[str, Any] | None:
+    if not value:
+        return None
+    if not isinstance(value, dict):
+        return {"invalid": value}
+    zoom = value.get("zoom", [1.0, 1.08])
+    if isinstance(zoom, str) and "->" in zoom:
+        zoom = [part.strip() for part in zoom.split("->", 1)]
+    try:
+        pair = [float(zoom[0]), float(zoom[1])]
+    except (TypeError, ValueError, IndexError, KeyError):
+        pair = zoom
+    return {"zoom": pair, "pan": str(value.get("pan") or "none").lower()}
+
+
+def _motion_errors(segment: Segment) -> list[str]:
+    motion = segment.motion or {}
+    errors: list[str] = []
+    if segment.kind != "still":
+        errors.append(f"segment {segment.id}: motion only applies to still segments")
+    zoom = motion.get("zoom")
+    if (
+        not isinstance(zoom, list)
+        or len(zoom) != 2
+        or not all(isinstance(v, float) and 1.0 <= v <= 3.0 for v in zoom)
+    ):
+        errors.append(f"segment {segment.id}: motion zoom must be two numbers from 1.0 to 3.0")
+    if motion.get("pan") not in MOTION_PANS:
+        errors.append(f"segment {segment.id}: motion pan must be one of {', '.join(MOTION_PANS)}")
+    return errors
+
+
 def validate_plan(plan: EditPlan) -> list[str]:
     """Return human-readable problems. An empty list means the plan is usable."""
     errors: list[str] = []
@@ -403,6 +442,8 @@ def validate_plan(plan: EditPlan) -> list[str]:
             errors.append(f"segment {segment.id} has no duration")
         if segment.kind not in {"still", "clip"}:
             errors.append(f"segment {segment.id} kind must be still or clip")
+        if segment.motion is not None:
+            errors.extend(_motion_errors(segment))
     for item in plan.broll:
         if item.duration <= 0:
             errors.append(f"b-roll {item.id} has no duration")

@@ -24,6 +24,8 @@ build/
 
 # Scott's end card has a headshot and handles. Keep it off the public repo.
 assets/end-card/*.png
+# ytp scenes art (plates, host poses, props) lives on the PC, never in the repo.
+assets/scenes/
 
 # Pipeline working files and rendered media
 output/
