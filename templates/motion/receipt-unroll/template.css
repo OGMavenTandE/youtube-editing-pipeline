@@ -1,9 +1,9 @@
-#label { margin-bottom: 0.7em; }
-#title { margin-bottom: 28px; }
-.ytp-9x16 #title { margin-bottom: 40px; }
+.rc { justify-content: flex-start; }
+.rc-top { flex: none; width: 100%; }
 .rc-viewport { position: relative; width: 100%; height: 0; overflow: hidden; flex: none; }
 .rc-paper { position: absolute; left: 0; top: 0; width: 100%; background: #F2EDE3; border-radius: 2px; }
 .rc-items { position: relative; width: 100%; height: 100%; }
+.rc-header { position: absolute; text-align: center; color: #1d1f24; }
 .rc-item { position: absolute; color: #1d1f24; }
 .rc-amount { position: absolute; text-align: right; color: #1d1f24; }
 .rc-rule { position: absolute; height: 0; border-top: 3px dashed rgba(29, 31, 36, 0.55); }

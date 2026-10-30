@@ -90,6 +90,11 @@ the project `.env` carries the two telemetry switches too.
 5. Check the frames (below), then move the clip to
    `<episode>/clips/motion/<id>-<aspect>-<hash>.mp4` with a `.json` sidecar.
 
+Every clip, both aspects, gets a `.last.png` hold still beside it.
+
+The composition length is written a hair under the last frame's end
+(`render_duration`), because HyperFrames rounds the frame count up.
+
 The hash covers the vars, layout, timing, template files, fonts, GSAP and the
 HyperFrames version. A matching clip is reused; older clips of the same frame
 and aspect are removed.
@@ -107,6 +112,9 @@ Copy:
   Smaller bills.", "Three habits. No new tools."). `--allow-placeholder` turns
   these into warnings for test renders.
 * AI vendor and model names fail. No em dashes.
+* No prices or currency, ever: `$ € £ ¥ ¢ ₹ ₩ ₽`, `USD`, `EUR`, `GBP`, `dollars`,
+  `cents`, `bucks`, `euros` fail in any var. No template, default or formatter
+  adds one (a test scans the template files and every planned payload).
 
 Type, at 1080 high (9:16 is 1.4x):
 
@@ -123,8 +131,12 @@ at the minimum size fails.
 
 Timing and frames (checked on the render):
 
-* Frame 0 is ink plus grain, never black; the first element is visible by
-  frame 6.
+* Frame 1 is never empty: the top label (and the amber rule on chapter cards)
+  is on screen, full opacity, from the first frame. Everything else animates as
+  before. The render check fails a clip whose first frame has under 40 lit pixels
+  (brighter than ink by 40) in the type area.
+* Frame 0 is ink plus grain, never black.
+* A number is hidden until its count starts (no "0 tokens" waiting on screen).
 * The last line holds max(1.5 s, 0.3 s per word), then hard-cuts. No fade.
 * The first and last frames are compared with the ink (not black); the last
   frame must still show type and must not be darker than 1.4 s earlier.
@@ -154,7 +166,8 @@ holds 1.5 s or more.
 ### `kinetic`
 
 One line on screen at a time: each line exits in 7 frames (ease-in), 2 frames
-of ink, the next enters (ease-out). The subline is the last line and holds.
+of ink, the next enters (ease-out). The subline is the last line and holds; it is
+set in Fraunces 60-72px (84-100 at 9:16), as strong as the lines before it.
 
 | Var | |
 |---|---|
@@ -167,7 +180,9 @@ of ink, the next enters (ease-out). The subline is the last line and holds.
 ### `chapter-card`
 
 Label (auto: `SERIES · EP NN` from the scenes file), an amber rule, the title
-word by word, an optional subline.
+word by word, an optional subline. All chapter cards in one scenes file share
+one title size per aspect (the smallest any card needs), worked out over the
+whole file so `--only` renders match.
 
 | Var | |
 |---|---|
@@ -177,22 +192,26 @@ word by word, an optional subline.
 
 ### `receipt-unroll`
 
-A paper receipt unrolls line by line, then the total in red. Lint warns if the
-lines don't add up to the total.
+A paper receipt hangs from a fixed header (or a short stub with no header) and
+grows down one line at a time, then the total lands in red. It never scrolls: the
+plan sizes everything so every line is on screen at the total (text 40px or more,
+56px at 9:16) and fails if the copy can't fit. Six lines fit in both aspects.
+`TOTAL:` and the figure sit on one row when they fit at 40px, else stack. Lint
+warns if amounts don't add up to the total.
 
 | Var | |
 |---|---|
-| `label`, `title` | as above |
-| `lines` | list of `{label, amount}` |
-| `total_label`, `total`, `unit` | |
+| `header` | optional, printed at the top of the paper |
+| `label`, `title` | optional, above the paper |
+| `lines` | list of text lines, or `{label, amount}` |
+| `total_label`, `total`, `unit` | e.g. `TOTAL:`, `150000`, `TOKENS` |
 | `decimals` | optional |
 | `source` | required |
 
-## Ep02 example (Galley v1 copy)
+## Ep02 example (Galley v2 copy)
 
-From `ai-survival/ep02/motion-copy-galley-v1.md`. The receipt has no Galley
-copy yet, so its vars are marked placeholders and need `--allow-placeholder`
-until Galley writes them. Times are examples; use `line:` ids from the script.
+From `ai-survival/ep02/motion-copy-galley-v2.md`. Strict lint passes (no
+placeholders). Times are examples; use `line:` ids from the script.
 
 ```yaml
 version: 1
@@ -200,24 +219,26 @@ series: AI Survival
 episode: 2
 fps: 30
 frames:
-  - id: m-countup                # section 7, "the trick"
+  - id: m-receipt                # cold open, "Then the bill shows up."
     kind: motion
-    template: count-up
+    template: receipt-unroll
     start: 0
     vars:
-      label: "ONE TASK, BEFORE AND AFTER"
-      title: "Tokens for one task, *before* and after"
-      before_label: "BEFORE: THE MODEL READS ALL 10,000 ROWS"
-      after_label: "AFTER: CODE FILTERS, THE MODEL READS 5"
-      before: 150000
-      after: 2000
-      unit: tokens
-      tag: "98.7% fewer tokens"
+      header: "SANDWICH STAND, AI BILL"
+      lines:
+        - "Reread policy binder, 40 pages"
+        - "Reread policy binder, again"
+        - "Read all 10,000 rows"
+        - "Same instructions, again"
+        - "Big model, easy question"
+      total_label: "TOTAL:"
+      total: 150000
+      unit: "TOKENS"
       source: "Example from a major AI lab, Nov 2025"
   - id: m-plan                   # section 3 preview, again at section 10
     kind: motion
     template: kinetic
-    start: 8
+    start: 12
     vars:
       label: "THE PLAN"
       lines:
@@ -227,39 +248,47 @@ frames:
         - "Right-size the model."
       amber_word: code
       subline: "Then test it before it replaces anything."
-  - {id: m-ch0, kind: motion, template: chapter-card, start: 20, vars: {title: "How the bill works"}}
-  - {id: m-ch1, kind: motion, template: chapter-card, start: 25, vars: {title: "Step one: *Find* the waste"}}
-  - {id: m-ch2, kind: motion, template: chapter-card, start: 30, vars: {title: "Step two: *Trim* what it reads"}}
-  - {id: m-ch3, kind: motion, template: chapter-card, start: 35, vars: {title: "Step three: Give right-answer work to *code*"}}
-  - {id: m-ch4, kind: motion, template: chapter-card, start: 40, vars: {title: "The trick: Have the AI *write* the code"}}
-  - {id: m-ch5, kind: motion, template: chapter-card, start: 45, vars: {title: "Step four: *Right-size* the model"}}
-  - {id: m-ch6, kind: motion, template: chapter-card, start: 50, vars: {title: "*Test* it before it replaces anything"}}
-  - {id: m-ch7, kind: motion, template: chapter-card, start: 55, vars: {title: "Where to start *this week*"}}
-  - id: m-receipt                # NO GALLEY COPY YET: placeholders
+  - id: m-countup                # section 7, "the trick"
+    kind: motion
+    template: count-up
+    start: 24
+    vars:
+      label: "ONE TASK, BEFORE AND AFTER"
+      title: "Tokens for one task, before and *after*"
+      before_label: "BEFORE: THE MODEL READS ALL 10,000 ROWS"
+      after_label: "AFTER: CODE FILTERS, THE MODEL READS 5"
+      before: 150000
+      after: 2000
+      unit: tokens
+      tag: "98.7% fewer tokens"
+      source: "Example from a major AI lab, Nov 2025"
+  - id: m-slip                   # section 11 payoff gag
     kind: motion
     template: receipt-unroll
-    start: 60
+    start: 36
     vars:
-      label: "[PLACEHOLDER] THE BILL"
-      title: "[PH] One order, *every* page"
-      lines:
-        - {label: "[PH] REREAD 40-PAGE BINDER", amount: 96000}
-        - {label: "[PH] REREAD CHAT HISTORY", amount: 38000}
-        - {label: "[PH] FULL TOOL LIST", amount: 14000}
-        - {label: "[PH] THE ACTUAL ORDER", amount: 2000}
-      total_label: "[PH] TOTAL"
-      total: 150000
-      unit: tokens
-      source: "[PLACEHOLDER] source line"
+      lines: ["Read 5 rows"]
+      total_label: "TOTAL:"
+      total: 2000
+      unit: "TOKENS"
+      source: "Example from a major AI lab, Nov 2025"
+  - {id: m-ch0, kind: motion, template: chapter-card, start: 48, vars: {title: "How the *bill* works"}}
+  - {id: m-ch1, kind: motion, template: chapter-card, start: 56, vars: {title: "Step one: *Find* the waste"}}
+  - {id: m-ch2, kind: motion, template: chapter-card, start: 64, vars: {title: "Step two: *Trim* what it reads"}}
+  - {id: m-ch3, kind: motion, template: chapter-card, start: 72, vars: {title: "Step three: Give right-answer work to *code*"}}
+  - {id: m-ch4, kind: motion, template: chapter-card, start: 80, vars: {title: "The trick: Have the AI *write* the code"}}
+  - {id: m-ch5, kind: motion, template: chapter-card, start: 88, vars: {title: "Step four: *Right-size* the model"}}
+  - {id: m-ch6, kind: motion, template: chapter-card, start: 96, vars: {title: "*Test* it before it replaces anything"}}
+  - {id: m-ch7, kind: motion, template: chapter-card, start: 104, vars: {title: "Where to start *this week*"}}
 ```
 
 Notes on the Galley copy:
 
-* Galley marks no amber word for the kinetic lines; `amber_word: code` is a
-  pick, change it if Studio wants another.
-* "How the bill works" has no amber word (a warning, not an error).
-* The count-up headline keeps Galley's amber *before*; the bars follow the
-  rule (slate before, amber only for the after bar and number).
+* Galley marks no amber word for the kinetic lines; `amber_word: code` is
+  Studio's pick.
+* No dollar amounts anywhere; the only figures are the sourced 150,000 and 2,000.
+* In 16:9 `safe` the receipt is 608px wide, so longer lines wrap to two rows at
+  40px; all lines still show at the total.
 
 ## Tests
 

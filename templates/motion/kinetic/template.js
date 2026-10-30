@@ -19,7 +19,7 @@
       tl.to(inner, { opacity: 0, y: -lift * 0.6, duration: c.exit, ease: "power2.in" }, beat.out);
     }
   });
-  H.inUp("#label", c.label, 0.3, 0);
-  H.inUp("#source", c.label, 0.3, 0);
+  H.show("#label");
+  H.show("#source");
   H.finish();
 })();

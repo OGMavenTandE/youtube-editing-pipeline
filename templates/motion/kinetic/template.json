@@ -12,7 +12,7 @@
   "elements": {
     "label": {"role": "label", "font": "sans", "weight": 600, "size": [26, 28], "tracking": 0.16, "upper": true, "max_lines": 1},
     "line": {"role": "headline", "font": "display", "weight": 500, "size": [64, 92], "max_lines": 3},
-    "subline": {"role": "subline", "font": "sans", "weight": 400, "size": [40, 46], "max_lines": 3, "wide": 1.15},
+    "subline": {"role": "subline", "font": "display", "weight": 400, "size": [60, 72], "max_lines": 3, "wide": 1.15},
     "source": {"role": "source", "font": "sans", "weight": 400, "size": [24, 26], "opacity": 0.7, "max_lines": 2, "wide": 1.0}
   }
 }

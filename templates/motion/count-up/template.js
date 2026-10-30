@@ -12,7 +12,7 @@
     num.classList.add(r.inside ? "in" : "out");
   });
   var b = d.rows[0], a = d.rows[1];
-  H.inUp("#label", c.label, 0.3, 12);
+  H.show("#label");
   H.inUp("#title", c.title, 0.6, 24);
   H.inUp("#row-before", c.before_row, 0.4, 16);
   H.inUp("#source", c.source, 0.4, 0);
