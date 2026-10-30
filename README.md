@@ -52,12 +52,18 @@ Each video gets its own folder under `--out` (default `$YTP_TRANSCRIPTS`, else `
 
 - `transcript.txt`: one `[m:ss.ss-m:ss.ss] text` line per Whisper segment (same format as `ytp take`)
 - `transcript.srt`: subtitles
-- `transcript.json`: model, device, language, duration, and the segments
+- `transcript.json`: model, device, compute type, language, duration, and the segments
 - `source.json`: URL, post id, uploader and handle, title, post text, upload date, duration
-- `transcribe.log`: everything yt-dlp and Whisper printed
+- `transcribe.log`: everything yt-dlp and Whisper printed, including `whisper model=... device=... compute_type=... load=N.Ns` and how many hallucinated segments were dropped
 - `media.*`: the downloaded audio (`--no-keep-media` deletes it after transcription; a local file is never touched)
 
+Running the same link again reuses `media.*` from its folder instead of downloading it again (with the default `--keep-media`). Pass `--refresh` to download it again anyway.
+
+A failed input never leaves a folder that looks like a success. Its folder is renamed to `<name>-failed` (for example `x-someone-123-failed\`) and holds only `transcribe.log` (plus the audio if the download worked). The `FAIL` line ends with `; log <path>` pointing at that log. A later failure for the same link appends to the same `-failed` log. If the folder already has a transcript from an earlier good run, it is left where it is.
+
 The default model is `large-v3-turbo` in float16 on CUDA (RTX 4070 SUPER), and `small` in int8 when CUDA is not available or fails. `--model` overrides it (`small`, `medium.en`, `large-v3`, ...). `--language` is `en` by default; `--language auto` lets Whisper detect it. The first `large-v3-turbo` run downloads about 1.6 GB into the Hugging Face cache.
+
+Whisper makes up lines over music and engine noise ("Thank you.", "We'll be right back.", one line looped many times). `ytp transcribe` (only this command; `take`, `index`, and `check` are unchanged) skips text Whisper produces over long silences (`hallucination_silence_threshold` 2 s), and drops: a segment of 4 s or less that is only a stock line (thank you, thanks for watching, please subscribe, we'll be right back, see you next time, you, bye, ...); a segment that loops or compresses like a loop (the same check the splice QC uses); and a run of three or more identical segments in a row. A real "Thank you." of 4 s or less is dropped too. `--vad` also runs Silero VAD. It is off by default because on a launch clip it cut the countdown that was spoken over engine noise.
 
 Windows examples (PowerShell, from any folder, with the ytp venv):
 
@@ -73,10 +79,10 @@ $ytp = "C:\AI Eval\YouTube\ytp\.venv\Scripts\ytp.exe"
 
 ```
 OK C:\AI Eval\YouTube\transcripts\x-ScottTestsAI-1850000000000000001\transcript.txt 1:23
-FAIL https://x.com/someone/status/123 login required; needs a public post
+FAIL https://x.com/someone/status/123 login required; needs a public post; log C:\AI Eval\YouTube\transcripts\x-someone-123-failed\transcribe.log
 ```
 
-The duration (`m:ss` or `h:mm:ss`) is always the last token, so a path with spaces still parses. `--summary-lines N` prints the first N transcript lines after each `OK` line. `--from-file` reads one link or path per line (blank lines and `#` comments are skipped) and can be combined with links on the command line. One failed link does not stop the rest; the exit code is 0 when every input worked and 1 when any failed. X changes often; if X links start failing, run `& "C:\AI Eval\YouTube\ytp\.venv\Scripts\python.exe" -m pip install --upgrade yt-dlp`.
+The duration (`m:ss` or `h:mm:ss`) is always the last token, so a path with spaces still parses. `--summary-lines N` prints the first N transcript lines after each `OK` line. When parsing, any stdout line that does not start with `OK ` or `FAIL ` is transcript text from the `OK` line above it. `--from-file` reads one link or path per line (blank lines and `#` comments are skipped) and can be combined with links on the command line. One failed link does not stop the rest; the exit code is 0 when every input worked and 1 when any failed. X changes often; if X links start failing, run `& "C:\AI Eval\YouTube\ytp\.venv\Scripts\python.exe" -m pip install --upgrade yt-dlp`.
 
 ### Full pass on an existing episode folder
 

@@ -273,6 +273,74 @@ def _downloaded_path(ydl, info: dict, folder: Path) -> Path | None:
     return found[-1] if found else None
 
 
+_PARTIAL_SUFFIXES = {".part", ".ytdl", ".json", ".temp", ".tmp"}
+
+
+def existing_media(folder: Path) -> Path | None:
+    """A finished download from an earlier run (``media.<ext>``), else None."""
+    if not folder.is_dir():
+        return None
+    found = [
+        path
+        for path in folder.glob("media.*")
+        if path.is_file()
+        and path.stat().st_size > 0
+        and not (set(s.lower() for s in path.suffixes) & _PARTIAL_SUFFIXES)
+    ]
+    found.sort(key=lambda path: path.stat().st_mtime)
+    return found[-1] if found else None
+
+
+def cached_info(folder: Path) -> dict:
+    """yt-dlp fields from the earlier run's source.json, so a reuse keeps the metadata."""
+    path = folder / "source.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "id": data.get("id") or "",
+        "extractor_key": data.get("extractor") or "",
+        "uploader": data.get("uploader") or "",
+        "uploader_id": data.get("handle") or "",
+        "title": data.get("title") or "",
+        "description": data.get("description") or "",
+        "upload_date": data.get("upload_date") or "",
+        "duration": data.get("duration") or 0.0,
+        "webpage_url": data.get("webpage_url") or "",
+    }
+
+
+def mark_failed(folder: Path) -> Path:
+    """Rename a failed run's folder to ``<name>-failed`` so it never looks like a success.
+
+    A folder that already holds a transcript from an earlier good run is left alone.
+    An older ``-failed`` folder for the same input is updated in place; its log is appended.
+    """
+    if not folder.is_dir() or (folder / "transcript.txt").is_file():
+        return folder
+    target = folder.with_name(folder.name + "-failed")
+    try:
+        if target.exists():
+            for child in folder.iterdir():
+                dest = target / child.name
+                if child.name == LOG_NAME and dest.is_file():
+                    # keep the history of every failed attempt in one log
+                    with dest.open("a", encoding="utf-8", newline="\n") as handle:
+                        handle.write(child.read_text(encoding="utf-8"))
+                    child.unlink()
+                else:
+                    child.replace(dest)
+            folder.rmdir()
+        else:
+            folder.rename(target)
+    except OSError:
+        return folder
+    return target
+
+
 def source_record(item: Item, info: dict | None, media: Path | None, duration: float) -> dict:
     info = info or {}
     upload = str(info.get("upload_date") or "")
@@ -310,10 +378,18 @@ def srt_text(transcript: Transcript) -> str:
     return "\n".join(blocks)
 
 
-def transcript_payload(transcript: Transcript, *, model: str, device: str, duration: float) -> dict:
+def transcript_payload(
+    transcript: Transcript,
+    *,
+    model: str,
+    device: str,
+    duration: float,
+    compute_type: str = "",
+) -> dict:
     return {
         "model": model,
         "device": device,
+        "compute_type": compute_type,
         "language": transcript.language or "",
         "duration": round(float(duration), 3),
         "text": transcript.text,
@@ -332,12 +408,15 @@ def write_outputs(
     model: str,
     device: str,
     duration: float,
+    compute_type: str = "",
 ) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     txt = folder / "transcript.txt"
     txt.write_text(transcript_text(transcript), encoding="utf-8", newline="\n")
     (folder / "transcript.srt").write_text(srt_text(transcript), encoding="utf-8", newline="\n")
-    payload = transcript_payload(transcript, model=model, device=device, duration=duration)
+    payload = transcript_payload(
+        transcript, model=model, device=device, duration=duration, compute_type=compute_type
+    )
     (folder / "transcript.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
     )
@@ -435,6 +514,8 @@ class Options:
     keep_media: bool = True
     quiet: bool = False
     summary_lines: int = 0
+    refresh: bool = False
+    vad: bool = False
 
 
 class Engine:
@@ -446,6 +527,7 @@ class Engine:
         self._transcriber: Transcriber | None = None
         self.device = ""
         self.model = ""
+        self.compute_type = ""
 
     def _make(self, device: str) -> Transcriber:
         model = self.options.model
@@ -453,8 +535,34 @@ class Engine:
             model = GPU_MODEL if device == "cuda" else CPU_MODEL
         self.device = device
         self.model = model
+        self.compute_type = "float16" if device == "cuda" else "int8"
         factory = self.factory or FasterWhisperTranscriber
-        return factory(model, device, self.options.language)
+        return factory(model, device, self.options.language, quick=True, vad=self.options.vad)
+
+    def _load(self, log: Log) -> None:
+        """Load the model before transcribing so the log shows compute type and load time."""
+        transcriber = self._transcriber
+        load = getattr(transcriber, "load", None)
+        started = time.monotonic()
+        if callable(load):
+            load()
+        seconds = getattr(transcriber, "load_seconds", None)
+        if not isinstance(seconds, (int, float)) or not seconds:
+            seconds = time.monotonic() - started
+        compute = getattr(transcriber, "compute_type", "") or self.compute_type
+        self.compute_type = compute
+        log.write(
+            f"whisper model={self.model} device={self.device} compute_type={compute} "
+            f"load={seconds:.1f}s"
+        )
+
+    def _run(self, media: Path, log: Log) -> Transcript:
+        self._load(log)
+        transcript = self._transcriber.transcribe(media)
+        dropped = getattr(self._transcriber, "dropped_segments", 0)
+        if isinstance(dropped, int) and dropped:
+            log.write(f"dropped {dropped} hallucinated segment(s) (stock lines or loops)")
+        return transcript
 
     def transcribe(self, media: Path, log: Log) -> Transcript:
         if self._transcriber is None:
@@ -465,16 +573,15 @@ class Engine:
                     log.write("warning: CUDA is not available; transcribing on CPU int8")
                     device = "cpu"
             self._transcriber = self._make(device)
-        log.write(f"whisper model={self.model} device={self.device}")
         try:
-            return self._transcriber.transcribe(media)
+            return self._run(media, log)
         except RuntimeError as exc:
             if self.device == "cuda" and self.options.device == "auto" and (
                 "faster-whisper" not in str(exc)
             ):
                 log.write(f"warning: CUDA transcription failed ({exc}); retrying on CPU int8")
                 self._transcriber = self._make("cpu")
-                return self._transcriber.transcribe(media)
+                return self._run(media, log)
             raise
 
 
@@ -498,7 +605,12 @@ def process(item: Item, folder: Path, engine: Engine, options: Options, log: Log
             ffmpeg = ffmpeg_bin()
         except FFmpegError as exc:
             raise TranscribeError("ffmpeg not found; install ffmpeg or set YTP_FFMPEG") from exc
-        if item.is_url:
+        cached = existing_media(folder) if item.is_url else None
+        if cached is not None and options.keep_media and not options.refresh:
+            media = cached
+            info = cached_info(folder)
+            log.write(f"reusing {media.name} (pass --refresh to download again)")
+        elif item.is_url:
             media, info = download(item.value, folder, ffmpeg, log)
             downloaded = media
             log.write(f"downloaded {media.name}")
@@ -519,7 +631,13 @@ def process(item: Item, folder: Path, engine: Engine, options: Options, log: Log
         if item.is_url and not options.keep_media:
             source["media"] = None
         path = write_outputs(
-            folder, transcript, source, model=engine.model, device=engine.device, duration=duration
+            folder,
+            transcript,
+            source,
+            model=engine.model,
+            device=engine.device,
+            compute_type=engine.compute_type,
+            duration=duration,
         )
         lines = transcript_text(transcript).splitlines()
         log.write(
@@ -540,6 +658,8 @@ def process(item: Item, folder: Path, engine: Engine, options: Options, log: Log
 def result_lines(result: Result, summary_lines: int = 0) -> list[str]:
     if not result.ok:
         reason = " ".join(result.reason.split()) or "failed"
+        if result.folder is not None and (result.folder / LOG_NAME).is_file():
+            reason += f"; log {(result.folder / LOG_NAME).resolve()}"
         return [f"FAIL {result.item.value} {reason}"]
     lines = [f"OK {result.transcript.resolve()} {format_duration(result.duration)}"]
     if summary_lines > 0:
@@ -582,6 +702,7 @@ def run(
             log.close()
         if not result.ok:
             failed += 1
+            result.folder = mark_failed(folder)
         for line in result_lines(result, options.summary_lines):
             print(line, file=stdout, flush=True)
     return 1 if failed else 0
