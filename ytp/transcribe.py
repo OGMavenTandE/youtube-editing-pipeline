@@ -248,7 +248,8 @@ class FasterWhisperTranscriber(Transcriber):
             extract_audio(media, temporary, start=start, end=end)
             kwargs = dict(
                 word_timestamps=True,
-                language=self.forced_language,
+                # "auto" lets Whisper detect the language (ytp transcribe --language auto).
+                language=None if self.forced_language == "auto" else self.forced_language,
                 task="transcribe",
                 beam_size=_WHISPER_BEAM_SIZE,
                 best_of=1,

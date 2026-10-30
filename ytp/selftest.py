@@ -50,8 +50,18 @@ def self_test_lines() -> list[str]:
     device = _cuda_or_cpu()
     lines.append(f"cuda: {device}")
     lines.append(end_card_status())
+    lines.append(_yt_dlp_line())
     lines.append(_whisper_line())
     return lines
+
+
+def _yt_dlp_line() -> str:
+    """Only `ytp transcribe` needs yt-dlp. Missing is a note, not a failure."""
+    try:
+        from yt_dlp.version import __version__ as version
+    except ImportError:
+        return "yt-dlp: not installed (needed for ytp transcribe links)"
+    return f"yt-dlp: {version}"
 
 
 def _whisper_line() -> str:
