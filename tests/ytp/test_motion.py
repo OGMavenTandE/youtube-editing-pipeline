@@ -846,3 +846,50 @@ def test_receipt_image_renders_from_the_episode_folder(tmp_path, mock_hf):
     assert 'src="assets/receipt.png"' in (project / "index.html").read_text(encoding="utf-8")
     plan = json.loads((project / "ytp-plan.json").read_text(encoding="utf-8"))
     assert len(plan["data"]["image_sha256"]) == 64  # new art, new hash, new render
+
+
+def _strip_2x(path: Path) -> Path:
+    from PIL import Image
+
+    with Image.open(STRIP) as im:
+        im.resize((im.width * 2, im.height * 2), Image.LANCZOS).save(path)
+    return path
+
+
+def test_receipt_image_9x16_takes_its_own_strip(tmp_path, fonts):
+    # Studio's 2x strip is scaled down to the 9:16 safe area; 16:9 keeps the 1:1 strip.
+    big = _strip_2x(tmp_path / "R5-final 2x, 2,000.png")
+    vars = {"image": str(STRIP), "image_9x16": str(big)}
+    one = plan_motion(_job("receipt-image"), "9x16", fonts).payload["data"]
+    tall = plan_motion(_job("receipt-image", vars=vars), "9x16", fonts)
+    wide = plan_motion(_job("receipt-image", vars=vars), "16x9", fonts)
+    assert tall.errors == [] and wide.errors == []  # the path is never linted as copy
+    d = tall.payload["data"]
+    assert d["image_size"] == [1216, 1836] and d["scale"] == pytest.approx(900 / 1216, abs=1e-3)
+    assert d["scale"] < 1 and (d["w"], d["lip"]) == (one["w"], one["lip"])
+    assert d["image_sha256"] != one["image_sha256"]
+    w = wide.payload["data"]
+    assert w["image_size"] == [608, 918] and w["scale"] == 1.0 and w["y"] == 72
+    missing = plan_motion(
+        _job("receipt-image", vars={**vars, "image_9x16": "nope.png"}), "9x16", fonts
+    )
+    assert any("not found" in e for e in missing.errors)
+
+
+def test_receipt_image_9x16_strip_is_copied_for_9x16_only(tmp_path, mock_hf):
+    require_ffmpeg()
+    episode = tmp_path / "ep"
+    (episode / "art").mkdir(parents=True)
+    shutil.copy(STRIP, episode / "art" / "R5.png")
+    big = _strip_2x(episode / "art" / "R5-2x.png")
+    frame = {
+        "id": "r5",
+        "kind": "motion",
+        "template": "receipt-image",
+        "start": 0,
+        "vars": {"image": "art/R5.png", "image_9x16": "art/R5-2x.png"},
+    }
+    run_motion(_write_spec(episode, [frame]), aspect="both")
+    assets = episode / ".ytp-motion"
+    assert (assets / "r5-16x9" / "assets" / "receipt.png").read_bytes() == STRIP.read_bytes()
+    assert (assets / "r5-9x16" / "assets" / "receipt.png").read_bytes() == big.read_bytes()

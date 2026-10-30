@@ -225,7 +225,8 @@ grain, and holds for `hold` seconds.
   strip wider than 608px or taller than 918px is shrunk to fit, with a warning.
 * 9:16: one scale that fits the safe area (x 90-990, y 200-1720). A 608px strip
   is scaled to 900px (1.48x), so 40px receipt type lands at about 59px. The art
-  is upscaled by the browser; for the sharpest 9:16, Studio can supply a 2x strip.
+  is upscaled by the browser; for the sharpest 9:16, give Studio's 2x strip as
+  `image_9x16` so it is scaled down instead.
 * The path and timings never reach the screen, so the copy lint (currency,
   vendors, placeholders) has nothing to check: Studio's art carries its own copy.
 * A new image (by content) changes the hash and renders again.
@@ -233,20 +234,21 @@ grain, and holds for `hold` seconds.
 | Var | |
 |---|---|
 | `image` | PNG, absolute or relative to the episode folder |
+| `image_9x16` | optional PNG for 9:16 only, e.g. Studio's 2x strip (1216px), scaled down (0.74x) to the safe area instead of the 1x strip scaled up; default `image` |
 | `print` | optional, seconds to print in (default 3.0, 0.5 to 10) |
 | `hold` | optional, seconds held after the print (default 2.0) |
 
-Ep02 v4 (Studio's six strips from `ep02/v4/receipts/strips/`, copied into the
-episode's `art\receipts\` folder):
+Ep02 v4 (Studio's six strips in the episode's `art-v4\receipts\strips\`, and the
+2x set in `strips-2x\` for 9:16):
 
 ```yaml
 frames:
-  - {id: m-r0-open,  kind: motion, template: receipt-image, start: 0,  vars: {image: art/receipts/R0-open.png}}
-  - {id: m-r1-step1, kind: motion, template: receipt-image, start: 8,  vars: {image: art/receipts/R1-step1.png}}
-  - {id: m-r2-step2, kind: motion, template: receipt-image, start: 16, vars: {image: art/receipts/R2-step2.png}}
-  - {id: m-r3-step3, kind: motion, template: receipt-image, start: 24, vars: {image: art/receipts/R3-step3.png}}
-  - {id: m-r4-step4, kind: motion, template: receipt-image, start: 32, vars: {image: art/receipts/R4-step4.png, hold: 1.0}}
-  - {id: m-r5-final, kind: motion, template: receipt-image, start: 40, vars: {image: art/receipts/R5-final.png}}
+  - {id: m-r0-open,  kind: motion, template: receipt-image, start: 0,  vars: {image: art-v4/receipts/strips/R0-open.png, image_9x16: art-v4/receipts/strips-2x/R0-open.png}}
+  - {id: m-r1-step1, kind: motion, template: receipt-image, start: 8,  vars: {image: art-v4/receipts/strips/R1-step1.png, image_9x16: art-v4/receipts/strips-2x/R1-step1.png}}
+  - {id: m-r2-step2, kind: motion, template: receipt-image, start: 16, vars: {image: art-v4/receipts/strips/R2-step2.png, image_9x16: art-v4/receipts/strips-2x/R2-step2.png}}
+  - {id: m-r3-step3, kind: motion, template: receipt-image, start: 24, vars: {image: art-v4/receipts/strips/R3-step3.png, image_9x16: art-v4/receipts/strips-2x/R3-step3.png}}
+  - {id: m-r4-step4, kind: motion, template: receipt-image, start: 32, vars: {image: art-v4/receipts/strips/R4-step4.png, image_9x16: art-v4/receipts/strips-2x/R4-step4.png, hold: 1.0}}
+  - {id: m-r5-final, kind: motion, template: receipt-image, start: 40, vars: {image: art-v4/receipts/strips/R5-final.png, image_9x16: art-v4/receipts/strips-2x/R5-final.png}}
 ```
 
 Studio's spec holds R4 for 1 s and R5 for 2 s; set `start` from the script lines.
