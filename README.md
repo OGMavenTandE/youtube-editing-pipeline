@@ -44,6 +44,40 @@ Run the suite (Whisper tests stay out of CI):
 python -m pytest tests/ytp -m "not whisper" --confcutdir=tests/ytp
 ```
 
+### Transcribe X posts and other links (`ytp transcribe`)
+
+`ytp transcribe` turns public video links into timestamped transcripts on the local GPU. X/Twitter comes first; any link yt-dlp supports works, and so does a local file. The audio is downloaded with yt-dlp (best audio only) and transcribed with the same local faster-whisper code as `ytp take`, so a bot that runs it spends no tokens on the audio. Public posts only: there is no cookie or browser-login support, and a protected, deleted, login-only, or text-only post fails with a short reason.
+
+Each video gets its own folder under `--out` (default `$YTP_TRANSCRIPTS`, else `.\transcripts`, which is gitignored). The folder is named from the post: `x-<handle>-<post id>` for X, `<site>-<video id>` for other links, and the file name for a local file. Inside:
+
+- `transcript.txt`: one `[m:ss.ss-m:ss.ss] text` line per Whisper segment (same format as `ytp take`)
+- `transcript.srt`: subtitles
+- `transcript.json`: model, device, language, duration, and the segments
+- `source.json`: URL, post id, uploader and handle, title, post text, upload date, duration
+- `transcribe.log`: everything yt-dlp and Whisper printed
+- `media.*`: the downloaded audio (`--no-keep-media` deletes it after transcription; a local file is never touched)
+
+The default model is `large-v3-turbo` in float16 on CUDA (RTX 4070 SUPER), and `small` in int8 when CUDA is not available or fails. `--model` overrides it (`small`, `medium.en`, `large-v3`, ...). `--language` is `en` by default; `--language auto` lets Whisper detect it. The first `large-v3-turbo` run downloads about 1.6 GB into the Hugging Face cache.
+
+Windows examples (PowerShell, from any folder, with the ytp venv):
+
+```
+$ytp = "C:\AI Eval\YouTube\ytp\.venv\Scripts\ytp.exe"
+& $ytp transcribe --quiet https://x.com/<user>/status/<id>
+& $ytp transcribe --quiet --out "C:\AI Eval\YouTube\transcripts" https://x.com/<user>/status/<id> https://x.com/<user2>/status/<id2>
+& $ytp transcribe --quiet --summary-lines 5 --from-file "C:\AI Eval\YouTube\urls.txt"
+& $ytp transcribe "C:\AI Eval\YouTube\desk.mp4" --no-keep-media
+```
+
+`--quiet` is for bots. All progress goes to `transcribe.log` in each video folder and stdout is exactly one line per input:
+
+```
+OK C:\AI Eval\YouTube\transcripts\x-ScottTestsAI-1850000000000000001\transcript.txt 1:23
+FAIL https://x.com/someone/status/123 login required; needs a public post
+```
+
+The duration (`m:ss` or `h:mm:ss`) is always the last token, so a path with spaces still parses. `--summary-lines N` prints the first N transcript lines after each `OK` line. `--from-file` reads one link or path per line (blank lines and `#` comments are skipped) and can be combined with links on the command line. One failed link does not stop the rest; the exit code is 0 when every input worked and 1 when any failed. X changes often; if X links start failing, run `& "C:\AI Eval\YouTube\ytp\.venv\Scripts\python.exe" -m pip install --upgrade yt-dlp`.
+
 ### Full pass on an existing episode folder
 
 Put the voice, mix, and score under `audio/`, stills under `frames/`, and raw clips under `source/`. `init` only adds folders; it does not move or delete media. From the repo:

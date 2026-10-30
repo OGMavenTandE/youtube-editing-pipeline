@@ -62,6 +62,10 @@ If ffmpeg is not on PATH, set `YTP_FFMPEG` to the full path of `ffmpeg.exe` for 
 3. Edit `edit\plan.yaml`.
 4. `ytp finish desk` checks the plan, masters the mixed audio to the series loudness target (-16 LUFS, true peak -1.5 dBTP, LRA 11), then renders `renders\v1\` (then v2, and so on) with NVENC when ffmpeg lists it and a 256x256 trial encode works, otherwise libx264. Mastering aims 0.5 dB under that peak limit so the AAC file stays at or below -1.5 dBTP, and the encode stays at the mix sample rate (48000 Hz). It runs `ytp check` on the CPU and prints `qc\check-report.md`, and also writes `qc\check-report-vN.md` for that version. The latest report remains `check-report.md`. The loudness section includes the measured input and output. Raw desk takes near -24 LUFS are brought to that target. The measurement is the full mix, including the end card, after any music ducking. `ytp finish desk --no-master` skips mastering. `ytp finish desk --denoise` runs a light denoise (highpass near 80 Hz, then afftdn) before the loudness pass. The `-af` string for both passes is in `renders\vN\render.log`. If linear gain would push the peaks over the limit, loudnorm uses dynamic mode and the loudness section notes where that gain would have peaked. The note does not warn and does not fail the check.
 
+## Transcripts from X links
+
+`ytp transcribe --quiet https://x.com/<user>/status/<id>` downloads a public post's audio with yt-dlp and writes `transcript.txt`, `transcript.srt`, `transcript.json`, and `source.json` in a folder named from the post id. Details and examples are in the README section "Transcribe X posts and other links". Public posts only; no cookies or browser logins.
+
 ## End card
 
 The end card picture is not in the git repo. It has Scott's headshot and handles. Put `option-C-clean.png` in one of these places, first match wins:

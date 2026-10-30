@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,9 @@ import yaml
 
 from ytp import __version__
 from ytp.check import check_render, load_asr, write_report
+from ytp.fetch import CPU_MODEL, DEFAULT_OUT, GPU_MODEL, read_url_file
+from ytp.fetch import Options as TranscribeOptions
+from ytp.fetch import run as run_transcribe
 from ytp.finish import finish_episode
 from ytp.import_ep01 import import_episode
 from ytp.index import index_episode
@@ -32,6 +36,62 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"ytp {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    quick = sub.add_parser(
+        "transcribe",
+        help="timestamped transcript for public video links (X first) or local files",
+        description=(
+            "Download a public post's audio with yt-dlp (or read a local file) and transcribe "
+            "it with local faster-whisper. Public posts only: no cookies or browser logins."
+        ),
+    )
+    quick.add_argument("inputs", nargs="*", help="video URLs or local media files")
+    quick.add_argument(
+        "--from-file",
+        type=Path,
+        action="append",
+        default=None,
+        help="text file with one URL or path per line (# comments allowed). Repeatable.",
+    )
+    quick.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=(
+            "folder that gets one subfolder per video, named from the post id "
+            "(default: $YTP_TRANSCRIPTS or ./transcripts)"
+        ),
+    )
+    quick.add_argument(
+        "--model",
+        default="auto",
+        help=f"Whisper model (default auto: {GPU_MODEL} on CUDA, {CPU_MODEL} on CPU)",
+    )
+    quick.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    quick.add_argument(
+        "--language",
+        default="en",
+        help="spoken language code, or auto to detect (default en)",
+    )
+    quick.add_argument(
+        "--keep-media",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="keep the downloaded audio in the video folder (default: keep)",
+    )
+    quick.add_argument(
+        "--quiet",
+        action="store_true",
+        help="logs go to transcribe.log; stdout is one OK/FAIL line per input",
+    )
+    quick.add_argument(
+        "--summary-lines",
+        type=int,
+        default=0,
+        metavar="N",
+        help="print the first N transcript lines after each OK line (default 0)",
+    )
+    quick.set_defaults(func=_cmd_transcribe)
 
     init = sub.add_parser("init", help="create the standard episode folders")
     init.add_argument("episode_dir", type=Path)
@@ -400,6 +460,32 @@ def _cmd_finish(args: argparse.Namespace) -> int:
         master=not args.no_master,
         denoise=args.denoise,
     )
+
+
+def _cmd_transcribe(args: argparse.Namespace) -> int:
+    inputs = list(args.inputs)
+    for path in args.from_file or []:
+        inputs.extend(read_url_file(path))
+    if not inputs:
+        print("ytp: transcribe needs at least one URL, file, or --from-file", file=sys.stderr)
+        return 2
+    if args.summary_lines < 0:
+        print("ytp: --summary-lines must be 0 or more", file=sys.stderr)
+        return 2
+    out = args.out
+    if out is None:
+        env = os.environ.get("YTP_TRANSCRIPTS", "").strip().strip('"')
+        out = Path(env) if env else DEFAULT_OUT
+    options = TranscribeOptions(
+        out=out,
+        model=args.model,
+        device=args.device,
+        language=args.language,
+        keep_media=args.keep_media,
+        quiet=args.quiet,
+        summary_lines=args.summary_lines,
+    )
+    return run_transcribe(inputs, options)
 
 
 def _cmd_self_test(args: argparse.Namespace) -> int:

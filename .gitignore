@@ -27,6 +27,8 @@ assets/end-card/*.png
 
 # Pipeline working files and rendered media
 output/
+# ytp transcribe default output (transcripts, logs, downloaded audio)
+transcripts/
 work/
 input/
 *.mp4
@@ -36,4 +38,8 @@ input/
 *.wav
 *.mp3
 *.aac
+*.m4a
+*.opus
+*.ogg
+*.flac
 !tests/fixtures/.gitkeep
