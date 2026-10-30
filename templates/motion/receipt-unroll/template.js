@@ -1,45 +1,62 @@
-/* receipt-unroll: the paper grows as each line prints and scrolls once it
-   outgrows the frame; amounts tick up; the total lands in red with a punch. */
+/* receipt-unroll: the header (label, title) is fixed from frame 1 and the paper hangs
+   below it, growing down one printed line at a time. It never scrolls, so every line
+   is on screen when the total lands in red. Holds; hard cut. */
 (function () {
   var H = window.YTPH, Y = H.Y, c = H.cues, d = H.data, tl = H.tl, E = Y.el;
   H.fill(["label", "title", "source"]);
-  var vp = H.el("viewport"), paper = H.el("paper"), items = H.el("items");
-  var pad = d.pad, w = Y.stage.w;
-  paper.style.height = d.content_h + "px";
-  function put(cls, el, x, y, right) {
+  var vp = H.el("viewport"), items = H.el("items");
+  var pad = d.pad;
+  H.el("rc-top").style.height = d.top + "px";
+  ["label", "title"].forEach(function (k) {
+    var n = H.el(k);
+    if (n) n.style.marginBottom = d.gap + "px";
+  });
+  H.el("paper").style.height = d.content_h + "px";
+  vp.style.height = d.paper0 + "px";
+  function put(cls, el, y, side) {
     var n = document.createElement("div");
     n.className = cls;
-    if (right) { n.style.right = pad + "px"; } else { n.style.left = x + "px"; }
+    if (side === "right") { n.style.right = pad + "px"; }
+    else if (side === "both") { n.style.left = pad + "px"; n.style.right = pad + "px"; }
+    else { n.style.left = pad + "px"; }
     n.style.top = y + "px";
     items.appendChild(n);
     H.text(n, el);
     return n;
   }
+  function rule(y) {
+    var r = document.createElement("div");
+    r.className = "rc-rule";
+    r.style.left = pad + "px";
+    r.style.right = pad + "px";
+    r.style.top = y + "px";
+    items.appendChild(r);
+    return r;
+  }
   var format = function (v) { return H.fmt(v, d.decimals); };
-  H.inUp("#label", c.label, 0.3, 10);
+  H.show("#label");
+  if (E.header) {
+    put("rc-header", E.header, pad, "both");
+    rule(d.header_rule_y);
+  }
   H.inUp("#title", c.title, 0.6, 24);
   H.inUp("#source", c.source, 0.4, 0);
-  tl.fromTo(vp, { height: 0 }, { height: pad * 2, duration: 0.25, ease: "power2.out" }, c.paper);
   d.items.forEach(function (item, i) {
     var cue = c.items[i];
-    var lab = put("rc-item", E["item" + i], pad, item.y, false);
-    var amt = put("rc-amount", E["amount" + i], 0, item.y, true);
+    var nodes = [put("rc-item", E["item" + i], item.y, "left")];
     tl.to(vp, { height: cue.paper_h, duration: 0.25, ease: "power2.out" }, cue.t);
-    tl.to(paper, { y: -cue.scroll, duration: 0.25, ease: "power2.out" }, cue.t);
-    tl.fromTo([lab, amt], { opacity: 0, y: -8 }, { opacity: 1, y: 0, duration: 0.2, ease: "power2.out" }, cue.t + 0.05);
-    H.count(amt, 0, item.amount, cue.t + 0.05, cue.t + 0.35, format, "power1.out");
+    if (item.amount !== null) {
+      var amt = put("rc-amount", E["amount" + i], item.y, "right");
+      nodes.push(amt);
+      H.count(amt, 0, item.amount, cue.t + 0.05, cue.t + 0.35, format, "power1.out");
+    }
+    tl.fromTo(nodes, { opacity: 0, y: -8 }, { opacity: 1, y: 0, duration: 0.2, ease: "power2.out" }, cue.t + 0.05);
   });
-  var rule = document.createElement("div");
-  rule.className = "rc-rule";
-  rule.style.left = pad + "px";
-  rule.style.right = pad + "px";
-  rule.style.top = d.rule_y + "px";
-  items.appendChild(rule);
-  var tlab = put("rc-total", E.total_label, pad, d.total_y, false);
-  var tamt = put("rc-total-amount", E.total_amount, 0, d.amount_y, true);
+  var total = rule(d.rule_y);
+  var tlab = put("rc-total", E.total_label, d.total_y, "left");
+  var tamt = put("rc-total-amount", E.total_amount, d.amount_y, "right");
   tl.to(vp, { height: c.total_paper_h, duration: 0.3, ease: "power2.out" }, c.rule);
-  tl.to(paper, { y: -c.total_scroll, duration: 0.3, ease: "power2.out" }, c.rule);
-  tl.fromTo(rule, { opacity: 0 }, { opacity: 1, duration: 0.15 }, c.rule);
+  tl.fromTo(total, { opacity: 0 }, { opacity: 1, duration: 0.15 }, c.rule);
   tl.fromTo([tlab, tamt], { opacity: 0, scale: 1.18, transformOrigin: "50% 50%" },
     { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2.2)" }, c.total);
   H.finish();

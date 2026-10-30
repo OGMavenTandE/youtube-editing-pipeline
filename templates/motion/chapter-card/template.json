@@ -2,6 +2,7 @@
   "name": "chapter-card",
   "description": "Chapter card: series and episode label (from the scenes file), an amber rule, a Fraunces title with one amber word.",
   "figures": false,
+  "set_size": ["title"],
   "vars": {
     "label": {"type": "text", "required": true, "role": "label", "auto": "series", "note": "defaults to SERIES \u00b7 EP NN from the scenes file's series and episode"},
     "title": {"type": "text", "required": true, "role": "headline", "note": "one *amber* word"},

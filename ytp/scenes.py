@@ -1317,13 +1317,15 @@ def run_scenes(
             raise ValueError(f"no frame with id {', '.join(missing)}")
     motion_clips: dict[str, tuple[Path, float]] = {}
     kit = None
+    caps: dict = {}
     for frame in selected:
         if frame.kind == "motion":
             from ytp import motion as motion_mod
 
             if kit is None:
                 kit = motion_mod.Toolkit.find(spec.motion, spec.path)
-            job = motion_mod.job_for(frame, spec)
+                caps = motion_mod.set_caps(spec, kit.fonts)
+            job = motion_mod.job_for(frame, spec, caps)
             job.fps = fps
             result = motion_mod.ensure_clip(
                 job,

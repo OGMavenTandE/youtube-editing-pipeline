@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 from pathlib import Path
@@ -38,7 +39,7 @@ MOCK = Path(__file__).parent / "fixtures" / "mock_hyperframes.py"
 # Ep02 copy from the Galley (motion-copy-galley-v1.md).
 COUNT_UP = {
     "label": "ONE TASK, BEFORE AND AFTER",
-    "title": "Tokens for one task, *before* and after",
+    "title": "Tokens for one task, before and *after*",
     "before_label": "BEFORE: THE MODEL READS ALL 10,000 ROWS",
     "after_label": "AFTER: CODE FILTERS, THE MODEL READS 5",
     "before": 150000,
@@ -60,17 +61,25 @@ KINETIC = {
 }
 CHAPTER = {"title": "Step one: *Find* the waste"}
 RECEIPT = {
-    "label": "THE BILL",
-    "title": "One order, *every* page",
+    "header": "SANDWICH STAND, AI BILL",
     "lines": [
-        {"label": "REREAD THE POLICY BINDER", "amount": 96000},
-        {"label": "REREAD THE CHAT", "amount": 52000},
-        {"label": "THE ORDER", "amount": 2000},
+        "Reread policy binder, 40 pages",
+        "Reread policy binder, again",
+        "Read all 10,000 rows",
+        "Same instructions, again",
+        "Big model, easy question",
     ],
-    "total_label": "TOTAL",
+    "total_label": "TOTAL:",
     "total": 150000,
-    "unit": "tokens",
-    "source": "Illustration, one order",
+    "unit": "TOKENS",
+    "source": "Example from a major AI lab, Nov 2025",
+}
+SLIP = {
+    "lines": ["Read 5 rows"],
+    "total_label": "TOTAL:",
+    "total": 2000,
+    "unit": "TOKENS",
+    "source": "Example from a major AI lab, Nov 2025",
 }
 COPY = {
     "count-up": COUNT_UP,
@@ -205,7 +214,7 @@ def test_portrait_type_is_bigger_not_a_crop(fonts):
 def test_count_up_after_row_waits_for_the_before_number(fonts):
     plan = plan_motion(_job("count-up"), "16x9", fonts)
     cues = plan.payload["cues"]
-    assert cues["label"] <= 6 / 30
+    assert cues["label"] == 0
     assert cues["after_row"] >= cues["before_count"][1]
     assert cues["after_count"][0] > cues["after_row"]
     land = cues["tag"] + 0.35
@@ -354,6 +363,7 @@ def test_render_both_aspects_cache_and_env(tmp_path, mock_hf):
     assert {r.aspect for r in run.results} == {"16x9", "9x16"}
     for result in run.results:
         assert result.path.is_file() and result.path.parent == episode / "clips" / "motion"
+        assert result.path.with_suffix(".last.png").is_file()  # hold stills for both cuts
         meta = json.loads(result.path.with_suffix(".json").read_text(encoding="utf-8"))
         assert meta["frames"] == result.frames
     calls = _calls(mock_hf)
@@ -408,6 +418,7 @@ def test_hyperframes_lint_failure_stops_the_render(tmp_path, mock_hf, monkeypatc
 @pytest.mark.parametrize(
     ("mode", "message"),
     [
+        ("late_start", "frame 1 is empty"),
         ("black_start", "first frame is black"),
         ("black_end", "last frame is black"),
         ("fade_end", "fades"),
@@ -446,8 +457,10 @@ def test_cli_fails_on_placeholder_copy(tmp_path, mock_hf, capsys):
 # --------------------------------------------------------------------------- plan integration
 
 
-def test_scenes_plan_picks_up_motion_clips(tmp_path, mock_hf):
+def test_scenes_plan_picks_up_motion_clips(tmp_path, mock_hf, monkeypatch):
     require_ffmpeg()
+    # ytp scenes needs Inter; use the repo's copy so machines without it installed pass.
+    monkeypatch.setenv("YTP_SCENE_FONT", str(repo_root() / "pipeline" / "fonts" / "Inter-Bold.ttf"))
     episode = tmp_path / "ep"
     plan_path = episode / "edit" / "plan.yaml"
     plan_path.parent.mkdir(parents=True)
@@ -513,3 +526,151 @@ def test_short_slot_cannot_cut_the_motion_hold(tmp_path, mock_hf):
         ],
     )
     assert main(["scenes", str(spec)]) == 2
+
+
+# --------------------------------------------------------------------------- v1.1 review fixes
+
+
+@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+def test_label_is_on_from_frame_one(fonts, name):
+    plan = plan_motion(_job(name), "16x9", fonts)
+    assert plan.payload["cues"]["label"] == 0
+    script = (repo_root() / "templates" / "motion" / name / "template.js").read_text("utf-8")
+    assert 'H.show("#label")' in script
+    assert 'inUp("#label"' not in script
+    if name == "chapter-card":
+        assert 'H.show(".cc-rule")' in script and "scaleX" not in script
+
+
+def test_counts_stay_hidden_until_they_run():
+    house = (repo_root() / "templates" / "motion" / "_shared" / "house.js").read_text("utf-8")
+    body = house.split("H.count = function", 1)[1].split("H.finish", 1)[0]
+    assert "tl.set(node, { opacity: 0 }, 0)" in body
+    assert "tl.set(node, { opacity: 1 }, t0)" in body
+
+
+def _receipt_on_screen(plan) -> None:
+    d, cues, stage = plan.payload["data"], plan.payload["cues"], plan.stage
+    assert "total_scroll" not in cues and "scroll" not in str(cues["items"])
+    assert cues["total_paper_h"] == d["content_h"] <= d["room"] + 0.5
+    for item in d["items"]:
+        assert item["y"] + item["h"] <= cues["total_paper_h"]
+    els = plan.payload["el"]
+    above = sum(els[k]["height"] + d["gap"] for k in ("label", "title") if k in els)
+    assert d["top"] + above + d["content_h"] <= stage.h - els["source"]["height"] + 0.5
+    for name, el in els.items():
+        if name.startswith(("item", "amount", "total", "header")):
+            assert el["size"] >= 40 * stage.scale - 1e-6, name
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_every_receipt_line_is_on_screen_at_the_total(fonts, aspect, extra):
+    lines = RECEIPT["lines"] + ["Same instructions, one more time"] * extra
+    plan = plan_motion(_job("receipt-unroll", vars={"lines": lines}), aspect, fonts)
+    assert plan.errors == []
+    assert len(plan.payload["data"]["items"]) == 5 + extra
+    _receipt_on_screen(plan)
+
+
+def test_receipt_header_is_fixed_and_paper_shows_on_frame_one(fonts):
+    plan = plan_motion(_job("receipt-unroll"), "16x9", fonts)
+    d = plan.payload["data"]
+    assert d["paper0"] > 0 and d["header_rule_y"] < d["items"][0]["y"]
+    script = (repo_root() / "templates" / "motion" / "receipt-unroll" / "template.js").read_text(
+        "utf-8"
+    )
+    assert "paper, { y" not in script  # the paper never scrolls
+    assert 'vp.style.height = d.paper0 + "px"' in script
+
+
+def test_receipt_that_cannot_fit_fails_instead_of_scrolling(fonts):
+    lines = RECEIPT["lines"] * 3
+    plan = plan_motion(_job("receipt-unroll", vars={"lines": lines}), "16x9", fonts)
+    assert any("too tall to show every line" in e for e in plan.errors)
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_payoff_slip_plans(fonts, aspect):
+    plan = plan_motion(MotionJob("slip", "receipt-unroll", dict(SLIP)), aspect, fonts)
+    assert plan.errors == []
+    assert plan.payload["data"]["one_row"]
+    _receipt_on_screen(plan)
+
+
+def test_receipt_items_with_amounts_still_work(fonts):
+    lines = [{"label": "Reread binder", "amount": 148000}, {"label": "Read 5 rows", "amount": 2000}]
+    plan = plan_motion(_job("receipt-unroll", vars={"lines": lines}), "16x9", fonts)
+    assert plan.errors == [] and plan.warnings == []
+    assert [i["amount"] for i in plan.payload["data"]["items"]] == [148000, 2000]
+
+
+@pytest.mark.parametrize(
+    "text", ["$150,000", "150,000 dollars", "\u20ac2", "2,000 USD", "\u00a35", "50 cents"]
+)
+def test_prices_and_currency_never_pass(fonts, text):
+    job = _job("receipt-unroll", vars={"lines": [text]})
+    plan = plan_motion(job, "16x9", fonts, allow_placeholder=True)
+    assert any("currency" in e for e in plan.errors)
+    card = _job("count-up", vars={"unit": "dollars"})
+    assert any("currency" in e for e in plan_motion(card, "16x9", fonts).errors)
+
+
+@pytest.mark.parametrize("name", ["count-up", "kinetic", "chapter-card", "receipt-unroll"])
+def test_templates_never_add_currency(fonts, name):
+    folder = repo_root() / "templates" / "motion"
+    for path in [*(folder / name).iterdir(), *(folder / "_shared").iterdir()]:
+        source = path.read_text(encoding="utf-8")
+        strings = re.findall(r'"[^"\n]*"|\'[^\'\n]*\'', source)
+        for literal in strings:
+            assert not motion.CURRENCY_PATTERN.search(literal), (path.name, literal)
+    for aspect in ("16x9", "9x16"):
+        payload = plan_motion(_job(name), aspect, fonts).payload
+        shown = json.dumps(payload["el"], ensure_ascii=False)
+        assert not motion.CURRENCY_PATTERN.search(shown)
+    assert motion.fmt_number(150000) == "150,000"
+
+
+def test_chapter_cards_share_one_title_size(tmp_path, fonts):
+    from ytp import scenes
+
+    long = "Step three: Give right-answer work to *code*"
+    spec_path = _write_spec(
+        tmp_path / "ep",
+        [
+            _motion_frame("a", "chapter-card", start=0),
+            {**_motion_frame("b", "chapter-card", start=5), "vars": {"title": long}},
+        ],
+    )
+    spec = scenes.load_spec(spec_path)
+    caps = motion.set_caps(spec, fonts)
+    sizes = {}
+    for frame in spec.frames:
+        for aspect in ("16x9", "9x16"):
+            plan = plan_motion(motion.job_for(frame, spec, caps), aspect, fonts)
+            assert plan.errors == []
+            sizes.setdefault(aspect, set()).add(plan.payload["el"]["title"]["size"])
+    assert all(len(v) == 1 for v in sizes.values()), sizes
+    alone = plan_motion(motion.job_for(spec.frames[0], spec), "16x9", fonts)
+    assert alone.payload["el"]["title"]["size"] >= next(iter(sizes["16x9"]))
+
+
+def test_label_wraps_are_balanced(fonts):
+    plan = plan_motion(_job("count-up"), "9x16", fonts)
+    for name in ("before_label", "after_label"):
+        lines = plan.payload["el"][name]["lines"]
+        assert all(len(line) >= 2 for line in lines), (name, lines)
+
+
+def test_kinetic_holds_on_a_strong_closing_line(fonts):
+    for aspect, need in (("16x9", 60), ("9x16", 84)):
+        plan = plan_motion(_job("kinetic"), aspect, fonts)
+        sub = plan.payload["el"]["subline"]
+        assert sub["face"] == "display" and sub["size"] >= need
+
+
+def test_written_duration_never_rounds_up_a_frame():
+    for fps in (24, 25, 30, 60):
+        for frames in range(1, 2000):
+            written = motion.render_duration(frames, fps)
+            assert math.ceil(written * fps) == frames == round(written * fps), (fps, frames)

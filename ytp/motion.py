@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -43,6 +44,9 @@ ROLE_MIN = {"label": 26, "body": 40, "subline": 40, "source": 24, "headline": 56
 SOURCE_MIN_OPACITY = 0.7
 MIN_HOLD = 1.5  # seconds the last line holds, at least
 HOLD_PER_WORD = 0.3
+# Frame 1 must already show the label (a 26px label is a few hundred lit pixels at
+# quarter size); this catches an empty or fading-in opening.
+FIRST_FRAME_MIN_PIXELS = 40
 FIRST_ELEMENT_FRAMES = 6
 
 # face key -> (CSS family, file name, italic)
@@ -77,6 +81,12 @@ PLACEHOLDER_PATTERNS = [
 ]
 # Pilot slogans: never ship them again.
 PILOT_COPY = ["short prompts. fresh chats. smaller bills.", "three habits. no new tools."]
+# The motion set never shows prices: no currency symbols or money words, ever.
+CURRENCY_PATTERN = re.compile(
+    r"[$\u00a2\u00a3\u00a5\u20ac\u20b9\u20a9\u20bd]"
+    r"|\b(usd|eur|gbp|dollars?|cents?|bucks|euros?|pounds? sterling)\b",
+    re.IGNORECASE,
+)
 VENDOR_PATTERN = re.compile(
     r"\b(open\s?ai|chat\s?gpt|gpt-?\d\w*|anthropic|claude|gemini|google|deep\s?mind|"
     r"microsoft|copilot|meta ai|llama|mistral|xai|grok|deepseek|qwen|perplexity|"
@@ -428,6 +438,8 @@ class MotionJob:
     fps: int = 30
     series: str | None = None
     episode: int | None = None
+    # "aspect/layout" -> element -> largest size, so a set of cards shares one size
+    caps: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -488,11 +500,18 @@ class Planner:
             elif kind == "lines" and not isinstance(value, list):
                 self.errors.append(f"var {name!r} must be a list")
             elif kind == "items":
-                if not isinstance(value, list) or not all(
-                    isinstance(item, dict) and item.get("label") and "amount" in item
-                    for item in value
+                if (
+                    not isinstance(value, list)
+                    or not value
+                    or not all(
+                        (isinstance(item, str) and item.strip())
+                        or (isinstance(item, dict) and item.get("label"))
+                        for item in value
+                    )
                 ):
-                    self.errors.append(f"var {name!r} must be a list of {{label, amount}}")
+                    self.errors.append(
+                        f"var {name!r} must be a list of lines (text, or {{label, amount}})"
+                    )
             elif kind == "text" and not isinstance(value, (str, int, float)):
                 self.errors.append(f"var {name!r} must be text")
         if self.errors:
@@ -533,6 +552,11 @@ class Planner:
                     self.warnings.append(message + " (allowed by --allow-placeholder)")
                 else:
                     self.errors.append(message + " (pass --allow-placeholder for a test render)")
+            if CURRENCY_PATTERN.search(text):
+                self.errors.append(
+                    f"var {name!r} shows a price or currency "
+                    f"({CURRENCY_PATTERN.search(text).group(0)}); motion copy never shows money"
+                )
             if "\u2014" in text:
                 self.errors.append(f"var {name!r} has an em dash; the on-screen style bans them")
             if role != "label" and re.search(r"\d", plain(text)):
@@ -570,7 +594,12 @@ class Planner:
             self.errors.append(f"element {name}: source opacity must be at least 70%")
 
     def fit(
-        self, name: str, text: str, width: float | None = None, amber: str = "none"
+        self,
+        name: str,
+        text: str,
+        width: float | None = None,
+        amber: str = "none",
+        max_size: float | None = None,
     ) -> dict[str, Any]:
         spec = self.spec(name)
         self.lint_spec(name, spec)
@@ -593,6 +622,10 @@ class Planner:
         max_lines = int(spec.get("max_lines", 1))
         avail = (width if width is not None else self.stage.w) * 0.97
         low, high = self.size_range(spec)
+        cap = (self.job.caps.get(f"{self.stage.aspect}/{self.stage.layout}") or {}).get(name)
+        for limit in (cap, max_size):
+            if limit is not None:
+                high = max(low, min(high, float(limit)))
         size = high
         while True:
             lines = self._wrap(tokens, font, weight, size, tracking, avail)
@@ -606,7 +639,7 @@ class Planner:
                 lines = lines or [[(join_tokens(tokens), False, False)]]
                 break
             size = max(low, size - 2)
-        if lines and len(lines) > 1 and spec["role"] != "label":
+        if lines and len(lines) > 1:
             lines = self._balance(tokens, font, weight, size, tracking, avail, len(lines))
         fitted = {
             "size": round(size, 2),
@@ -728,9 +761,8 @@ def _plan_count_up(p: Planner) -> tuple[dict, dict, float]:
     tag = str(v.get("tag") or "").strip()
     if tag:
         p.fit("tag", tag)
-    f1 = p.frame(1)
     cues = {
-        "label": f1,
+        "label": 0.0,
         "title": 0.15,
         "before_row": 0.5,
         "source": 0.6,
@@ -794,7 +826,7 @@ def _plan_kinetic(p: Planner) -> tuple[dict, dict, float]:
             out = start + enter + max(0.9, HOLD_PER_WORD * beat["words"])
             cue_beats.append({"id": beat["id"], "in": round(start, 4), "out": round(out, 4)})
             t = out + leave + gap
-    cues = {"label": p.frame(1), "beats": cue_beats, "enter": enter, "exit": leave}
+    cues = {"label": 0.0, "beats": cue_beats, "enter": enter, "exit": leave}
     return {"count": len(beats)}, cues, end
 
 
@@ -817,8 +849,8 @@ def _plan_chapter_card(p: Planner) -> tuple[dict, dict, float]:
     title_in = 0.2
     title_end = title_in + stagger * max(0, title["words"] - 1) + 0.5
     cues = {
-        "label": p.frame(1),
-        "rule": 0.1,
+        "label": 0.0,
+        "rule": 0.0,
         "title": title_in,
         "stagger": stagger,
         "subline": title_end + 0.05 if sub else None,
@@ -830,79 +862,122 @@ def _plan_chapter_card(p: Planner) -> tuple[dict, dict, float]:
 
 
 def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
+    """The paper hangs from a fixed header and grows down one line at a time. It never
+    scrolls: every line must be on screen when the total lands, or the plan fails."""
     v = p.vars
     s = p.stage
-    label = p.fit("label", v["label"])
-    title = p.fit("title", v["title"], amber="one")
+    k = s.scale
+    gap = round(28 * k)
+    label = p.fit("label", v["label"]) if v.get("label") else None
+    title = p.fit("title", v["title"], amber="one") if v.get("title") else None
     source = p.fit("source", v["source"])
     unit = str(v["unit"]).strip()
     decimals = int(v.get("decimals") or 0)
-    pad = round(28 * s.scale)
+    pad = round(26 * k)
     inner = s.w - 2 * pad
-    items = []
+    line_gap = 12 * k
     y = pad
+    header = None
+    header_rule_y = None
+    if v.get("header"):
+        header = _refit(p, "header", "header", str(v["header"]), inner)
+        y += header["height"] + 14 * k
+        header_rule_y = round(y, 1)
+        y += 3 + 16 * k
+    paper0 = round(y if header else pad * 1.6, 1)
+    items = []
     total_sum = 0.0
-    for i, item in enumerate(v["lines"]):
-        amount = float(str(item["amount"]).replace(",", ""))
-        total_sum += amount
-        amount_text = fmt_number(amount, decimals)
-        amt = _fit_as(p, "amount", f"amount{i}", amount_text)
-        if amt["width"] + 24 > inner * 0.45:
-            p.errors.append(f"receipt amount {amount_text} is too wide")
-        lab = _refit(p, "item", f"item{i}", str(item["label"]), inner - amt["width"] - 24 * s.scale)
-        h = max(lab["height"], amt["height"])
+    amounts = 0
+    for i, raw in enumerate(v["lines"]):
+        item = raw if isinstance(raw, dict) else {"label": raw}
+        has_amount = item.get("amount") not in (None, "")
+        width = inner
+        amount = None
+        amt = None
+        if has_amount:
+            amounts += 1
+            amount = float(str(item["amount"]).replace(",", ""))
+            total_sum += amount
+            amount_text = fmt_number(amount, decimals)
+            amt = _fit_as(p, "amount", f"amount{i}", amount_text)
+            if amt["width"] + 24 > inner * 0.45:
+                p.errors.append(f"receipt amount {amount_text} is too wide")
+            width = inner - amt["width"] - 24 * k
+        lab = _refit(p, "item", f"item{i}", str(item["label"]), width)
+        h = max(lab["height"], amt["height"] if amt else 0)
         items.append({"y": round(y, 1), "h": round(h, 1), "amount": amount})
-        y += h + 16 * s.scale
+        y += h + line_gap
     total = p.number("total")
-    if abs(total - total_sum) > 0.5:
+    if amounts and abs(total - total_sum) > 0.5:
         p.warnings.append(
             f"receipt lines add up to {fmt_number(total_sum, decimals)}, total says "
             f"{fmt_number(total, decimals)}"
         )
-    rule_y = y + 4 * s.scale
+    rule_y = y + 4 * k
+    total_y = rule_y + 20 * k
     total_text = f"{fmt_number(total, decimals)} {unit}".strip()
-    tamt = p.fit("total_amount", total_text)
-    tlab = _refit(p, "total_label", "total_label", str(v["total_label"]), inner)
-    total_y = rule_y + 24 * s.scale
-    amount_y = total_y + tlab["height"] + 6 * s.scale
-    content_h = amount_y + tamt["height"] + pad
-    gaps = 28 * s.scale
-    viewport = s.h - label["height"] - title["height"] - source["height"] - 4 * gaps
-    if viewport < 3 * (items[0]["h"] if items else 60):
-        p.errors.append("receipt has no room: shorten the title")
+    # One row ("TOTAL:   150,000 TOKENS") when both fit at 40px or more, else stacked.
+    spec = p.spec("total_amount")
+    low, high = p.size_range(spec)
+    one_row = None
+    size = high
+    while size >= low - 1e-6:
+        tl_w = p._line_width(parse_runs(str(v["total_label"]))[0], "mono", 600, size, 0.0)
+        ta_w = p._line_width(parse_runs(total_text)[0], "mono", 600, size, 0.0)
+        if tl_w + ta_w + 24 * k <= inner * 0.97:
+            one_row = size
+            break
+        size -= 2
+    if one_row is not None:
+        tamt = p.fit("total_amount", total_text, max_size=one_row)
+        tlab = _refit(
+            p, "total_label", "total_label", str(v["total_label"]), inner, max_size=tamt["size"]
+        )
+        amount_y = total_y
+        content_h = total_y + max(tlab["height"], tamt["height"]) + pad
+    else:
+        tamt = p.fit("total_amount", total_text)
+        tlab = _refit(p, "total_label", "total_label", str(v["total_label"]), inner)
+        amount_y = total_y + tlab["height"] + 4 * k
+        content_h = amount_y + tamt["height"] + pad
+    above = sum(el["height"] + gap for el in (label, title) if el)
+    room = s.h - source["height"] - gap - above
+    if content_h > room + 0.5:
+        p.errors.append(
+            f"receipt is {content_h - room:.0f}px too tall to show every line at the total "
+            f"({len(items)} lines); shorten lines, drop the title, or use fewer lines"
+        )
+    top = max(0.0, (s.h - source["height"] - gap - above - content_h) / 2)
     step = 0.45
-    first = 0.9
+    first = 0.6
     item_cues = []
     for i, item in enumerate(items):
-        t = first + i * step
-        bottom = item["y"] + item["h"] + pad
         item_cues.append(
-            {
-                "t": round(t, 3),
-                "paper_h": round(min(bottom, viewport), 1),
-                "scroll": round(max(0.0, bottom - viewport), 1),
-            }
+            {"t": round(first + i * step, 3), "paper_h": round(item["y"] + item["h"] + pad, 1)}
         )
     total_t = first + len(items) * step + 0.15
     cues = {
-        "label": p.frame(1),
-        "title": 0.15,
+        "label": 0.0,
+        "title": 0.15 if label else 0.0,
         "source": 0.5,
-        "paper": 0.5,
         "items": item_cues,
         "rule": round(total_t, 3),
         "total": round(total_t + 0.2, 3),
-        "total_paper_h": round(min(content_h, viewport), 1),
-        "total_scroll": round(max(0.0, content_h - viewport), 1),
+        "total_paper_h": round(content_h, 1),
     }
     data = {
         "items": items,
         "pad": pad,
+        "gap": gap,
+        "top": round(top, 1),
+        "paper0": paper0,
+        "header_rule_y": header_rule_y,
         "rule_y": round(rule_y, 1),
         "total_y": round(total_y, 1),
         "amount_y": round(amount_y, 1),
+        "one_row": one_row is not None,
         "content_h": round(content_h, 1),
-        "viewport": round(viewport, 1),
+        "room": round(room, 1),
         "decimals": decimals,
         "total": total,
         "unit": unit,
@@ -912,8 +987,15 @@ def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
     return data, cues, land + p.hold(words)
 
 
-def _refit(p: Planner, spec_name: str, el_name: str, text: str, width: float) -> dict[str, Any]:
-    p.fit(spec_name, text, width=width)
+def _refit(
+    p: Planner,
+    spec_name: str,
+    el_name: str,
+    text: str,
+    width: float,
+    max_size: float | None = None,
+) -> dict[str, Any]:
+    p.fit(spec_name, text, width=width, max_size=max_size)
     fitted = p.el.pop(spec_name)
     p.el[el_name] = fitted
     return fitted
@@ -955,7 +1037,7 @@ def plan_motion(
         "id": job.id,
         "template": job.template,
         "fps": job.fps,
-        "duration": duration,
+        "duration": render_duration(frames, job.fps),
         "frames": frames,
         "stage": stage.to_dict(),
         "el": p.el,
@@ -974,6 +1056,13 @@ def plan_motion(
 
 
 # --------------------------------------------------------------------------- build and render
+
+
+def render_duration(frames: int, fps: int) -> float:
+    """The length written into the composition. HyperFrames rounds the frame count up, so
+    152/30 written as 5.0667 came back as 153 frames; a hair under the last frame's end
+    always gives exactly `frames`."""
+    return math.floor((frames - 0.02) / fps * 1e4) / 1e4
 
 
 def _template_files(name: str) -> list[Path]:
@@ -1029,7 +1118,7 @@ def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> 
         "{{YTP_HEAD}}": head,
         "{{YTP_PRELOAD}}": preload,
         "{{COMPOSITION_ID}}": COMPOSITION_ID,
-        "{{DURATION}}": f"{plan.duration:g}",
+        "{{DURATION}}": f"{plan.payload['duration']:g}",
         "{{WIDTH}}": str(stage.width),
         "{{HEIGHT}}": str(stage.height),
         "{{FPS}}": str(plan.job.fps),
@@ -1185,6 +1274,13 @@ def _max(img, box) -> float:
     return float(img.crop(box).getextrema()[1])
 
 
+def _coverage(img, box, threshold: float) -> int:
+    """Pixels in box brighter than threshold."""
+    crop = img.crop(box)
+    cut = max(0, min(255, int(threshold)))
+    return sum(crop.histogram()[cut + 1 :])
+
+
 def check_frames(path: Path, plan: MotionPlan, tmp: Path) -> list[str]:
     """Post-render checks: length, first/last frame, fades, and the safe slice."""
     errors: list[str] = []
@@ -1236,6 +1332,14 @@ def check_frames(path: Path, plan: MotionPlan, tmp: Path) -> list[str]:
             )
         elif level > ink + 45:
             errors.append(f"{name} frame corners ({level:.1f}) are not the ink background")
+    opening = frames.get(0)
+    if opening is not None:
+        lit = _coverage(opening, sbox, corner_luma(opening) + 40)
+        if lit < FIRST_FRAME_MIN_PIXELS:
+            errors.append(
+                f"frame 1 is empty ({lit} lit pixels in the stage at quarter size, need "
+                f"{FIRST_FRAME_MIN_PIXELS}); the label must be on screen from the first frame"
+            )
     early = frames.get(min(FIRST_ELEMENT_FRAMES - 1, last))
     if early is not None and content(early) < 35:
         errors.append(f"nothing is visible by frame {FIRST_ELEMENT_FRAMES}")
@@ -1350,6 +1454,7 @@ def ensure_clip(
     for stale in out.parent.glob(f"{job.id}-{aspect}-*.mp4"):
         stale.unlink()
         stale.with_suffix(".json").unlink(missing_ok=True)
+        stale.with_suffix(".last.png").unlink(missing_ok=True)
     shutil.move(str(tmp_out), out)
     meta = {
         "id": job.id,
@@ -1399,7 +1504,7 @@ def last_frame_png(clip: Path, dest: Path) -> Path:
 # --------------------------------------------------------------------------- command
 
 
-def job_for(frame, spec) -> MotionJob:
+def job_for(frame, spec, caps: dict[str, dict[str, dict[str, float]]] | None = None) -> MotionJob:
     return MotionJob(
         id=frame.id,
         template=frame.template,
@@ -1409,7 +1514,40 @@ def job_for(frame, spec) -> MotionJob:
         fps=spec.fps,
         series=spec.series,
         episode=spec.episode,
+        caps=dict((caps or {}).get(frame.template) or {}),
     )
+
+
+def set_caps(spec, fonts: FontBook) -> dict[str, dict[str, dict[str, float]]]:
+    """Shared sizes for a set: for templates that list ``set_size`` elements (chapter
+    cards' titles), every frame of that template in the scenes file uses the smallest
+    size any of them needs, per aspect and layout. Computed over the whole file, so
+    ``--only`` renders the same sizes as a full run."""
+    sizes: dict[str, dict[str, dict[str, list[float]]]] = {}
+    for frame in spec.frames:
+        if frame.kind != "motion" or not frame.template:
+            continue
+        try:
+            shared = load_manifest(frame.template).get("set_size") or []
+        except (OSError, ValueError, MotionError):
+            continue
+        if not shared:
+            continue
+        job = job_for(frame, spec)
+        for aspect in ASPECTS:
+            plan = plan_motion(job, aspect, fonts, allow_placeholder=True)
+            if plan.errors:
+                continue
+            key = f"{aspect}/{plan.stage.layout}"
+            for name in shared:
+                if name in plan.payload["el"]:
+                    sizes.setdefault(frame.template, {}).setdefault(key, {}).setdefault(
+                        name, []
+                    ).append(plan.payload["el"][name]["size"])
+    return {
+        tpl: {key: {name: min(vals) for name, vals in names.items()} for key, names in by.items()}
+        for tpl, by in sizes.items()
+    }
 
 
 @dataclass
@@ -1449,11 +1587,12 @@ def run_motion(
         raise ValueError(f"{spec_path} has no kind: motion frames")
     aspects = list(ASPECTS) if aspect == "both" else [aspect]
     kit = Toolkit.find(spec.motion, spec.path)
+    caps = set_caps(spec, kit.fonts)
     results: list[MotionResult] = []
     warnings: list[str] = []
     failures: list[str] = []
     for frame in motion_frames:
-        job = job_for(frame, spec)
+        job = job_for(frame, spec, caps)
         for one in aspects:
             try:
                 result = ensure_clip(
@@ -1486,6 +1625,11 @@ def run_motion(
     segments = []
     fragment = written = None
     if not lint_only:
+        # A hold still beside every clip, both aspects, for cuts that hold the end.
+        for result in results:
+            hold = result.path.with_suffix(".last.png")
+            if not hold.is_file():
+                last_frame_png(result.path, hold)
         clips16 = {r.id: r for r in results if r.aspect == "16x9"}
         if clips16:
             segments, seg_warn = motion_segments(spec, episode, clips16, plan_path)

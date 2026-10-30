@@ -56,6 +56,13 @@
     st.style.height = s.h + "px";
   };
 
+  /* On screen from frame 1: no fade, no slide. Labels use this so a hard cut never
+     lands on empty ink. */
+  H.show = function (target) {
+    if (typeof target === "string" && !document.querySelector(target)) return;
+    tl.set(target, { opacity: 1 }, 0);
+  };
+
   H.inUp = function (target, at, dur, dy) {
     if (at === null || at === undefined) return;
     if (typeof target === "string" && !document.querySelector(target)) return;
@@ -71,10 +78,13 @@
     return parts.join(".");
   };
 
-  /* A number that counts from a to b between t0 and t1. */
+  /* A number that counts from a to b between t0 and t1. It stays hidden until t0,
+     so a row never shows its starting value ("0 tokens") before the count runs. */
   H.count = function (node, a, b, t0, t1, format, ease) {
     var o = { v: a };
     node.textContent = format(a);
+    tl.set(node, { opacity: 0 }, 0);
+    tl.set(node, { opacity: 1 }, t0);
     tl.to(o, {
       v: b, duration: t1 - t0, ease: ease || "power2.out",
       onUpdate: function () { node.textContent = format(o.v); }

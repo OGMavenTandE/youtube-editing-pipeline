@@ -7,7 +7,7 @@ background plus a bright box inside the type stage. Env switches:
 MOCK_HF_LOG      append one JSON line per call (argv and the telemetry env)
 MOCK_HF_FAIL_GPU fail any render that passes --gpu
 MOCK_HF_FAIL_LINT fail lint
-MOCK_HF_MODE     black_start | black_end | fade_end | outside | none
+MOCK_HF_MODE     late_start | black_start | black_end | fade_end | outside | none
 """
 
 from __future__ import annotations
@@ -67,6 +67,8 @@ def main(argv: list[str]) -> int:
     box = f"drawbox=x={x}:y={stage['y'] + 40}:w=200:h=120:color=white:t=fill"
     filters = [box]
     total = float(duration)
+    if mode == "late_start":
+        filters[0] += ":enable='gte(n,3)'"
     if mode == "black_start":
         filters.append("drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='lt(n,1)'")
     if mode == "black_end":
