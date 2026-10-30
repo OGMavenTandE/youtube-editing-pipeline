@@ -1030,6 +1030,7 @@ def _plan_receipt(p: Planner) -> tuple[dict, dict, float]:
 # stage (y 90) and frame 1 reads as empty; at 72 the lip reaches 10px into the stage and the
 # tallest Studio strip (918px) ends on the stage bottom (990).
 RECEIPT_IMAGE_TOP = 72
+RECEIPT_IMAGE_WIDTH = 608  # Studio's 1x strip width (the Shorts slice)
 RECEIPT_IMAGE_LIP = 28  # image px of blank paper out of the slot on frame 1 (first ink is row 31)
 
 
@@ -1049,13 +1050,20 @@ def image_path(job: MotionJob, value: Any) -> Path:
     return path
 
 
+def receipt_image_var(vars: dict, aspect: str) -> Any:
+    """The image for this aspect: `image_9x16` (e.g. Studio's 2x strip) when set, else `image`."""
+    if aspect == "9x16" and vars.get("image_9x16") not in (None, ""):
+        return vars["image_9x16"]
+    return vars["image"]
+
+
 def _plan_receipt_image(p: Planner) -> tuple[dict, dict, float]:
     """Studio's finished receipt prints in from a fixed top edge, then holds. The image
     is the art: shown 1:1 in 16:9 (the strip is the 608px Shorts slice), and in 9:16 at
     one scale that fits the safe area. Never wider than the slice or the safe area."""
     v = p.vars
     s = p.stage
-    path = image_path(p.job, v["image"])
+    path = image_path(p.job, receipt_image_var(v, s.aspect))
     if not path.is_file():
         p.errors.append(f"image {path} not found")
         return {}, {}, 0.0
@@ -1089,7 +1097,8 @@ def _plan_receipt_image(p: Planner) -> tuple[dict, dict, float]:
         )
     w, h = round(iw * scale, 1), round(ih * scale, 1)
     x = round((s.width - w) / 2, 1)
-    lip = round(min(h, RECEIPT_IMAGE_LIP * scale), 1)
+    # the lip is set in 608px-strip px, so a 2x strip shows the same blank paper
+    lip = round(min(h, RECEIPT_IMAGE_LIP * w / RECEIPT_IMAGE_WIDTH), 1)
     slot_w = w if s.aspect == "16x9" else round(w + 24 * s.scale, 1)
     data = {
         "image": path.name,
@@ -1218,7 +1227,8 @@ def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> 
     for face in sorted(FACES):
         shutil.copy2(fonts.path(face), work / "assets" / "fonts" / fonts.path(face).name)
     if plan.job.template == "receipt-image":
-        shutil.copy2(image_path(plan.job, plan.job.vars["image"]), work / "assets" / "receipt.png")
+        src = receipt_image_var(plan.job.vars, plan.stage.aspect)
+        shutil.copy2(image_path(plan.job, src), work / "assets" / "receipt.png")
     shutil.copy2(gsap, work / "assets" / "gsap.min.js")
     shutil.copy2(shared / "house.js", work / "assets" / "house.js")
     shutil.copy2(tdir / "template.js", work / "assets" / "template.js")
