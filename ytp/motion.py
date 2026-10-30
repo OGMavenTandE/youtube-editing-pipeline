@@ -423,9 +423,10 @@ def fmt_number(value: float, decimals: int = 0) -> str:
     return f"{value:,.{decimals}f}"
 
 
+# GSAP's names: power1 is quad, power2 is cubic.
 EASES = {
-    "power1.out": lambda q: 1 - (1 - q),
-    "power2.out": lambda q: 1 - (1 - q) ** 2,
+    "power1.out": lambda q: 1 - (1 - q) ** 2,
+    "power2.out": lambda q: 1 - (1 - q) ** 3,
 }
 
 

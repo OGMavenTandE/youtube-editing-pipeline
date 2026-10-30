@@ -571,8 +571,12 @@ def test_no_frame_ever_shows_a_zero_count(fonts, aspect):
             value = motion.count_value(0, rows[key], t0, t1, n / fps, "power2.out")
             assert motion.fmt_number(value) != "0", (key, n)
         assert first / fps > t0  # never the t0 frame itself, where the value is exactly 0
-    # Studio's frames: before showed 0 at f031 (t 1.00 s), after at f091 (t 3.00 s)
-    assert cues["before_show"] > 30 / fps and cues["after_show"] > 90 / fps
+    # Studio's frames: before showed 0 at f031 (t 1.00 s), after at f091 (t 3.00 s); the
+    # first frames now on screen are the ones Studio read as 9,181 and 193 (GSAP cubic out)
+    assert 30 / fps < cues["before_show"] < 31 / fps and 90 / fps < cues["after_show"] < 91 / fps
+    assert motion.fmt_number(motion.count_value(0, 150000, 1.0, 2.6, 31 / fps, "power2.out")) == (
+        "9,181"
+    )
 
 
 def test_count_show_catches_a_single_zero_frame():
