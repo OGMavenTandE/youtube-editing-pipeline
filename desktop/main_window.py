@@ -9,13 +9,15 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from pipeline.drive_io import is_drive_folder_url
+from pipeline.models import TalkSheet
+from pipeline.talk_sheet import discover_talk_sheet, persist_talk_sheet
+
 from .config_store import AppConfig, load_config
 from .paths import last_talk_sheet_path
 from .talk_sheet_form import TalkSheetForm
 from .wizard import open_wizard_window
 from .worker import JobResult, JobStatus, PendingTalkJob, PipelineWorker
-from pipeline.models import TalkSheet
-from pipeline.talk_sheet import discover_talk_sheet, persist_talk_sheet
 
 MAX_LOG_LINES = 50
 
@@ -165,7 +167,8 @@ class MainView(ctk.CTkFrame):
             try:
                 self.worker.repack_and_reupload(result.stem, index)
             except Exception as exc:
-                self.after(0, lambda: self.append_log(f"Title update failed: {exc}"))
+                message = f"Title update failed: {exc}"
+                self.after(0, lambda message=message: self.append_log(message))
                 return
             self.after(0, self._hide_titles)
             self.after(0, self.refresh_job)
@@ -177,8 +180,11 @@ class MainView(ctk.CTkFrame):
 
     def _open_outbox(self) -> None:
         config = load_config()
-        if config.last_job_outbox_url:
-            webbrowser.open(config.last_job_outbox_url)
+        url = config.last_job_outbox_url
+        if is_drive_folder_url(url):
+            webbrowser.open(url)
+        elif url:
+            self.append_log("Outbox link is not a Google Drive folder URL.")
         else:
             self.append_log("No outbox URL yet.")
 

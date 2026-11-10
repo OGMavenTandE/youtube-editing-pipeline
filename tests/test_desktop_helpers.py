@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from desktop.config_store import AppConfig, load_config, save_config
@@ -7,9 +8,30 @@ from desktop.worker import JobStatus, PendingTalkJob, PipelineWorker, pipeline_a
 from pipeline.models import TalkSheet
 from desktop.envfile import read_env_value, upsert_env_value
 from desktop.logutil import sanitize_log_line
+from desktop.secrets import read_secret_file, write_secret_file
 from desktop.oauth import OAuthConfigError, parse_client_secret_json
 from desktop.paths import client_secret_candidates, env_path, migrate_install_env
 from pipeline.config import default_env_file
+
+
+def test_upsert_env_rejects_newline_and_is_private(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    try:
+        upsert_env_value(path, "GEMINI_API_KEY", "abc\nEVIL=1")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("newline value was accepted")
+    assert not path.exists()
+    upsert_env_value(path, "GEMINI_API_KEY", "new-key")
+    assert read_env_value(path, "GEMINI_API_KEY") == "new-key"
+    if sys.platform != "win32":
+        assert path.stat().st_mode & 0o777 == 0o600
+    secret = tmp_path / "token.json"
+    write_secret_file(secret, "secret")
+    assert read_secret_file(secret) == "secret"
+    if sys.platform != "win32":
+        assert secret.stat().st_mode & 0o777 == 0o600
 
 
 def test_upsert_env_replaces_and_preserves(tmp_path: Path) -> None:
@@ -127,6 +149,10 @@ def test_sanitize_log_redacts_secret_values() -> None:
     assert "[redacted]" in jsonish
     long_token = "token " + ("AbCdEfGh" * 8)
     assert "AbCdEfGh" not in sanitize_log_line(long_token)
+    client = sanitize_log_line("secret GOCSPX-abcdefghijklmnopqrstuvwxyz")
+    assert "GOCSPX" not in client
+    bearer = sanitize_log_line("Authorization: Bearer ya29.a0AfH6SMB-very-long-token-value")
+    assert "ya29" not in bearer
 
 
 def test_pipeline_argv_includes_talk_sheet_and_stills(tmp_path: Path) -> None:

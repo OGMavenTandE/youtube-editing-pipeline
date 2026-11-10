@@ -272,7 +272,7 @@ def concat_keep_ranges(
             parts.append(part)
         list_file = work / "concat.txt"
         list_file.write_text(
-            "".join(f"file '{part.resolve()}'\n" for part in parts),
+            "".join(concat_demuxer_line(part) + "\n" for part in parts),
             encoding="utf-8",
         )
         cmd = [
@@ -341,6 +341,13 @@ def extract_frame(
     return dest
 
 
+def concat_demuxer_line(path: Path) -> str:
+    """One concat-demuxer `file` line. Quotes and newlines cannot add directives."""
+    text = path.resolve().as_posix().replace("\r", "").replace("\n", "")
+    text = text.replace("'", r"'\''")
+    return f"file '{text}'"
+
+
 def write_json(path: Path, payload: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -363,7 +370,7 @@ def concat_scene_files(
     work.mkdir(parents=True, exist_ok=True)
     list_file = work / "concat.txt"
     list_file.write_text(
-        "".join(f"file '{path.resolve()}'\n" for path in parts),
+        "".join(concat_demuxer_line(path) + "\n" for path in parts),
         encoding="utf-8",
     )
     target = settings.target_lufs

@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
-import time
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +31,8 @@ from pipeline.drive_io import (
     drive_folder_url,
     file_stem,
     is_landscape_dimensions,
+    local_inbox_path,
+    local_media_name,
 )
 from pipeline.studio import parse_titles_file
 
@@ -261,7 +262,7 @@ class PipelineWorker:
         *,
         rerun: bool,
     ) -> None:
-        stem = file_stem(item.name)
+        stem = file_stem(local_media_name(item.name))
         if store.is_done(item.id) and not rerun:
             self.log(f"Already processed {item.name}.")
             return
@@ -299,7 +300,7 @@ class PipelineWorker:
 
         settings = pipeline_settings()
         settings.ensure_dirs()
-        dest = settings.input_dir / item.name
+        dest = local_inbox_path(settings.input_dir, item.name)
         try:
             self._set_status(JobStatus.DOWNLOADING, item.name)
             self.log(f"Downloading {item.name}…")

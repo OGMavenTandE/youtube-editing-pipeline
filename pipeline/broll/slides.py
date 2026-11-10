@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,6 +90,14 @@ def stamp_slide_paths(script: EditScript, dest_dir: Path) -> None:
             )
 
 
+_PLACEHOLDER = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+
+
+def _fill_placeholders(template: str, values: dict[str, str]) -> str:
+    """Replace {{TOKENS}} once so inserted copy cannot fill another token."""
+    return _PLACEHOLDER.sub(lambda match: values.get(match.group(0), match.group(0)), template)
+
+
 def build_slide_html(spec: BrollSpec) -> str:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     kicker = html.escape(spec.kicker.strip())
@@ -102,13 +111,16 @@ def build_slide_html(spec: BrollSpec) -> str:
         body = f"<ul>{items}</ul>"
     else:
         body = ""
-    return (
-        template.replace("{{variant}}", spec.variant.value)
-        .replace("{{kicker_block}}", kicker_block)
-        .replace("{{title_block}}", title_block)
-        .replace("{{body}}", body)
-        .replace("{{lt_title}}", html.escape(spec.lower_third_title.strip()))
-        .replace("{{lt_sub}}", html.escape(spec.lower_third_subtitle.strip()))
+    return _fill_placeholders(
+        template,
+        {
+            "{{variant}}": spec.variant.value,
+            "{{kicker_block}}": kicker_block,
+            "{{title_block}}": title_block,
+            "{{body}}": body,
+            "{{lt_title}}": html.escape(spec.lower_third_title.strip()),
+            "{{lt_sub}}": html.escape(spec.lower_third_subtitle.strip()),
+        },
     )
 
 

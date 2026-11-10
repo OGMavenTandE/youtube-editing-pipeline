@@ -65,6 +65,19 @@ def test_html_escapes_copy() -> None:
     assert "pip_list" in html_doc
 
 
+def test_html_does_not_rescan_inserted_copy() -> None:
+    html_doc = build_slide_html(
+        BrollSpec(
+            kicker="{{lt_title}}",
+            title="ok",
+            lower_third_title="<script>",
+            variant=SlideVariant.PIP_LIST,
+        )
+    )
+    assert "{{lt_title}}" in html_doc
+    assert "<script>" not in html_doc
+
+
 def test_filename_suffixes() -> None:
     assert slide_filename("slide_a", SlideVariant.PIP_CLAIM) == "slide_a_pip.png"
     assert slide_filename("slide_a", SlideVariant.SPLIT) == "slide_a_split.png"

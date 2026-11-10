@@ -9,12 +9,6 @@ import shutil
 from pathlib import Path
 
 from pipeline.layouts import PictureTag
-from pipeline.picture_kit import (
-    HEADLINE_CHAR_LIMIT,
-    KICKER_CHAR_LIMIT,
-    clip_plate_headline,
-    clip_plate_kicker,
-)
 from pipeline.models import (
     TALK_CARDS_PER_POINT,
     TALK_POINT_COUNT,
@@ -25,8 +19,8 @@ from pipeline.models import (
     TalkPoint,
     TalkSheet,
     TimedTranscript,
-    field_is_locked,
 )
+from pipeline.picture_kit import clip_plate_headline, clip_plate_kicker
 from pipeline.stills import IMAGE_SUFFIXES, match_local_still
 
 DOCUMENTS_PIPELINE = Path("Documents") / "Youtube Pipeline"

@@ -550,6 +550,29 @@ def test_quick_mode_vad_is_opt_in(monkeypatch, tmp_path):
     assert set(model.kwargs["vad_parameters"]) <= {"min_silence_duration_ms", "speech_pad_ms"}
 
 
+def test_downloaded_path_stays_in_folder(tmp_path: Path) -> None:
+    folder = tmp_path / "video"
+    folder.mkdir()
+    outside = tmp_path / "secret.mp3"
+    outside.write_bytes(b"nope")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    outside_info = {"requested_downloads": [{"filepath": str(outside)}]}
+    assert fetch._downloaded_path(None, outside_info, empty) is None
+    link = folder / "media.wav"
+    link.symlink_to(outside)
+    assert fetch._downloaded_path(None, {"filepath": str(link)}, folder) is None
+    inside = folder / "media.mp3"
+    inside.write_bytes(b"yes")
+    inside_info = {"requested_downloads": [{"filepath": str(inside)}]}
+    assert fetch._downloaded_path(None, inside_info, folder) == inside
+    assert fetch._media_outtmpl(tmp_path) == str(tmp_path / "media.%(ext)s")
+    percent = tmp_path / "100%"
+    template = fetch._media_outtmpl(percent)
+    assert template.endswith("media.%(ext)s")
+    assert "100%%" in template
+
+
 def test_repeated_runs():
     texts = ["Go.", "Stage one.", "Go.", "a", "A.", "a!", "b", "b"]
     assert repeated_runs(texts) == {3, 4, 5}

@@ -255,6 +255,23 @@ class _YdlLogger:
         self.log.write(msg)
 
 
+def _within_dir(folder: Path, path: Path) -> bool:
+    """True when path is a file inside folder, after resolving symlinks."""
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(folder.resolve())
+    except (OSError, ValueError):
+        return False
+    return resolved != folder.resolve()
+
+
+def _media_outtmpl(folder: Path) -> str:
+    """yt-dlp template. Percent signs in the directory stay literal."""
+    marker = "___YTP_EXT___"
+    rendered = str(folder / f"media.{marker}")
+    return rendered.replace("%", "%%").replace(marker, "%(ext)s")
+
+
 def download(url: str, folder: Path, ffmpeg: str, log: Log) -> tuple[Path, dict]:
     """Best audio for one public post into ``folder/media.<ext>``. Returns (file, info)."""
     yt_dlp = _load_yt_dlp()
@@ -262,7 +279,7 @@ def download(url: str, folder: Path, ffmpeg: str, log: Log) -> tuple[Path, dict]
     folder.mkdir(parents=True, exist_ok=True)
     options = {
         "format": "bestaudio/best",
-        "outtmpl": str(folder / "media.%(ext)s"),
+        "outtmpl": _media_outtmpl(folder),
         "ffmpeg_location": ffmpeg,
         "noplaylist": True,
         # A post with several videos is a playlist. Take the first.
@@ -297,25 +314,37 @@ def download(url: str, folder: Path, ffmpeg: str, log: Log) -> tuple[Path, dict]
 
 
 def _downloaded_path(ydl, info: dict, folder: Path) -> Path | None:
+    def accept(path: object) -> Path | None:
+        if not path:
+            return None
+        candidate = Path(str(path))
+        if candidate.is_file() and _within_dir(folder, candidate):
+            return candidate
+        return None
+
     for record in info.get("requested_downloads") or []:
-        path = record.get("filepath") or record.get("_filename")
-        if path and Path(path).is_file():
-            return Path(path)
+        found = accept(record.get("filepath") or record.get("_filename"))
+        if found is not None:
+            return found
     for key in ("filepath", "_filename"):
-        path = info.get(key)
-        if path and Path(path).is_file():
-            return Path(path)
+        found = accept(info.get(key))
+        if found is not None:
+            return found
     try:
-        path = Path(ydl.prepare_filename(info))
-        if path.is_file():
-            return path
+        found = accept(ydl.prepare_filename(info))
+        if found is not None:
+            return found
     except Exception:
         pass
-    found = sorted(
-        (p for p in folder.glob("media.*") if p.suffix not in {".part", ".ytdl", ".json"}),
+    found_files = sorted(
+        (
+            p
+            for p in folder.glob("media.*")
+            if p.suffix not in {".part", ".ytdl", ".json"} and _within_dir(folder, p)
+        ),
         key=lambda p: p.stat().st_mtime,
     )
-    return found[-1] if found else None
+    return found_files[-1] if found_files else None
 
 
 _PARTIAL_SUFFIXES = {".part", ".ytdl", ".json", ".temp", ".tmp"}

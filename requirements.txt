@@ -1,6 +1,5 @@
 google-genai
 auto-editor
-ffmpeg-python
 moviepy>=2.0.0
 playwright
 python-dotenv

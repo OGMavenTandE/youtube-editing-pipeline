@@ -61,7 +61,7 @@ def run_hidden(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[An
 
 
 def install_hidden_subprocess() -> None:
-    """Patch subprocess.Popen so ffmpeg-python, MoviePy, and pydub stay windowless.
+    """Patch subprocess.Popen so MoviePy and pydub stay windowless.
 
     Assigns HiddenPopen (a class), never a function. Safe to call more than once.
     No-op on non-Windows.

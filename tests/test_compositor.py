@@ -12,11 +12,10 @@ from pipeline.compositor import (
     scene_cache_valid,
     scene_encode_path,
     scene_fingerprint,
-    split_webcam_rect,
     write_scene_sidecar,
 )
 from pipeline.config import Settings
-from pipeline.layouts import PictureTag
+from pipeline.layouts import PictureTag, split_webcam_rect
 from pipeline.media import probe_duration
 from pipeline.models import EditScript, GraphicCard, Scene
 from pipeline.shotlist import compose_mode, scene_has_visual

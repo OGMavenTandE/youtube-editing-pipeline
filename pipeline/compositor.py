@@ -28,7 +28,6 @@ from pipeline.layouts import (
     contain_scale,
     cover_scale,
     pip_rect,
-    split_webcam_rect,
 )
 from pipeline.media import MediaError, concat_scene_files, probe_duration, probe_video_stream
 from pipeline.models import EditScript, Scene

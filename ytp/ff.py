@@ -173,8 +173,10 @@ def concat_line(path: Path) -> str:
     """One `file` line for the concat demuxer.
 
     Forward slashes and escaped quotes keep the line valid on Windows.
+    Newlines are removed so a name cannot add another `file` directive.
     """
-    text = path.resolve().as_posix().replace("'", r"'\''")
+    text = path.resolve().as_posix().replace("\r", "").replace("\n", "")
+    text = text.replace("'", r"'\''")
     return f"file '{text}'"
 
 
@@ -196,4 +198,19 @@ def escape_filter_path(path: Path) -> str:
 
 
 def escape_drawtext(text: str) -> str:
-    return text.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'").replace("%", r"\%")
+    """Escape drawtext for the filtergraph, not only the text option.
+
+    A quote ends the quoted text, and a comma then starts another filter
+    (`text='a\\',scale=32:32'`). Commas, semicolons, and brackets are escaped
+    too. Those escapes render the same glyph as the unescaped character.
+    """
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+        .replace("%", r"\%")
+        .replace(",", r"\,")
+        .replace(";", r"\;")
+        .replace("[", r"\[")
+        .replace("]", r"\]")
+    )

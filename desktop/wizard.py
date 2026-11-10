@@ -21,7 +21,7 @@ from .oauth import (
     run_installed_app_flow,
     signed_in,
 )
-from .paths import env_path, first_existing_client_secret
+from .paths import env_path
 from .startup import set_startup, startup_enabled
 from pipeline.drive_io import (
     DriveClient,

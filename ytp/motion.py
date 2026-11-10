@@ -1218,6 +1218,14 @@ def plan_hash(plan: MotionPlan, fonts: FontBook, version: str, gsap: Path) -> st
     return digest.hexdigest()[:12]
 
 
+_TEMPLATE_TOKEN = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+
+
+def _fill_placeholders(template: str, values: dict[str, str]) -> str:
+    """Replace {{TOKENS}} once. Values are not scanned for further tokens."""
+    return _TEMPLATE_TOKEN.sub(lambda match: values.get(match.group(0), match.group(0)), template)
+
+
 def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> Path:
     if work.exists():
         shutil.rmtree(work)
@@ -1250,7 +1258,7 @@ def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> 
     preload = f'<div class="ytp-preload" aria-hidden="true">{preload}</div>'
     html = (tdir / "index.html").read_text(encoding="utf-8")
     stage = plan.stage
-    for key, value in {
+    mapping = {
         "{{YTP_HEAD}}": head,
         "{{YTP_PRELOAD}}": preload,
         "{{COMPOSITION_ID}}": COMPOSITION_ID,
@@ -1260,8 +1268,8 @@ def build_project(plan: MotionPlan, work: Path, fonts: FontBook, gsap: Path) -> 
         "{{FPS}}": str(plan.job.fps),
         "{{ASPECT}}": stage.aspect,
         "{{LAYOUT}}": stage.layout,
-    }.items():
-        html = html.replace(key, value)
+    }
+    html = _fill_placeholders(html, mapping)
     if "{{" in html:
         raise MotionError(f"{plan.job.template}/index.html has an unknown {{{{...}}}} field")
     (work / "index.html").write_text(html, encoding="utf-8", newline="\n")

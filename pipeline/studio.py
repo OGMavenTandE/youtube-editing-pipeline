@@ -205,10 +205,23 @@ def build_studio_texts(
 
 
 def build_thumbnail_html(title: str, frame_src: str) -> str:
+    if not frame_src.startswith("data:image/") or any(ch in frame_src for ch in "\"'<>"):
+        raise ValueError("Thumbnail frame must be an image data URI.")
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
-    return template.replace("{{title}}", html.escape(clip_title(title))).replace(
-        "{{frame_src}}", frame_src
+    return _fill_placeholders(
+        template,
+        {
+            "{{title}}": html.escape(clip_title(title)),
+            "{{frame_src}}": frame_src,
+        },
     )
+
+
+_PLACEHOLDER = re.compile(r"\{\{[A-Za-z0-9_]+\}\}")
+
+
+def _fill_placeholders(template: str, values: dict[str, str]) -> str:
+    return _PLACEHOLDER.sub(lambda match: values.get(match.group(0), match.group(0)), template)
 
 
 def _frame_data_uri(path: Path) -> str:
