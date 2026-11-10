@@ -11,9 +11,14 @@ from pipeline.drive_io import (
     ProcessedIdStore,
     download_range_headers,
     drive_folder_url,
+    drive_media_uri,
+    drive_query_literal,
     file_stem,
+    is_drive_folder_url,
     is_landscape_dimensions,
     is_mp4_name,
+    local_inbox_path,
+    local_media_name,
     outbox_child_name,
     pipeline_folder_relpath,
     sanitize_folder_name,
@@ -118,6 +123,39 @@ def test_file_stem_and_sanitize() -> None:
 
 def test_drive_folder_url() -> None:
     assert drive_folder_url("abc123") == "https://drive.google.com/drive/folders/abc123"
+    assert is_drive_folder_url(drive_folder_url("abc123"))
+    assert not is_drive_folder_url("https://evil.example/drive/folders/abc123")
+    assert not is_drive_folder_url("https://drive.google.com/drive/folders/abc/../../x")
+
+
+def test_drive_query_and_media_uri() -> None:
+    assert drive_query_literal("plain") == "'plain'"
+    assert drive_query_literal("a'b\\c") == r"'a\'b\\c'"
+    assert drive_media_uri("abc_123") == (
+        "https://www.googleapis.com/drive/v3/files/abc_123?alt=media"
+    )
+    try:
+        drive_media_uri("abc", "http://127.0.0.1/secret")
+    except RuntimeError:
+        return
+    raise AssertionError("non-googleapis download URL was accepted")
+
+
+def test_local_media_name_cannot_escape(tmp_path: Path) -> None:
+    assert local_media_name("Talk 01.mp4") == "Talk 01.mp4"
+    assert local_media_name(r"..\..\Windows\System32\evil.mp4") == "evil.mp4"
+    assert local_media_name("con.mp4") == "_con.mp4"
+    assert local_media_name("Talk: AI.mp4") == "Talk- AI.mp4"
+    for raw in (
+        r"..\..\Windows\System32\evil.mp4",
+        "../x.mp4",
+        "C:foo.mp4",
+        "con.mp4",
+        "Talk: AI.mp4",
+        "ok.mp4",
+    ):
+        dest = local_inbox_path(tmp_path, raw)
+        dest.resolve().relative_to(tmp_path.resolve())
 
 
 def test_is_mp4_name() -> None:

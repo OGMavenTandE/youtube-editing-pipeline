@@ -8,6 +8,9 @@ import sys
 from ctypes import wintypes
 from pathlib import Path
 
+# Don't show a Windows UI prompt while protecting or reading the token.
+_CRYPTPROTECT_UI_FORBIDDEN = 0x1
+
 
 class DATA_BLOB(ctypes.Structure):
     _fields_ = [
@@ -26,7 +29,7 @@ def _crypt_protect(data: bytes) -> bytes:
         None,
         None,
         None,
-        0,
+        _CRYPTPROTECT_UI_FORBIDDEN,
         ctypes.byref(out_blob),
     ):
         raise OSError("Could not protect the Drive token.")
@@ -46,7 +49,7 @@ def _crypt_unprotect(data: bytes) -> bytes:
         None,
         None,
         None,
-        0,
+        _CRYPTPROTECT_UI_FORBIDDEN,
         ctypes.byref(out_blob),
     ):
         raise OSError("Could not read the saved Drive token.")
@@ -56,15 +59,36 @@ def _crypt_unprotect(data: bytes) -> bytes:
         ctypes.windll.kernel32.LocalFree(out_blob.pbData)
 
 
+def write_private_bytes(path: Path, payload: bytes) -> None:
+    """Create or replace a file as mode 0600. The mode applies at creation."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def write_private_text(path: Path, text: str) -> None:
+    write_private_bytes(path, text.encode("utf-8"))
+
+
 def write_secret_file(path: Path, text: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = text.encode("utf-8")
     if sys.platform == "win32":
         path.write_bytes(_crypt_protect(payload))
-    else:
-        path.write_bytes(payload)
-        os.chmod(path, 0o600)
+        return
+    write_private_bytes(path, payload)
 
 
 def read_secret_file(path: Path) -> str | None:

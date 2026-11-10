@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .secrets import write_private_text
+
 
 def read_env_value(path: Path, key: str) -> str:
     if not path.is_file():
@@ -21,6 +23,8 @@ def upsert_env_value(path: Path, key: str, value: str) -> None:
     """Replace or append KEY=value. Never includes the value in exceptions."""
     if not key or not key.replace("_", "").isalnum():
         raise ValueError("Invalid environment key.")
+    if any(ch in value for ch in ("\n", "\r", "\x00")):
+        raise ValueError("Environment values cannot contain line breaks.")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
@@ -42,6 +46,6 @@ def upsert_env_value(path: Path, key: str, value: str) -> None:
             out.append("")
         out.append(f"{key}={value}")
     try:
-        path.write_text("\n".join(out) + "\n", encoding="utf-8")
+        write_private_text(path, "\n".join(out) + "\n")
     except OSError as exc:
         raise OSError(f"Could not write {key} to the app .env file.") from exc

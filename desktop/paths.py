@@ -61,6 +61,10 @@ def migrate_install_env(dest: Path) -> Path:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(legacy, dest)
+    try:
+        os.chmod(dest, 0o600)
+    except OSError:
+        pass
     return dest
 
 

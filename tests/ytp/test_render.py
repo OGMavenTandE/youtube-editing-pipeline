@@ -6,7 +6,14 @@ import pytest
 
 from tests.ytp.mediautil import require_ffmpeg, write_clip, write_png, write_wav
 from ytp.captions import format_srt_time, write_srt
-from ytp.ff import concat_line, escape_filter_text, has_audio, probe_duration, probe_video_size
+from ytp.ff import (
+    concat_line,
+    escape_drawtext,
+    escape_filter_text,
+    has_audio,
+    probe_duration,
+    probe_video_size,
+)
 from ytp.hooks import STUDIO_GRAPHICS_STUB, TRACK_MIX_STUB
 from ytp.plan import Broll, CaptionCue, EditPlan, MusicCue, NarrationLine, Segment, Short
 from ytp.render import (
@@ -148,6 +155,12 @@ def test_concat_and_filter_escapes(tmp_path: Path) -> None:
     assert "bar'\\''s.wav'" in line
     assert escape_filter_text("C:/fonts/bold.ttf") == r"C\:/fonts/bold.ttf"
     assert "," not in escape_filter_text("bold.ttf")
+    assert escape_drawtext("Hello, world") == r"Hello\, world"
+    assert escape_drawtext("it's") == r"it\'s"
+    assert r"\," in escape_drawtext("a',scale=32:32")
+    newline = tmp_path / "a\nb.wav"
+    newline.write_bytes(b"")
+    assert "\n" not in concat_line(newline)
 
 
 def test_drawtext_font_is_copied_without_commas(tmp_path: Path) -> None:

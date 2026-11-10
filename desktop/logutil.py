@@ -20,6 +20,8 @@ _ASSIGNMENT_RE = re.compile(
     r""")\b\s*["']?\s*[:=]\s*["']?[^\s"']+["']?"""
 )
 _AIZA_RE = re.compile(r"AIza[0-9A-Za-z_\-]{20,}")
+_GOCSPX_RE = re.compile(r"GOCSPX-[0-9A-Za-z_\-]+")
+_BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{8,}")
 _OAUTH_ACCESS_RE = re.compile(r"ya29\.[0-9A-Za-z._\-]+")
 _OAUTH_REFRESH_RE = re.compile(r"1//[0-9A-Za-z_\-]+")
 _LONG_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9+/=_\-])[A-Za-z0-9+/=_\-]{40,}(?![A-Za-z0-9+/=_\-])")
@@ -29,6 +31,8 @@ def sanitize_log_line(line: str) -> str:
     text = line.replace("\r", "").rstrip("\n")
     text = _ASSIGNMENT_RE.sub("[redacted]", text)
     text = _AIZA_RE.sub("[redacted]", text)
+    text = _GOCSPX_RE.sub("[redacted]", text)
+    text = _BEARER_RE.sub("[redacted]", text)
     text = _OAUTH_ACCESS_RE.sub("[redacted]", text)
     text = _OAUTH_REFRESH_RE.sub("[redacted]", text)
     text = _LONG_TOKEN_RE.sub("[redacted]", text)

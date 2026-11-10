@@ -7,6 +7,7 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Literal
+from urllib.parse import quote, urlparse
 
 from pydantic import BaseModel, Field
 
@@ -73,8 +74,79 @@ def default_folder_names() -> tuple[str, str, str, str]:
     return PIPELINE_ROOT_NAME, INBOX_NAME, OUTBOX_NAME, DONE_NAME
 
 
+_DRIVE_FOLDER_PREFIX = "https://drive.google.com/drive/folders/"
+_WINDOWS_RESERVED = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+
+
+def drive_query_literal(value: str) -> str:
+    """Single-quoted Drive query value. Backslash first, then quote."""
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 def drive_folder_url(folder_id: str) -> str:
-    return f"https://drive.google.com/drive/folders/{folder_id}"
+    return _DRIVE_FOLDER_PREFIX + quote(str(folder_id), safe="")
+
+
+def is_drive_folder_url(url: str) -> bool:
+    """True for a folder URL this app generated. Rejects other hosts and extra path."""
+    if not url or any(ch.isspace() or ord(ch) < 32 for ch in url):
+        return False
+    if not url.startswith(_DRIVE_FOLDER_PREFIX):
+        return False
+    folder_id = url[len(_DRIVE_FOLDER_PREFIX) :]
+    return bool(folder_id) and "/" not in folder_id and "\\" not in folder_id
+
+
+def drive_media_uri(file_id: str, request_uri: str = "") -> str:
+    """HTTPS Drive media URL on a googleapis host. file_id is percent-encoded."""
+    raw = request_uri.strip()
+    if not raw:
+        raw = (
+            "https://www.googleapis.com/drive/v3/files/"
+            + quote(str(file_id), safe="")
+            + "?alt=media"
+        )
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    allowed = host == "googleapis.com" or host.endswith(".googleapis.com")
+    if parsed.scheme != "https" or not allowed or not parsed.path:
+        raise RuntimeError("Refusing Drive download from an unexpected URL.")
+    return raw
+
+
+def local_media_name(name: str) -> str:
+    """One path segment. Drive names are not directories, drives, or device files."""
+    text = str(name or "").replace("\\", "/").replace("\x00", "")
+    base = text.rsplit("/", 1)[-1].strip()
+    if len(base) >= 2 and base[0].isalpha() and base[1] == ":":
+        base = base[2:].lstrip()
+    base = base.replace(":", "-")
+    while base.endswith(" ") or base.endswith("."):
+        base = base[:-1]
+    if base in {"", ".", ".."}:
+        return "video.mp4"
+    if base.split(".", 1)[0].casefold() in _WINDOWS_RESERVED:
+        base = "_" + base
+    return base
+
+
+def local_inbox_path(root: Path, drive_name: str) -> Path:
+    """Download path that stays inside root even when the Drive name looks like a path."""
+    root = Path(root)
+    dest = root / local_media_name(drive_name)
+    try:
+        dest.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError("Refusing a download path outside the input folder.") from exc
+    return dest
 
 
 def file_stem(filename: str) -> str:
@@ -291,16 +363,17 @@ class DriveClient:
     def list_folders(self, parent_id: str | None = "root") -> list[DriveItem]:
         parent = parent_id or "root"
         query = (
-            f"'{parent}' in parents and mimeType='{DRIVE_FOLDER_MIME}' and trashed=false"
+            f"{drive_query_literal(parent)} in parents and "
+            f"mimeType={drive_query_literal(DRIVE_FOLDER_MIME)} and trashed=false"
         )
         return [_item_from_api(item) for item in iter_drive_files(self.service, query)]
 
     def find_child_folder(self, parent_id: str | None, name: str) -> DriveItem | None:
         parent = parent_id or "root"
-        safe = name.replace("'", "\\'")
         query = (
-            f"'{parent}' in parents and mimeType='{DRIVE_FOLDER_MIME}' "
-            f"and name='{safe}' and trashed=false"
+            f"{drive_query_literal(parent)} in parents and "
+            f"mimeType={drive_query_literal(DRIVE_FOLDER_MIME)} and "
+            f"name={drive_query_literal(name)} and trashed=false"
         )
         for item in iter_drive_files(self.service, query):
             return _item_from_api(item)
@@ -338,7 +411,7 @@ class DriveClient:
         return PipelineFolders(root=root, inbox=inbox, outbox=outbox, done=done)
 
     def list_inbox_videos(self, inbox_id: str) -> list[DriveItem]:
-        query = f"'{inbox_id}' in parents and trashed=false"
+        query = f"{drive_query_literal(inbox_id)} in parents and trashed=false"
         found: list[DriveItem] = []
         for item in iter_drive_files(self.service, query):
             drive_item = _item_from_api(item)
@@ -369,7 +442,7 @@ class DriveClient:
         folder = self.find_outbox_stem_folder(outbox_id, stem)
         if folder is None:
             return False
-        query = f"'{folder.id}' in parents and trashed=false"
+        query = f"{drive_query_literal(folder.id)} in parents and trashed=false"
         sidecar_hit = False
         has_mp4 = False
         for item in iter_drive_files(self.service, query):
@@ -419,9 +492,10 @@ class DriveClient:
             return dest
 
         request = self.service.files().get_media(fileId=file_id)
-        uri = getattr(request, "uri", "") or (
-            f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-        )
+        request_uri = getattr(request, "uri", "") or ""
+        if not isinstance(request_uri, str):
+            request_uri = ""
+        uri = drive_media_uri(file_id, request_uri)
         headers = download_range_headers(existing, total)
         session = self._authorized_session()
         if session is not None:
@@ -517,11 +591,16 @@ class DriveClient:
             for item in (
                 _item_from_api(raw)
                 for raw in iter_drive_files(
-                    self.service, f"'{folder.id}' in parents and trashed=false"
+                    self.service,
+                    f"{drive_query_literal(folder.id)} in parents and trashed=false",
                 )
             )
         }
-        files = [path for path in sorted(local_dir.iterdir()) if path.is_file()]
+        files = [
+            path
+            for path in sorted(local_dir.iterdir())
+            if path.is_file() and not path.is_symlink()
+        ]
         total = max(1, len(files))
         for index, path in enumerate(files):
             props = {SOURCE_PROPERTY: source_file_id} if is_mp4_name(path.name) or path.name == SOURCE_SIDECAR_NAME else None

@@ -38,7 +38,6 @@ from pipeline.talk_sheet import (
     resolve_auto_kicker,
     rewrite_house_style,
     save_talk_sheet,
-    sanitize_script_kickers,
     still_plate_copy,
     talk_sheet_to_markdown,
 )

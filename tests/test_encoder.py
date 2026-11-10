@@ -30,6 +30,7 @@ from pipeline.media import (
     MediaError,
     apply_loudnorm,
     choose_source_fps,
+    concat_demuxer_line,
     concat_keep_ranges,
     concat_scene_files,
     format_output_fps,
@@ -234,6 +235,13 @@ def test_write_composed_clip_falls_back_when_nvenc_raises(monkeypatch, tmp_path:
     assert calls[0]["codec"] == NVENC_CODEC
     assert calls[1]["codec"] == SOFTWARE_CODEC
     assert select_video_encoder(_settings()).name == SOFTWARE_CODEC
+
+
+def test_concat_demuxer_line_escapes_quotes(tmp_path: Path) -> None:
+    path = tmp_path / "o'brien.mp4"
+    line = concat_demuxer_line(path)
+    assert "\n" not in line
+    assert "o'\\''brien.mp4'" in line
 
 
 def test_concat_scene_files_copies_video_for_loudnorm(monkeypatch, tmp_path: Path) -> None:
